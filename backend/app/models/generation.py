@@ -24,17 +24,17 @@ class Generation(Base):
     )
 
     station_name: Mapped[str] = mapped_column(
-        String(100),
+        String(50),
         nullable=False,
     )
 
     unit_name: Mapped[str] = mapped_column(
-        String(100),
+        String(50),
         nullable=False,
     )
 
     fuel_type: Mapped[str] = mapped_column(
-        String(50),
+        String(25),
         nullable=False,
     )
 
