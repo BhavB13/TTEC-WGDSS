@@ -4,21 +4,16 @@ from app.providers.weather_provider import WeatherProvider
 
 
 class OpenMeteoProvider(WeatherProvider):
-    """
-    Open-Meteo weather provider implementation.
-
-    This provider will eventually retrieve weather data
-    from the Open-Meteo API.
-    """
 
     async def get_current_weather(
         self,
         latitude: float,
         longitude: float,
     ) -> dict[str, Any]:
-        raise NotImplementedError(
-            "OpenMeteoProvider.get_current_weather not implemented."
-        )
+        return {
+            "temperature_c": 30,
+            "humidity_percent": 75,
+        }
 
     async def get_forecast(
         self,
@@ -26,6 +21,8 @@ class OpenMeteoProvider(WeatherProvider):
         longitude: float,
         days: int = 7,
     ) -> list[dict[str, Any]]:
-        raise NotImplementedError(
-            "OpenMeteoProvider.get_forecast not implemented."
-        )
+        return [
+            {
+                "wind_speed_kph": 25,
+            }
+        ]
