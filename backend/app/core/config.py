@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     APP_NAME: str = "T&TEC Weather-Based Generation Decision Support System"
-    API_V1_PREFIX: str = "/api"
+    API_V1_PREFIX: str = "/api/v1"
     DEBUG: bool = False
 
     # Placeholder until PostgreSQL is implemented
