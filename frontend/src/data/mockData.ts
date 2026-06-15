@@ -37,3 +37,16 @@ export const mockRecommendation: Recommendation = {
   recommendation: "START",
   reason: "Reserve margin below operating threshold.",
 };
+
+export const mockRecommendationHistory = [
+  {
+    timestamp: "2026-06-15T08:00:00Z",
+    recommendation: "MONITOR",
+    confidence: 0.65,
+  },
+  {
+    timestamp: "2026-06-15T10:00:00Z",
+    recommendation: "START",
+    confidence: 0.82,
+  },
+];

@@ -3,6 +3,7 @@ import WeatherCard from "../components/WeatherCard";
 import GridStatusCard from "../components/GridStatusCard";
 import RecommendationCard from "../components/RecommendationCard";
 import ForecastTable from "../components/ForecastTable";
+import RecommendationHistoryTable from "../components/RecommendationHistoryTable";
 import WeatherMap from "../components/WeatherMap";
 
 import {
@@ -10,6 +11,7 @@ import {
   mockForecast,
   mockGridStatus,
   mockRecommendation,
+  mockRecommendationHistory,
 } from "../data/mockData";
 
 export default function Dashboard() {
@@ -29,7 +31,13 @@ export default function Dashboard() {
 
       <WeatherMap />
 
-      <ForecastTable forecast={mockForecast} />
+      <ForecastTable
+        forecast={mockForecast}
+      />
+
+      <RecommendationHistoryTable
+        history={mockRecommendationHistory}
+      />
     </div>
   );
 }
