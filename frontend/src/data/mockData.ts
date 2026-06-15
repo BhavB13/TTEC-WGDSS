@@ -1,60 +1,39 @@
 import {
-  WeatherSummary,
+  WeatherData,
+  ForecastData,
   GridStatus,
   Recommendation,
-  ForecastRecord,
-  RecommendationHistoryRecord,
 } from "../types/dashboard";
 
-export const weatherSummary: WeatherSummary = {
-  temperature: 31,
-  windSpeed: 12,
-  cloudCover: 70,
-  rainProbability: 45,
+export const mockWeather: WeatherData = {
+  temperature_c: 30.5,
+  humidity_percent: 75,
+  wind_speed_kph: 22,
+  wind_direction_deg: 120,
+  pressure_hpa: 1012,
+  precipitation_mm: 0,
+  provider_name: "Open-Meteo",
 };
 
-export const gridStatus: GridStatus = {
-  currentDemand: 920,
-  availableGeneration: 980,
-  reserveMargin: 60,
-};
-
-export const recommendation: Recommendation = {
-  recommendation: "Start Gas Turbine Unit 2",
-  confidence: 0.82,
-  reason: "Demand expected to increase over the next 2 hours.",
-};
-
-export const forecastData: ForecastRecord[] = [
+export const mockForecast: ForecastData[] = [
   {
-    hour: "12:00",
-    temperature: 31,
-    windSpeed: 12,
-    rainProbability: 40,
-  },
-  {
-    hour: "13:00",
-    temperature: 32,
-    windSpeed: 14,
-    rainProbability: 35,
-  },
-  {
-    hour: "14:00",
-    temperature: 32,
-    windSpeed: 15,
-    rainProbability: 30,
+    forecast_timestamp: "2026-06-15T12:00:00Z",
+    temperature_c: 31,
+    wind_speed_kph: 25,
+    precipitation_probability_percent: 45,
+    confidence_score: 0.88,
   },
 ];
 
-export const recommendationHistory: RecommendationHistoryRecord[] = [
-  {
-    time: "08:00",
-    recommendation: "Start GT1",
-    confidence: 0.78,
-  },
-  {
-    time: "10:00",
-    recommendation: "Maintain Current Generation",
-    confidence: 0.65,
-  },
-];
+export const mockGridStatus: GridStatus = {
+  total_available_capacity_mw: 1200,
+  total_generation_mw: 950,
+  reserve_margin_percent: 26.3,
+  grid_status: "NORMAL",
+};
+
+export const mockRecommendation: Recommendation = {
+  probability_score: 0.82,
+  recommendation: "START",
+  reason: "Reserve margin below operating threshold.",
+};
