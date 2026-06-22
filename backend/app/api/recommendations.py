@@ -43,4 +43,4 @@ async def get_recommendation() -> RecommendationResponse:
         grid_status=grid_status,
     )
 
-    return RecommendationResponse(**result)
+    return RecommendationResponse(**result) 
