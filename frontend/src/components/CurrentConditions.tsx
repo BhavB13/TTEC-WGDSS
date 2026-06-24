@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { WeatherData } from "../types/dashboard";
 
 interface CurrentConditionsProps {
@@ -10,22 +11,22 @@ export default function CurrentConditions({
   className = "",
 }: CurrentConditionsProps) {
   return (
-    <div className={`rounded-lg border border-slate-800 bg-slate-900/80 p-4 ${className}`}>
-      <div className="mb-4 flex items-start justify-between gap-3">
+    <div className={`flex h-full w-full min-w-0 flex-col rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-3.5 shadow-[0_0_34px_rgba(8,145,178,0.08)] ${className}`}>
+      <div className="mb-3 flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
             Current Conditions
           </p>
-          <h2 className="mt-1 text-lg font-semibold text-white">
-            Live Weather Snapshot
+          <h2 className="mt-1 text-[1.05rem] font-semibold text-white">
+            Current Weather Conditions
           </h2>
         </div>
-        <span className="rounded-full border border-slate-700 px-3 py-1 text-xs font-medium text-slate-300">
+        <span className="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[11px] font-medium text-slate-300">
           {weather.rain_severity}
         </span>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 text-sm">
+      <div className="grid flex-1 grid-cols-1 gap-2.5 text-sm sm:grid-cols-2">
         <Metric label="Temperature" value={`${weather.temperature_c.toFixed(1)}°C`} />
         <Metric label="Humidity" value={`${weather.humidity_percent.toFixed(0)}%`} />
         <Metric label="Rainfall" value={`${weather.rainfall_mm_hr.toFixed(1)} mm/hr`} />
@@ -34,10 +35,12 @@ export default function CurrentConditions({
         <Metric label="Heat Index" value={`${weather.heat_index_c.toFixed(1)}°C`} />
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-400">
-        <Badge>{weather.weather_condition}</Badge>
-        <Badge>{weather.provider_name}</Badge>
-        {weather.timestamp ? <Badge>{new Date(weather.timestamp).toLocaleTimeString()}</Badge> : null}
+      <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-400">
+        <Badge label={weather.weather_condition} />
+        <Badge label={weather.provider_name} />
+        {weather.timestamp ? (
+          <Badge label={new Date(weather.timestamp).toLocaleTimeString()} />
+        ) : null}
       </div>
     </div>
   );
@@ -51,17 +54,17 @@ function Metric({
   value: string;
 }) {
   return (
-    <div className="rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
+    <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2.5 shadow-inner shadow-black/20">
       <p className="text-xs text-slate-400">{label}</p>
-      <p className="mt-1 text-sm font-semibold text-white">{value}</p>
+      <p className="mt-1 text-[0.92rem] font-semibold text-white">{value}</p>
     </div>
   );
 }
 
-function Badge({ children }: { children: string }) {
+function Badge({ label }: { label: ReactNode }) {
   return (
     <span className="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1">
-      {children}
+      {label}
     </span>
   );
 }

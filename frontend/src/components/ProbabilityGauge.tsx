@@ -5,7 +5,7 @@ interface ProbabilityGaugeProps {
   className?: string;
 }
 
-const RADIUS = 54;
+const RADIUS = 46;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
 function riskPalette(riskLevel: ProbabilityData["risk_level"]) {
@@ -37,24 +37,24 @@ export default function ProbabilityGauge({
   const palette = riskPalette(probability.risk_level);
 
   return (
-    <div className={`rounded-lg border border-slate-800 bg-slate-900/80 p-4 ${className}`}>
-      <div className="mb-4 flex items-start justify-between gap-3">
+    <div className={`flex h-full w-full min-w-0 flex-col rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-3.5 shadow-[0_0_34px_rgba(8,145,178,0.08)] ${className}`}>
+      <div className="mb-3 flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
             Probability
           </p>
-          <h2 className="mt-1 text-lg font-semibold text-white">
+          <h2 className="mt-1 text-[1.05rem] font-semibold text-white">
             Risk Gauge
           </h2>
         </div>
-        <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${palette.badge}`}>
+        <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${palette.badge}`}>
           {probability.risk_level}
         </span>
       </div>
 
-      <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative flex h-40 w-40 items-center justify-center">
-          <svg viewBox="0 0 140 140" className="h-40 w-40 -rotate-90">
+      <div className="flex flex-1 flex-col items-center justify-center gap-3">
+        <div className="relative flex h-[clamp(10rem,24vw,14rem)] w-[clamp(10rem,24vw,14rem)] items-center justify-center">
+          <svg viewBox="0 0 140 140" className="h-full w-full -rotate-90">
             <circle
               cx="70"
               cy="70"
@@ -83,10 +83,9 @@ export default function ProbabilityGauge({
           </div>
         </div>
 
-        <div className="grid gap-3 text-sm text-slate-300 sm:min-w-56">
-          <Stat label="30m Forecast Demand" value={`${probability.forecast_demand_30m.toFixed(0)} MW`} />
-          <Stat label="60m Forecast Demand" value={`${probability.forecast_demand_60m.toFixed(0)} MW`} />
-          <Stat label="Reason" value={probability.reason} />
+        <div className="grid w-full gap-2.5 text-sm text-slate-300">
+          <Stat label="Risk Score" value={score.toFixed(2)} />
+          <Stat label="Short Explanation" value={probability.reason} />
         </div>
       </div>
     </div>
@@ -101,9 +100,9 @@ function Stat({
   value: string;
 }) {
   return (
-    <div className="rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2">
+    <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2.5 shadow-inner shadow-black/20">
       <p className="text-xs text-slate-400">{label}</p>
-      <p className="mt-1 break-words font-semibold text-white">{value}</p>
+      <p className="mt-1 break-words text-[0.92rem] font-semibold text-white">{value}</p>
     </div>
   );
 }

@@ -7,7 +7,13 @@ import type {
   WeatherData,
 } from "../types/dashboard";
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
+const API_BASE_URL = (
+  (
+    import.meta as ImportMeta & {
+      env?: Record<string, string | undefined>;
+    }
+  ).env?.VITE_API_BASE_URL ?? ""
+).replace(/\/$/, "");
 const DASHBOARD_SNAPSHOT_PATH = "/api/dashboard/snapshot";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {

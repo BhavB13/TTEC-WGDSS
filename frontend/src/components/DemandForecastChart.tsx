@@ -1,17 +1,18 @@
 import { useMemo } from "react";
 import {
-  BarElement,
   CategoryScale,
   Chart as ChartJS,
+  LineElement,
   Legend,
   LinearScale,
+  PointElement,
   Tooltip,
 } from "chart.js";
-import { Bar } from "react-chartjs-2";
+import { Line } from "react-chartjs-2";
 
 import type { GridStatus, ProbabilityData } from "../types/dashboard";
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend);
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend);
 
 interface DemandForecastChartProps {
   gridStatus: GridStatus;
@@ -77,23 +78,38 @@ export default function DemandForecastChart({
   );
 
   return (
-    <div className={`rounded-lg border border-slate-800 bg-slate-900/80 p-4 ${className}`}>
-      <div className="mb-4 flex items-start justify-between gap-3">
+    <div className={`flex h-full w-full min-w-0 flex-col rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-3.5 shadow-[0_0_34px_rgba(8,145,178,0.08)] ${className}`}>
+      <div className="mb-3 flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
             Demand Forecast
           </p>
-          <h2 className="mt-1 text-lg font-semibold text-white">
+          <h2 className="mt-1 text-[1.05rem] font-semibold text-white">
             Current and Near-Term Load
           </h2>
         </div>
-        <span className="rounded-full border border-slate-700 px-3 py-1 text-xs font-medium text-slate-300">
+        <span className="rounded-full border border-slate-700 px-2.5 py-1 text-[11px] font-medium text-slate-300">
           Chart.js
         </span>
       </div>
 
-      <div className="h-72">
-        <Bar data={data} options={options} />
+      <div className="min-h-[clamp(12rem,24vh,16rem)] flex-1 w-full min-w-0">
+        <Line
+          data={data}
+          options={{
+            ...options,
+            elements: {
+              line: {
+                tension: 0.35,
+                borderWidth: 2,
+              },
+              point: {
+                radius: 4,
+                hoverRadius: 6,
+              },
+            },
+          }}
+        />
       </div>
     </div>
   );
