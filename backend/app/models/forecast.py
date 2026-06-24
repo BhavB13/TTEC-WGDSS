@@ -38,6 +38,18 @@ class Forecast(Base):
         nullable=False,
     )
 
+    rainfall_mm_hr: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=0.0,
+    )
+
+    cloud_cover_percent: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=0.0,
+    )
+
     wind_speed_kph: Mapped[float] = mapped_column(
         Float,
         nullable=False,
@@ -56,6 +68,24 @@ class Forecast(Base):
     precipitation_mm: Mapped[float | None] = mapped_column(
         Float,
         nullable=True,
+    )
+
+    weather_condition: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        default="Unknown",
+    )
+
+    heat_index_c: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=0.0,
+    )
+
+    rain_severity: Mapped[str] = mapped_column(
+        String(25),
+        nullable=False,
+        default="DRY",
     )
 
     confidence_score: Mapped[float] = mapped_column(

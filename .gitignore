@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Environment files
+.env
+.env.*
+
+# Python build artifacts
+build/
+dist/
+*.egg-info/
+
+# VS Code
+.vscode/
+
+# JetBrains
+.idea/
+
+# Node
+node_modules/
+
+# Frontend build output
+frontend/dist/
+frontend/build/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/

@@ -29,6 +29,24 @@ class Recommendation(Base):
         nullable=False,
     )
 
+    risk_level: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="LOW",
+    )
+
+    forecast_demand_30m: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=0.0,
+    )
+
+    forecast_demand_60m: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=0.0,
+    )
+
     recommendation: Mapped[str] = mapped_column(
         String(25),
         nullable=False,
@@ -37,6 +55,12 @@ class Recommendation(Base):
     reason: Mapped[str] = mapped_column(
         Text,
         nullable=False,
+    )
+
+    factors: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="[]",
     )
 
     created_at: Mapped[datetime] = mapped_column(

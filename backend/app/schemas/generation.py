@@ -1,8 +1,3 @@
-from pydantic import BaseModel
+from app.schemas.grid import GridStatusResponse
 
-
-class GridStatusResponse(BaseModel):
-    total_available_capacity_mw: float
-    total_generation_mw: float
-    reserve_margin_percent: float
-    grid_status: str
+__all__ = ["GridStatusResponse"]

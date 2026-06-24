@@ -1,5 +1,6 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
+from app.core.config import settings
 from app.providers.open_meteo_provider import OpenMeteoProvider
 from app.schemas.forecast import ForecastResponse
 from app.schemas.weather import CurrentWeatherResponse
@@ -14,11 +15,14 @@ weather_service = WeatherService(OpenMeteoProvider())
     "/weather/current",
     response_model=CurrentWeatherResponse,
 )
-async def get_current_weather() -> CurrentWeatherResponse:
+async def get_current_weather(
+    latitude: float = Query(default=settings.DEFAULT_LATITUDE),
+    longitude: float = Query(default=settings.DEFAULT_LONGITUDE),
+) -> CurrentWeatherResponse:
 
     weather = await weather_service.get_current_weather(
-        latitude=10.6918,
-        longitude=-61.2225,
+        latitude=latitude,
+        longitude=longitude,
     )
 
     return CurrentWeatherResponse(**weather)
@@ -28,11 +32,16 @@ async def get_current_weather() -> CurrentWeatherResponse:
     "/weather/forecast",
     response_model=list[ForecastResponse],
 )
-async def get_forecast() -> list[ForecastResponse]:
+async def get_forecast(
+    latitude: float = Query(default=settings.DEFAULT_LATITUDE),
+    longitude: float = Query(default=settings.DEFAULT_LONGITUDE),
+    days: int = Query(default=7, ge=1, le=14),
+) -> list[ForecastResponse]:
 
     forecast = await weather_service.get_forecast(
-        latitude=10.6918,
-        longitude=-61.2225,
+        latitude=latitude,
+        longitude=longitude,
+        days=days,
     )
 
     return [ForecastResponse(**item) for item in forecast]

@@ -1,11 +1,7 @@
 from pydantic import BaseModel
 
+from app.schemas.probability import ProbabilityResponse
 
-class RecommendationResponse(BaseModel):
-    """
-    Response model for recommendation results.
-    """
 
-    probability_score: float
+class RecommendationResponse(ProbabilityResponse):
     recommendation: str
-    reason: str
