@@ -122,7 +122,7 @@ function getRainfallCategory(rainfallMmHr: number): {
   fillOpacity: number;
 } {
   if (rainfallMmHr <= 0) {
-    return { label: "No Rain", color: "#38bdf8", fillOpacity: 0 };
+    return { label: "No Rain", color: "#94a3b8", fillOpacity: 0.05 };
   }
 
   if (rainfallMmHr <= 2) {
@@ -142,7 +142,7 @@ function getRainfallCategory(rainfallMmHr: number): {
 
 function getRainfallRadius(rainfallMmHr: number): number {
   if (rainfallMmHr <= 0) {
-    return 0;
+    return 18000;
   }
 
   if (rainfallMmHr <= 2) {
@@ -194,7 +194,7 @@ export default function WeatherMap({
       : null;
   const rainfallCategory = getRainfallCategory(rainfallMmHr);
   const rainfallRadius = getRainfallRadius(rainfallMmHr);
-  const rainfallCenters = rainfallMmHr > 0 ? [DEFAULT_CENTER, TOBAGO_CENTER] : [];
+  const rainfallCenters = rainfallMmHr > 0 ? [DEFAULT_CENTER, TOBAGO_CENTER] : [DEFAULT_CENTER];
 
   const quotaMessage = getOpenWeatherQuotaMessage(cloudQuotaState);
 
@@ -404,6 +404,9 @@ export default function WeatherMap({
           <div className="pointer-events-none absolute bottom-3 left-3 z-[500] space-y-2">
             <div className="rounded-lg border border-slate-700/80 bg-slate-950/85 px-3 py-2 text-[11px] text-slate-200 shadow-lg shadow-black/25 backdrop-blur">
               <p className="font-semibold text-cyan-200">Legend</p>
+              <p className="mt-1 text-[11px] text-slate-300">
+                Current rainfall: {rainfallMmHr.toFixed(1)} mm/hr - {rainfallCategory.label}
+              </p>
               <div className="mt-2 grid gap-1">
                 <LegendItem color="#94a3b8" label="No Rain" />
                 <LegendItem color="#7dd3fc" label="Light Rain" />
