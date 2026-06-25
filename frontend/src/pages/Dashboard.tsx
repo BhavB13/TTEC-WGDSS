@@ -305,7 +305,7 @@ function HomeForecastRiskCard({
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
             Demand Forecast
           </p>
-          <h2 className="mt-1 text-[0.98rem] font-semibold leading-tight text-white">
+          <h2 className="mt-1 text-[0.94rem] font-semibold leading-tight text-white">
             700 to 1500 MW Window
           </h2>
         </div>
@@ -341,7 +341,7 @@ function WeatherOverviewCard({
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
             Weather Drivers
           </p>
-          <h2 className="mt-1 text-lg font-semibold leading-tight text-white">
+          <h2 className="mt-1 text-[0.98rem] font-semibold leading-tight text-white">
             Current Weather Conditions
           </h2>
         </div>
@@ -596,9 +596,9 @@ function ForecastBlock({ period }: { period: ForecastData }) {
   const time = formatForecastTimestamp(period.forecast_timestamp);
 
   return (
-    <div className="flex min-h-[7.5rem] flex-col rounded-xl border border-slate-800 bg-slate-950/60 p-2 shadow-inner shadow-black/20">
-      <div className="flex items-start justify-between gap-2">
-        <p className="min-w-0 text-[0.92rem] font-semibold leading-snug text-white">{time}</p>
+    <div className="flex min-h-[7.5rem] flex-col rounded-xl border border-slate-800 bg-slate-950/60 p-2 text-center shadow-inner shadow-black/20">
+      <div className="flex items-center justify-between gap-2">
+        <p className="min-w-0 break-words text-[0.84rem] font-semibold leading-snug text-white">{time}</p>
         <span className="shrink-0 rounded-full border border-slate-700 bg-slate-900/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-300">
           {period.rain_severity}
         </span>
@@ -621,11 +621,11 @@ function ForecastBlock({ period }: { period: ForecastData }) {
 
 function ForecastDatum({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 rounded-lg border border-slate-800 bg-slate-900/70 px-2 py-1">
+    <div className="min-w-0 rounded-lg border border-slate-800 bg-slate-900/70 px-2 py-1 text-center">
       <p className="text-[9px] uppercase leading-none tracking-[0.12em] text-slate-400">
         {label}
       </p>
-      <p className="mt-1 min-w-0 break-words text-[0.78rem] font-semibold leading-snug text-white">
+      <p className="mt-1 min-w-0 break-words text-[0.75rem] font-semibold leading-snug text-white">
         {value}
       </p>
     </div>
@@ -634,18 +634,18 @@ function ForecastDatum({ label, value }: { label: string; value: string }) {
 
 function StatusLine({ label, value }: { label: string; value: string }) {
   return (
-    <div className="grid gap-1 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 sm:grid-cols-[minmax(0,0.45fr)_minmax(0,0.55fr)] sm:items-start">
-      <span className="text-slate-400">{label}</span>
-      <span className="min-w-0 break-words font-semibold text-white">{value}</span>
+    <div className="grid gap-1 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-center sm:grid-cols-[minmax(0,0.45fr)_minmax(0,0.55fr)] sm:text-left sm:items-start">
+      <span className="text-[10px] uppercase tracking-[0.12em] text-slate-400">{label}</span>
+      <span className="min-w-0 break-words text-[0.88rem] font-semibold leading-snug text-white">{value}</span>
     </div>
   );
 }
 
 function MiniMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex h-full min-h-[4.25rem] flex-col justify-between rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
-      <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">{label}</p>
-      <p className="mt-1 min-w-0 break-words text-sm font-semibold leading-snug text-white">{value}</p>
+    <div className="flex h-full min-h-[4.25rem] flex-col items-center justify-center rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-center">
+      <p className="text-[10px] uppercase tracking-[0.14em] text-slate-400">{label}</p>
+      <p className="mt-1 min-w-0 break-words text-[0.84rem] font-semibold leading-snug text-white">{value}</p>
     </div>
   );
 }
@@ -781,14 +781,14 @@ function SummaryTile({
   return (
     <div
       title={value}
-      className={`flex min-h-[6.5rem] flex-col justify-between rounded-2xl border px-4 py-3 shadow-[0_0_24px_rgba(8,145,178,0.06)] ${toneClasses[tone]}`}
+      className={`flex min-h-[6.25rem] flex-col items-center justify-center rounded-2xl border px-4 py-3 text-center shadow-[0_0_24px_rgba(8,145,178,0.06)] ${toneClasses[tone]}`}
     >
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-300">
         {label}
       </p>
       <p
-        className={`mt-2 min-w-0 break-words font-semibold text-white ${
-          compactValue ? "truncate text-[0.98rem]" : "break-words text-2xl"
+        className={`mt-2 min-w-0 break-words font-semibold leading-tight text-white ${
+          compactValue ? "truncate text-[0.88rem]" : "text-[1.15rem] xl:text-[1.25rem]"
         }`}
       >
         {value}
@@ -815,9 +815,9 @@ function StatusChip({
   };
 
   return (
-    <div className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${toneClasses[tone]}`}>
-      <span className="uppercase tracking-[0.18em] text-slate-300">{label}</span>
-      <span className="ml-2">{value}</span>
+    <div className={`inline-flex min-h-[3.25rem] flex-col items-center justify-center rounded-2xl border px-3 py-2 text-center text-[11px] font-semibold ${toneClasses[tone]}`}>
+      <span className="text-[10px] uppercase tracking-[0.18em] text-slate-300">{label}</span>
+      <span className="mt-1 break-words text-[0.84rem]">{value}</span>
     </div>
   );
 }

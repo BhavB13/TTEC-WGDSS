@@ -122,21 +122,21 @@ export default function DemandForecastChart({
 
       {showSummary ? (
         <div className="mt-2 grid gap-2 sm:grid-cols-3">
-          <div className="flex min-h-[3.25rem] flex-col justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 shadow-inner shadow-black/20">
-            <p className="text-xs text-slate-400">Current</p>
-            <p className="mt-1 text-[0.92rem] font-semibold text-white">
+          <div className="flex min-h-[3.25rem] flex-col items-center justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 text-center shadow-inner shadow-black/20">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">Current</p>
+            <p className="mt-1 text-[0.86rem] font-semibold leading-tight text-white">
               {gridStatus.current_demand_mw.toFixed(0)} MW
             </p>
           </div>
-          <div className="flex min-h-[3.25rem] flex-col justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 shadow-inner shadow-black/20">
-            <p className="text-xs text-slate-400">30m</p>
-            <p className="mt-1 text-[0.92rem] font-semibold text-white">
+          <div className="flex min-h-[3.25rem] flex-col items-center justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 text-center shadow-inner shadow-black/20">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">30m</p>
+            <p className="mt-1 text-[0.86rem] font-semibold leading-tight text-white">
               {probability.forecast_demand_30m.toFixed(0)} MW
             </p>
           </div>
-          <div className="flex min-h-[3.25rem] flex-col justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 shadow-inner shadow-black/20">
-            <p className="text-xs text-slate-400">60m</p>
-            <p className="mt-1 text-[0.92rem] font-semibold text-white">
+          <div className="flex min-h-[3.25rem] flex-col items-center justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 text-center shadow-inner shadow-black/20">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">60m</p>
+            <p className="mt-1 text-[0.86rem] font-semibold leading-tight text-white">
               {probability.forecast_demand_60m.toFixed(0)} MW
             </p>
           </div>

@@ -33,11 +33,11 @@ export default function RecommendationCard({
         </span>
       </div>
 
-      <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3 shadow-inner shadow-black/20">
-        <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
+      <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-center shadow-inner shadow-black/20">
+        <p className="text-[10px] uppercase tracking-[0.16em] text-slate-400">
           Action
         </p>
-        <p className="mt-2 text-[1.05rem] font-semibold leading-tight text-white">
+        <p className="mt-2 break-words text-[0.98rem] font-semibold leading-tight text-white">
           {recommendation.recommendation}
         </p>
       </div>
@@ -78,9 +78,9 @@ function Metric({
   compact?: boolean;
 }) {
   return (
-    <div className="flex min-h-[3.75rem] flex-col justify-between rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 shadow-inner shadow-black/20">
-      <p className="text-[11px] uppercase tracking-[0.12em] text-slate-400">{label}</p>
-      <p className={`mt-1 font-semibold leading-snug text-white ${compact ? "break-words text-sm" : "text-sm"}`}>
+    <div className="flex min-h-[3.75rem] flex-col items-center justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 text-center shadow-inner shadow-black/20">
+      <p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">{label}</p>
+      <p className={`mt-1 font-semibold leading-snug text-white ${compact ? "break-words text-[0.85rem]" : "text-[0.9rem]"}`}>
         {value}
       </p>
     </div>

@@ -71,11 +71,11 @@ function HeaderMetric({
   };
 
   return (
-    <div className={`min-w-0 rounded-2xl border px-4 py-3 shadow-[0_0_24px_rgba(8,145,178,0.06)] ${toneClasses[tone]}`}>
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
+    <div className={`min-w-0 rounded-2xl border px-4 py-3 text-center shadow-[0_0_24px_rgba(8,145,178,0.06)] ${toneClasses[tone]}`}>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-300">
         {label}
       </p>
-      <p className="mt-2 truncate text-sm font-semibold text-white sm:text-[0.98rem]">
+      <p className="mt-2 break-words text-[0.9rem] font-semibold leading-tight text-white sm:text-[0.95rem]">
         {value}
       </p>
     </div>

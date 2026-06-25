@@ -43,7 +43,7 @@ export default function ProbabilityGauge({
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
             Probability
           </p>
-          <h2 className="mt-1 text-[1.05rem] font-semibold text-white">
+          <h2 className="mt-1 text-[0.98rem] font-semibold leading-tight text-white">
             Risk Gauge
           </h2>
         </div>
@@ -102,9 +102,9 @@ function Stat({
   value: string;
 }) {
   return (
-    <div className="flex min-h-[3.75rem] flex-col justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 shadow-inner shadow-black/20">
-      <p className="text-xs text-slate-400">{label}</p>
-      <p className="mt-1 break-words text-[0.9rem] font-semibold text-white">{value}</p>
+    <div className="flex min-h-[3.75rem] flex-col items-center justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 text-center shadow-inner shadow-black/20">
+      <p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">{label}</p>
+      <p className="mt-1 break-words text-[0.85rem] font-semibold leading-tight text-white">{value}</p>
     </div>
   );
 }
