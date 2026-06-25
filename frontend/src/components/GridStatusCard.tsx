@@ -52,7 +52,7 @@ function Metric({
   value: string;
 }) {
   return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2.5 shadow-inner shadow-black/20">
+    <div className="flex min-h-[4.25rem] flex-col justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2.5 shadow-inner shadow-black/20">
       <p className="text-xs text-slate-400">{label}</p>
       <p className="mt-1 text-[0.92rem] font-semibold text-white">{value}</p>
     </div>

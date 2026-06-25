@@ -46,7 +46,6 @@ export default function RecommendationCard({
         <Metric label="Probability" value={recommendation.probability_score.toFixed(2)} />
         <Metric label="30m Demand" value={`${recommendation.forecast_demand_30m.toFixed(0)} MW`} />
         <Metric label="60m Demand" value={`${recommendation.forecast_demand_60m.toFixed(0)} MW`} />
-        <Metric label="Reason" value={recommendation.reason} compact />
       </div>
 
       <div className="mt-3">
@@ -54,9 +53,7 @@ export default function RecommendationCard({
           Reasoning
         </p>
         <ul className="mt-2 space-y-2 text-sm text-slate-200">
-          {(recommendation.factors.slice(0, 3).length > 0
-            ? recommendation.factors.slice(0, 3)
-            : [recommendation.reason]).map((factor, index) => (
+          {(recommendation.factors.length > 0 ? recommendation.factors : [recommendation.reason]).map((factor, index) => (
             <li
               key={`${factor}-${index}`}
               className="flex gap-3 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2.5"
@@ -81,7 +78,7 @@ function Metric({
   compact?: boolean;
 }) {
   return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2.5 shadow-inner shadow-black/20">
+    <div className="flex min-h-[4.25rem] flex-col justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2.5 shadow-inner shadow-black/20">
       <p className="text-xs text-slate-400">{label}</p>
       <p
         className={`mt-1 font-semibold text-white ${

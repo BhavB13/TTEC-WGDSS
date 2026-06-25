@@ -52,8 +52,8 @@ export default function ProbabilityGauge({
         </span>
       </div>
 
-      <div className="flex flex-1 flex-col items-center justify-center gap-3">
-        <div className="relative flex h-[clamp(10rem,24vw,14rem)] w-[clamp(10rem,24vw,14rem)] items-center justify-center">
+      <div className="flex flex-1 flex-col items-center justify-start gap-2">
+        <div className="relative flex h-[clamp(8.5rem,18vw,11rem)] w-[clamp(8.5rem,18vw,11rem)] items-center justify-center">
           <svg viewBox="0 0 140 140" className="h-full w-full -rotate-90">
             <circle
               cx="70"
@@ -83,8 +83,10 @@ export default function ProbabilityGauge({
           </div>
         </div>
 
-        <div className="grid w-full gap-2.5 text-sm text-slate-300">
+        <div className="grid w-full gap-2 text-sm text-slate-300">
           <Stat label="Risk Score" value={score.toFixed(2)} />
+          <Stat label="30m Demand" value={`${probability.forecast_demand_30m.toFixed(0)} MW`} />
+          <Stat label="60m Demand" value={`${probability.forecast_demand_60m.toFixed(0)} MW`} />
           <Stat label="Short Explanation" value={probability.reason} />
         </div>
       </div>
@@ -100,9 +102,9 @@ function Stat({
   value: string;
 }) {
   return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2.5 shadow-inner shadow-black/20">
+    <div className="flex min-h-[3.75rem] flex-col justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 shadow-inner shadow-black/20">
       <p className="text-xs text-slate-400">{label}</p>
-      <p className="mt-1 break-words text-[0.92rem] font-semibold text-white">{value}</p>
+      <p className="mt-1 break-words text-[0.9rem] font-semibold text-white">{value}</p>
     </div>
   );
 }

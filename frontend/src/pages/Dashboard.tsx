@@ -132,6 +132,7 @@ export default function Dashboard() {
                 <WorkspacePage>
                   <AnalyticsTab
                     grid={snapshot.grid}
+                    weather={snapshot.weather}
                     probability={probability}
                     recommendation={recommendation}
                   />
@@ -267,87 +268,96 @@ function HomeTab({
         <SummaryTile label="Action" value={recommendation.recommendation} tone="slate" compactValue />
       </div>
 
-      <div className="grid min-h-0 flex-1 gap-2.5 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
-        <DecisionCard recommendation={recommendation} probability={probability} />
+          <div className="grid min-h-0 flex-1 items-stretch gap-2.5 xl:grid-cols-2">
+        <WeatherOverviewCard weather={weather} forecastItems={forecastItems} />
 
-        <PanelCard title="Operating Drivers" className="h-full min-h-0">
-          <div className="grid h-full min-h-0 content-start gap-2 text-sm text-slate-200">
-            <MiniMetric label="Grid Status" value={grid.grid_status} />
-            <MiniMetric label="Demand Period" value={grid.demand_period} />
-            <MiniMetric label="Temperature" value={`${weather.temperature_c.toFixed(1)}°C`} />
-            <MiniMetric label="Humidity" value={`${weather.humidity_percent.toFixed(0)}%`} />
-            <MiniMetric label="Rainfall" value={`${weather.rainfall_mm_hr.toFixed(1)} mm/hr`} />
-            <MiniMetric label="Wind" value={`${weather.wind_speed_kmh.toFixed(1)} km/h`} />
-          </div>
-        </PanelCard>
-      </div>
-
-      <div className="grid gap-2.5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
-        <MiniMetric label="30m Demand Forecast" value={`${probability.forecast_demand_30m.toFixed(0)} MW`} />
-        <MiniMetric label="60m Demand Forecast" value={`${probability.forecast_demand_60m.toFixed(0)} MW`} />
-        <MiniMetric
-          label="Next Weather Period"
-          value={forecastItems[0] ? `${forecastItems[0].temperature_c.toFixed(0)}°C, ${forecastItems[0].cloud_cover_percent.toFixed(0)}% cloud` : "--"}
-        />
+        <HomeForecastRiskCard grid={grid} probability={probability} />
       </div>
     </>
   );
 }
 
-function DecisionCard({
-  recommendation,
+function HomeForecastRiskCard({
+  grid,
   probability,
 }: {
-  recommendation: DashboardSnapshot["recommendation"];
+  grid: DashboardSnapshot["grid"];
   probability: DashboardSnapshot["probability"];
 }) {
   return (
-    <div className="flex h-full min-h-0 w-full min-w-0 flex-col rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-4 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="home-forecast-card flex h-full min-h-[26rem] w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-3 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
+      <div className="mb-2 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
-            Operator Decision
+            Demand Forecast
           </p>
-          <h2 className="mt-2 text-2xl font-semibold text-white">
-            {recommendation.recommendation}
+          <h2 className="mt-1 text-[0.98rem] font-semibold text-white">
+            700 to 1500 MW Window
+          </h2>
+        </div>
+        <span className="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[11px] font-semibold text-slate-200">
+          Live
+        </span>
+      </div>
+
+      <DemandForecastChart
+        gridStatus={grid}
+        probability={probability}
+        showHeader={false}
+        showSummary={false}
+        className="h-full min-h-[22rem] w-full min-w-0"
+      />
+    </div>
+  );
+}
+
+function WeatherOverviewCard({
+  weather,
+  forecastItems,
+}: {
+  weather: DashboardSnapshot["weather"];
+  forecastItems: ForecastData[];
+}) {
+  const leadForecast = forecastItems[0];
+
+  return (
+    <div className="home-weather-card flex h-full min-h-[26rem] w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-3 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
+            Weather Drivers
+          </p>
+          <h2 className="mt-1 text-xl font-semibold text-white">
+            Current Weather Conditions
           </h2>
         </div>
         <span
           className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
-            recommendation.risk_level === "HIGH"
+            weather.rain_severity === "SEVERE"
               ? "border-rose-500/40 bg-rose-500/10 text-rose-200"
-              : recommendation.risk_level === "MEDIUM"
+              : weather.rain_severity === "HEAVY"
                 ? "border-amber-500/40 bg-amber-500/10 text-amber-200"
                 : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
           }`}
         >
-          {recommendation.risk_level}
+          {weather.rain_severity}
         </span>
       </div>
 
-      <div className="mt-4 grid gap-2.5 sm:grid-cols-3">
-        <MiniMetric label="Probability Score" value={recommendation.probability_score.toFixed(2)} />
-        <MiniMetric label="Risk Level" value={probability.risk_level} />
-        <MiniMetric label="Reserve Impact" value={probability.reason} />
-      </div>
-
-      <div className="mt-4 min-h-0 flex-1 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-          Reason
-        </p>
-        <p className="mt-2 text-sm leading-6 text-slate-100">
-          {recommendation.reason}
-        </p>
-        <ul className="mt-3 grid gap-2 text-sm text-slate-200">
-          {(recommendation.factors.slice(0, 3).length > 0
-            ? recommendation.factors.slice(0, 3)
-            : [recommendation.reason]).map((factor, index) => (
-            <li key={`${factor}-${index}`} className="flex gap-2 rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-2">
-              <span className="font-semibold text-cyan-300">{index + 1}.</span>
-              <span className="min-w-0 flex-1 break-words">{factor}</span>
-            </li>
-          ))}
-        </ul>
+      <div className="mt-3 grid min-h-0 flex-1 auto-rows-fr grid-cols-2 gap-2">
+        <MiniMetric label="Temperature" value={`${weather.temperature_c.toFixed(1)}°C`} />
+        <MiniMetric label="Humidity" value={`${weather.humidity_percent.toFixed(0)}%`} />
+        <MiniMetric label="Rainfall" value={`${weather.rainfall_mm_hr.toFixed(1)} mm/hr`} />
+        <MiniMetric label="Wind Speed" value={`${weather.wind_speed_kmh.toFixed(1)} km/h`} />
+        <MiniMetric label="Cloud Cover" value={`${weather.cloud_cover_percent.toFixed(0)}%`} />
+        <MiniMetric label="Heat Index" value={`${weather.heat_index_c.toFixed(1)}°C`} />
+        <MiniMetric label="Condition" value={weather.weather_condition} />
+        <MiniMetric label="Observed" value={formatTimestamp(weather.timestamp)} />
+        <MiniMetric label="Provider" value={weather.provider_name} />
+        <MiniMetric
+          label="6h Outlook"
+          value={leadForecast ? `${leadForecast.temperature_c.toFixed(0)}°C, ${leadForecast.cloud_cover_percent.toFixed(0)}% cloud` : "--"}
+        />
       </div>
     </div>
   );
@@ -388,22 +398,9 @@ function OperationsTab({
       </div>
 
       <div className="grid min-h-0 flex-1 gap-2.5 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-        <PanelCard title="Operations Summary">
-          <div className="grid gap-2 sm:grid-cols-2">
-            <MiniMetric label="Grid Status" value={grid.grid_status} />
-            <MiniMetric label="Demand Period" value={grid.demand_period} />
-            <MiniMetric label="Source" value={grid.source_provider} />
-            <MiniMetric label="Last Updated" value={formatTimestamp(lastUpdated)} />
-          </div>
-        </PanelCard>
+        <RecommendationCard recommendation={recommendation} className="h-full min-h-0 w-full min-w-0" />
 
-        <PanelCard title="Control Strip">
-          <div className="space-y-2 text-sm text-slate-200">
-            <StatusLine label="Grid Status" value={grid.grid_status} />
-            <StatusLine label="Probability" value={probability.probability_score.toFixed(2)} />
-            <StatusLine label="Recommendation" value={recommendation.recommendation} />
-          </div>
-        </PanelCard>
+        <GridStatusCard gridStatus={grid} className="h-full min-h-0" />
       </div>
     </>
   );
@@ -417,10 +414,10 @@ function WeatherTab({
   forecastItems: ForecastData[];
 }) {
   return (
-    <div className="grid min-h-0 w-full min-w-0 flex-1 gap-2.5 xl:grid-cols-2">
-      <CurrentConditions weather={weather} className="h-full min-h-0 w-full min-w-0" />
-      <PanelCard title="Next 6 Hours" className="h-full min-h-0 w-full min-w-0">
-        <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60">
+      <div className="grid min-h-0 w-full min-w-0 flex-1 gap-2.5 xl:grid-cols-2">
+        <CurrentConditions weather={weather} className="h-full min-h-0 w-full min-w-0" />
+        <PanelCard title="Next 6 Hours" className="h-full min-h-0 w-full min-w-0">
+          <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60">
           <div className="grid grid-cols-[1fr_auto_auto] gap-2 border-b border-slate-800 px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-slate-400">
             <span>Time</span>
             <span>Temp</span>
@@ -430,6 +427,11 @@ function WeatherTab({
             {forecastItems.slice(0, 6).map((period) => (
               <ForecastRow key={period.forecast_timestamp} period={period} />
             ))}
+          </div>
+          <div className="grid gap-2 border-t border-slate-800 p-3 sm:grid-cols-3">
+            <MiniMetric label="Peak Temp" value={`${Math.max(...forecastItems.slice(0, 6).map((item) => item.temperature_c), weather.temperature_c).toFixed(0)}°C`} />
+            <MiniMetric label="Peak Cloud" value={`${Math.max(...forecastItems.slice(0, 6).map((item) => item.cloud_cover_percent), weather.cloud_cover_percent).toFixed(0)}%`} />
+            <MiniMetric label="Peak Rain" value={`${Math.max(...forecastItems.slice(0, 6).map((item) => item.rainfall_mm_hr), weather.rainfall_mm_hr).toFixed(1)} mm/hr`} />
           </div>
         </div>
       </PanelCard>
@@ -465,24 +467,31 @@ function ForecastRiskTab({
               className="h-full min-h-0 w-full min-w-0"
             />
             <PanelCard title="Demand Snapshot" className="h-full min-h-0 w-full min-w-0">
-              <div className="grid gap-2 text-sm text-slate-200">
+              <div className="grid h-full gap-2 text-sm text-slate-200">
                 <MiniMetric label="Current Demand" value={`${grid.current_demand_mw.toFixed(0)} MW`} />
+                <MiniMetric label="Current Generation" value={`${grid.current_generation_mw.toFixed(0)} MW`} />
+                <MiniMetric label="Available Capacity" value={`${grid.total_available_capacity_mw.toFixed(0)} MW`} />
+                <MiniMetric label="Reserve Margin" value={`${grid.reserve_margin_percent.toFixed(1)}%`} />
                 <MiniMetric label="30m Forecast" value={`${probability.forecast_demand_30m.toFixed(0)} MW`} />
                 <MiniMetric label="60m Forecast" value={`${probability.forecast_demand_60m.toFixed(0)} MW`} />
                 <MiniMetric label="Risk Level" value={probability.risk_level} />
+                <MiniMetric label="Action" value={recommendation.recommendation} />
               </div>
             </PanelCard>
           </div>
         ) : null}
 
         {forecastTab === "risk" ? (
-          <div className="grid h-full min-h-0 w-full min-w-0 grid-cols-1 gap-2.5 xl:grid-cols-2">
+          <div className="grid h-full min-h-0 w-full min-w-0 grid-cols-1 gap-2.5 overflow-y-auto pb-2 xl:grid-cols-2">
             <ProbabilityGauge probability={probability} className="h-full min-h-0 w-full min-w-0" />
             <PanelCard title="Risk Context" className="h-full min-h-0 w-full min-w-0">
-              <div className="space-y-2 text-sm text-slate-200">
+              <div className="grid h-full gap-2 text-sm text-slate-200">
                 <StatusLine label="Risk Level" value={probability.risk_level} />
                 <StatusLine label="Score" value={probability.probability_score.toFixed(2)} />
+                <StatusLine label="30m Demand" value={`${probability.forecast_demand_30m.toFixed(0)} MW`} />
+                <StatusLine label="60m Demand" value={`${probability.forecast_demand_60m.toFixed(0)} MW`} />
                 <StatusLine label="Reason" value={probability.reason} />
+                <StatusLine label="Sensitivity" value={`${grid.reserve_margin_percent.toFixed(1)}% reserve`} />
               </div>
             </PanelCard>
           </div>
@@ -516,10 +525,12 @@ function AnalyticsTab({
   grid,
   probability,
   recommendation,
+  weather,
 }: {
   grid: DashboardSnapshot["grid"];
   probability: DashboardSnapshot["probability"];
   recommendation: DashboardSnapshot["recommendation"];
+  weather: DashboardSnapshot["weather"];
 }) {
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-2.5 overflow-hidden">
@@ -530,21 +541,15 @@ function AnalyticsTab({
         <MiniMetric label="Action" value={recommendation.recommendation} />
       </div>
 
-      <div className="grid min-h-0 flex-1 gap-2.5 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">
-        <PanelCard title="Analytics" className="h-full min-h-0">
-          <div className="flex h-full min-h-0 items-start">
-            <p className="text-sm text-slate-200">
-              Future analytics and historical reporting will appear here.
-            </p>
-          </div>
-        </PanelCard>
-
-        <PanelCard title="Live Snapshot" className="h-full min-h-0">
-          <div className="grid gap-2 text-sm text-slate-200">
-            <StatusLine label="Grid Status" value={grid.grid_status} />
-            <StatusLine label="Reserve Margin" value={`${grid.reserve_margin_percent.toFixed(1)}%`} />
-            <StatusLine label="Risk Level" value={probability.risk_level} />
-            <StatusLine label="Reason" value={recommendation.reason} />
+      <div className="grid min-h-0 flex-1 gap-2.5 xl:grid-cols-2">
+        <GridStatusCard gridStatus={grid} className="h-full min-h-0" />
+        <CurrentConditions weather={weather} className="h-full min-h-0 w-full min-w-0" />
+        <PanelCard title="Live Snapshot" className="h-full min-h-0 xl:col-span-2">
+          <div className="grid gap-2 text-sm text-slate-200 sm:grid-cols-2 xl:grid-cols-4">
+            <MiniMetric label="Probability" value={probability.probability_score.toFixed(2)} />
+            <MiniMetric label="Risk Level" value={probability.risk_level} />
+            <MiniMetric label="Action" value={recommendation.recommendation} />
+            <MiniMetric label="Last Updated" value={formatTimestamp(weather.timestamp)} />
           </div>
         </PanelCard>
       </div>
@@ -595,7 +600,7 @@ function StatusLine({ label, value }: { label: string; value: string }) {
 
 function MiniMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
+    <div className="flex min-h-[4.25rem] flex-col justify-center rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
       <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">{label}</p>
       <p className="mt-1 min-w-0 break-words text-sm font-semibold text-white">{value}</p>
     </div>

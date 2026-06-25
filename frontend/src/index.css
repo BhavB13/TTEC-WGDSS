@@ -40,3 +40,18 @@ body {
   width: 100%;
   min-width: 0;
 }
+/* Home decision bubbles need to wrap cleanly on narrower laptop widths. */
+.home-weather-card > *,
+.home-weather-card *,
+.home-forecast-card > *,
+.home-forecast-card * {
+  min-width: 0;
+}
+
+.home-weather-card p,
+.home-weather-card span,
+.home-forecast-card p,
+.home-forecast-card span {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
