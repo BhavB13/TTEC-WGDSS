@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./wgdss.db"
     DB_ECHO: bool = False
 
-    OPEN_METEO_BASE_URL: str = "https://api.open-meteo.com/v1/forecast"
+    OPEN_METEO_BASE_URL: str = "https://api.open-meteo.com/v1/ecmwf"
     WEATHER_API_BASE_URL: str = "https://api.weatherapi.com/v1"
     WEATHER_API_KEY: str = ""
 

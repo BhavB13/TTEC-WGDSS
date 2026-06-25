@@ -82,6 +82,21 @@ class OpenMeteoProvider(WeatherProvider):
             }
         )
         current = payload.get("current") or {}
+        hourly = payload.get("hourly") or {}
+        if not current:
+            current = {
+                "time": self._safe_list_value(hourly.get("time", []), 0),
+                "temperature_2m": self._safe_list_value(hourly.get("temperature_2m", []), 0),
+                "relative_humidity_2m": self._safe_list_value(hourly.get("relative_humidity_2m", []), 0),
+                "precipitation": self._safe_list_value(hourly.get("precipitation", []), 0),
+                "rain": self._safe_list_value(hourly.get("rain", []), 0, 0.0),
+                "cloud_cover": self._safe_list_value(hourly.get("cloud_cover", []), 0, 0.0),
+                "wind_speed_10m": self._safe_list_value(hourly.get("wind_speed_10m", []), 0, 0.0),
+                "wind_direction_10m": self._safe_list_value(hourly.get("wind_direction_10m", []), 0),
+                "surface_pressure": self._safe_list_value(hourly.get("surface_pressure", []), 0),
+                "weather_code": self._safe_list_value(hourly.get("weather_code", []), 0),
+                "apparent_temperature": self._safe_list_value(hourly.get("apparent_temperature", []), 0),
+            }
         logger.debug("Open-Meteo current payload received")
 
         return {

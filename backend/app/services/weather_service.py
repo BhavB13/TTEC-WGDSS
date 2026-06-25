@@ -5,13 +5,12 @@ import copy
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.core.config import settings
 from app.providers.open_meteo_provider import OpenMeteoProvider
 from app.providers.weather_provider import WeatherProvider
-from app.providers.weatherapi_provider import WeatherAPIProvider
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +29,9 @@ class WeatherService:
         cache_ttl_seconds: int | None = None,
     ) -> None:
         self.primary_provider = provider or OpenMeteoProvider()
-        self.fallback_provider = fallback_provider or WeatherAPIProvider()
+        self.fallback_provider = fallback_provider or OpenMeteoProvider(
+            base_url="https://api.open-meteo.com/v1/forecast"
+        )
         self.cache_ttl_seconds = cache_ttl_seconds or settings.WEATHER_CACHE_TTL_SECONDS
         self._cache: dict[str, _CacheEntry] = {}
         self._cache_lock = asyncio.Lock()
@@ -67,6 +68,7 @@ class WeatherService:
 
         raw = await self._fetch_forecast_with_failover(latitude, longitude, days)
         normalized = [self._normalize_forecast_item(item) for item in raw]
+        normalized.sort(key=self._forecast_sort_key)
         await self._set_cache(cache_key, normalized)
         return copy.deepcopy(normalized)
 
@@ -290,7 +292,60 @@ class WeatherService:
             return None
         if isinstance(value, datetime):
             return value.isoformat()
+        parsed = WeatherService._parse_datetime(value)
+        if parsed is not None:
+            return parsed.isoformat()
         return str(value)
+
+    @staticmethod
+    def _parse_datetime(value: Any) -> datetime | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+
+        text = str(value).strip()
+        if not text:
+            return None
+
+        if text.isdigit():
+            try:
+                return datetime.fromtimestamp(float(text), tz=timezone.utc)
+            except (OverflowError, ValueError):
+                return None
+
+        candidates = (
+            text,
+            text.replace("Z", "+00:00"),
+            text.replace(" ", "T"),
+        )
+        for candidate in candidates:
+            try:
+                parsed = datetime.fromisoformat(candidate)
+                return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+
+        for fmt in (
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%dT%H:%M",
+            "%Y-%m-%dT%H:%M:%S",
+        ):
+            try:
+                parsed = datetime.strptime(text, fmt)
+                return parsed.replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+
+        return None
+
+    @staticmethod
+    def _forecast_sort_key(item: dict[str, Any]) -> datetime:
+        parsed = WeatherService._parse_datetime(item.get("forecast_timestamp"))
+        return parsed or datetime.max.replace(tzinfo=timezone.utc)
 
     @staticmethod
     def _calculate_heat_index(temperature_c: float, humidity_percent: float) -> float:

@@ -42,8 +42,14 @@ async function readErrorMessage(response: Response): Promise<string> {
   }
 }
 
-export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
-  return requestJson<DashboardSnapshot>(DASHBOARD_SNAPSHOT_PATH);
+export async function getDashboardSnapshot(options?: {
+  forceRefresh?: boolean;
+}): Promise<DashboardSnapshot> {
+  const forceRefresh = options?.forceRefresh ?? true;
+  const path = forceRefresh
+    ? `${DASHBOARD_SNAPSHOT_PATH}?force_refresh=true`
+    : DASHBOARD_SNAPSHOT_PATH;
+  return requestJson<DashboardSnapshot>(path);
 }
 
 export async function getCurrentWeather(): Promise<WeatherData> {

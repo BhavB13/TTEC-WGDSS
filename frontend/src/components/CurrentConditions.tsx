@@ -11,13 +11,13 @@ export default function CurrentConditions({
   className = "",
 }: CurrentConditionsProps) {
   return (
-    <div className={`flex h-full w-full min-w-0 flex-col rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-3.5 shadow-[0_0_34px_rgba(8,145,178,0.08)] ${className}`}>
-      <div className="mb-3 flex items-start justify-between gap-3">
+    <div className={`flex h-full w-full min-w-0 flex-col rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)] ${className}`}>
+      <div className="mb-2 flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
             Current Conditions
           </p>
-          <h2 className="mt-1 text-[1.05rem] font-semibold text-white">
+          <h2 className="mt-1 text-[0.96rem] font-semibold leading-tight text-white">
             Current Weather Conditions
           </h2>
         </div>
@@ -26,7 +26,7 @@ export default function CurrentConditions({
         </span>
       </div>
 
-      <div className="grid flex-1 grid-cols-1 gap-2.5 text-sm sm:grid-cols-2">
+      <div className="grid flex-1 grid-cols-1 gap-1.5 text-sm sm:grid-cols-2">
         <Metric label="Temperature" value={`${weather.temperature_c.toFixed(1)}°C`} />
         <Metric label="Humidity" value={`${weather.humidity_percent.toFixed(0)}%`} />
         <Metric label="Rainfall" value={`${weather.rainfall_mm_hr.toFixed(1)} mm/hr`} />
@@ -35,7 +35,7 @@ export default function CurrentConditions({
         <Metric label="Heat Index" value={`${weather.heat_index_c.toFixed(1)}°C`} />
       </div>
 
-      <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-400">
+      <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-400">
         <Badge label={weather.weather_condition} />
         <Badge label={weather.provider_name} />
         {weather.timestamp ? (
@@ -54,9 +54,9 @@ function Metric({
   value: string;
 }) {
   return (
-    <div className="flex min-h-[4.25rem] flex-col justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2.5 shadow-inner shadow-black/20">
-      <p className="text-xs text-slate-400">{label}</p>
-      <p className="mt-1 text-[0.92rem] font-semibold text-white">{value}</p>
+    <div className="flex min-h-[3.25rem] flex-col justify-between rounded-lg border border-slate-800 bg-slate-950/60 px-2 py-1.5 shadow-inner shadow-black/20">
+      <p className="text-[11px] uppercase tracking-[0.12em] text-slate-400">{label}</p>
+      <p className="mt-1 min-w-0 break-words text-[0.86rem] font-semibold leading-snug text-white">{value}</p>
     </div>
   );
 }

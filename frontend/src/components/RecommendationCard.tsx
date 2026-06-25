@@ -10,13 +10,13 @@ export default function RecommendationCard({
   className = "",
 }: RecommendationCardProps) {
   return (
-    <div className={`w-full min-w-0 rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-3.5 shadow-[0_0_34px_rgba(8,145,178,0.08)] ${className}`}>
-      <div className="mb-3 flex items-start justify-between gap-3">
+    <div className={`w-full min-w-0 rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-3 shadow-[0_0_34px_rgba(8,145,178,0.08)] ${className}`}>
+      <div className="mb-2.5 flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
             Recommendation
           </p>
-          <h2 className="mt-1 text-[1.05rem] font-semibold text-white">
+          <h2 className="mt-1 text-[0.98rem] font-semibold leading-tight text-white">
             Operational Guidance
           </h2>
         </div>
@@ -33,30 +33,30 @@ export default function RecommendationCard({
         </span>
       </div>
 
-      <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3.5 shadow-inner shadow-black/20">
+      <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3 shadow-inner shadow-black/20">
         <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
           Action
         </p>
-        <p className="mt-2 text-xl font-semibold text-white">
+        <p className="mt-2 text-[1.05rem] font-semibold leading-tight text-white">
           {recommendation.recommendation}
         </p>
       </div>
 
-      <div className="mt-3 grid gap-2.5 text-sm sm:grid-cols-2">
+      <div className="mt-2.5 grid gap-2 text-sm sm:grid-cols-2">
         <Metric label="Probability" value={recommendation.probability_score.toFixed(2)} />
         <Metric label="30m Demand" value={`${recommendation.forecast_demand_30m.toFixed(0)} MW`} />
         <Metric label="60m Demand" value={`${recommendation.forecast_demand_60m.toFixed(0)} MW`} />
       </div>
 
-      <div className="mt-3">
+      <div className="mt-2.5">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
           Reasoning
         </p>
-        <ul className="mt-2 space-y-2 text-sm text-slate-200">
+        <ul className="mt-2 space-y-1.5 text-sm text-slate-200">
           {(recommendation.factors.length > 0 ? recommendation.factors : [recommendation.reason]).map((factor, index) => (
             <li
               key={`${factor}-${index}`}
-              className="flex gap-3 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2.5"
+              className="flex gap-3 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2"
             >
               <span className="font-semibold text-cyan-300">{index + 1}.</span>
               <span className="flex-1">{factor}</span>
@@ -78,13 +78,9 @@ function Metric({
   compact?: boolean;
 }) {
   return (
-    <div className="flex min-h-[4.25rem] flex-col justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2.5 shadow-inner shadow-black/20">
-      <p className="text-xs text-slate-400">{label}</p>
-      <p
-        className={`mt-1 font-semibold text-white ${
-          compact ? "break-words text-sm" : "text-base"
-        }`}
-      >
+    <div className="flex min-h-[3.75rem] flex-col justify-between rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 shadow-inner shadow-black/20">
+      <p className="text-[11px] uppercase tracking-[0.12em] text-slate-400">{label}</p>
+      <p className={`mt-1 font-semibold leading-snug text-white ${compact ? "break-words text-sm" : "text-sm"}`}>
         {value}
       </p>
     </div>
