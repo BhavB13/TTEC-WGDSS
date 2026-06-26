@@ -61,7 +61,6 @@ body {
   outline: 1px solid transparent;
   image-rendering: auto;
   backface-visibility: hidden;
-  transform: translateZ(0);
 }
 
 .leaflet-container .leaflet-overlay-pane img {

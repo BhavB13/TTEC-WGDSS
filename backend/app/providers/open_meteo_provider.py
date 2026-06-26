@@ -60,6 +60,8 @@ class OpenMeteoProvider(WeatherProvider):
             params={
                 "latitude": latitude,
                 "longitude": longitude,
+                "cell_selection": "nearest",
+                "elevation": "nan",
                 "current": ",".join(
                     [
                         "temperature_2m",
@@ -75,7 +77,7 @@ class OpenMeteoProvider(WeatherProvider):
                         "weather_code",
                     ]
                 ),
-                "timezone": "auto",
+                "timezone": "America/Port_of_Spain",
                 "temperature_unit": "celsius",
                 "wind_speed_unit": "kmh",
                 "precipitation_unit": "mm",
@@ -132,6 +134,8 @@ class OpenMeteoProvider(WeatherProvider):
             params={
                 "latitude": latitude,
                 "longitude": longitude,
+                "cell_selection": "nearest",
+                "elevation": "nan",
                 "hourly": ",".join(
                     [
                         "temperature_2m",
@@ -147,7 +151,7 @@ class OpenMeteoProvider(WeatherProvider):
                     ]
                 ),
                 "forecast_days": days,
-                "timezone": "auto",
+                "timezone": "America/Port_of_Spain",
                 "temperature_unit": "celsius",
                 "wind_speed_unit": "kmh",
                 "precipitation_unit": "mm",

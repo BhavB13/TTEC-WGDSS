@@ -47,6 +47,13 @@ const GIBS_PRECIP_TILESET = "GoogleMapsCompatible_Level6";
 const CLOUD_SYSTEMS_LAYER_NAME = "Cloud Systems";
 const CLOUDS_LATEST = "default";
 const RAIN_LATEST = "default";
+const TILE_LAYER_OPTIONS = {
+  keepBuffer: 4,
+  updateInterval: 200,
+  updateWhenIdle: true,
+  updateWhenZooming: false,
+  detectRetina: false,
+} as const;
 const generationCoordinates: Record<string, [number, number]> = {
   "Point Lisas": [10.388, -61.5],
   Cove: [10.534, -61.459],
@@ -340,6 +347,7 @@ export default function WeatherMap({
               <TileLayer
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                {...TILE_LAYER_OPTIONS}
               />
             </LayersControl.BaseLayer>
 
@@ -347,6 +355,7 @@ export default function WeatherMap({
               <TileLayer
                 attribution="Tiles &copy; Esri"
                 url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                {...TILE_LAYER_OPTIONS}
               />
             </LayersControl.BaseLayer>
 
@@ -360,6 +369,7 @@ export default function WeatherMap({
                     zIndex={500}
                     pane="overlayPane"
                     url={cloudSystemsTileUrl}
+                    {...TILE_LAYER_OPTIONS}
                   />
                 ) : null}
               </LayerGroup>
@@ -375,6 +385,7 @@ export default function WeatherMap({
                     zIndex={490}
                     pane="overlayPane"
                     url={rainfallTileUrl}
+                    {...TILE_LAYER_OPTIONS}
                   />
                 ) : null}
               </LayerGroup>
@@ -476,35 +487,8 @@ export default function WeatherMap({
             </LayersControl.Overlay>
           </LayersControl>
 
-          <div className="pointer-events-none absolute bottom-3 left-3 z-[500] space-y-2">
-            <div className="rounded-lg border border-slate-700/80 bg-slate-950/85 px-3 py-2 text-[11px] text-slate-200 shadow-lg shadow-black/25 backdrop-blur">
-              <p className="font-semibold text-cyan-200">Legend</p>
-              <p className="mt-1 text-[11px] text-slate-300">
-                Cloud systems and rainfall imagery are live NASA GIBS layers.
-              </p>
-              <div className="mt-2 grid gap-1">
-                <LegendItem color="#93c5fd" label="Cloud Systems" />
-                <LegendItem color="#60a5fa" label="Rainfall Coverage" />
-              </div>
-            </div>
-
-            {hurricaneEnabled ? (
-              <div className="rounded-lg border border-slate-700/80 bg-slate-950/85 px-3 py-2 text-[11px] text-slate-200 shadow-lg shadow-black/25 backdrop-blur">
-                Reserved for future hurricane tracking integration.
-              </div>
-            ) : null}
-          </div>
         </MapContainer>
       </div>
-    </div>
-  );
-}
-
-function LegendItem({ color, label }: { color: string; label: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
-      <span>{label}</span>
     </div>
   );
 }

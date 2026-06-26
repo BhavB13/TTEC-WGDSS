@@ -136,6 +136,7 @@ export default function Dashboard() {
   const forecastItems = Array.isArray(snapshot.forecast?.items)
     ? snapshot.forecast.items
     : [];
+  const upcomingForecastItems = getUpcomingForecastItems(forecastItems, new Date(), 6);
 
   return (
     <Shell
@@ -165,7 +166,7 @@ export default function Dashboard() {
                     weather={weather}
                     probability={probability}
                     recommendation={recommendation}
-                    forecastItems={forecastItems}
+                    forecastItems={upcomingForecastItems}
                   />
                 </WorkspacePage>
               ) : null}
@@ -183,7 +184,7 @@ export default function Dashboard() {
 
               {activeTab === "weather" ? (
                 <WorkspacePage>
-                  <WeatherTab weather={weather} forecastItems={forecastItems} />
+                  <WeatherTab weather={weather} forecastItems={upcomingForecastItems} />
                 </WorkspacePage>
               ) : null}
 
@@ -207,7 +208,7 @@ export default function Dashboard() {
                 <WorkspacePage>
                   <OperationalGuidanceTab
                     recommendation={recommendation}
-                    forecastItems={forecastItems}
+                    forecastItems={upcomingForecastItems}
                   />
                 </WorkspacePage>
               ) : null}
@@ -486,7 +487,7 @@ function WeatherTab({
           </div>
 
           <div className="grid min-h-0 flex-1 auto-rows-fr gap-2 overflow-auto sm:grid-cols-2 xl:grid-cols-3">
-            {forecastItems.slice(0, 6).map((period) => (
+            {forecastItems.map((period) => (
               <ForecastBlock key={period.forecast_timestamp} period={period} />
             ))}
           </div>
@@ -510,14 +511,14 @@ function DemandForecastTab({
   recommendation: DashboardSnapshot["recommendation"];
 }) {
   return (
-    <div className="grid h-full min-h-0 w-full min-w-0 grid-cols-1 gap-2.5 xl:grid-cols-2">
+    <div className="grid h-full min-h-0 w-full min-w-0 grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)]">
       <DemandForecastChart
         gridStatus={grid}
         probability={probability}
         className="h-full min-h-0 w-full min-w-0"
       />
       <PanelCard title="Demand Snapshot" className="h-full min-h-0 w-full min-w-0">
-        <div className="grid h-full gap-2 text-sm text-slate-200">
+        <div className="grid h-full grid-cols-2 gap-1.5 text-sm text-slate-200">
           <MiniMetric label="Current Demand" value={`${grid.current_demand_mw.toFixed(0)} MW`} />
           <MiniMetric label="Current Generation" value={`${grid.current_generation_mw.toFixed(0)} MW`} />
           <MiniMetric label="Available Capacity" value={`${grid.total_available_capacity_mw.toFixed(0)} MW`} />
@@ -575,7 +576,7 @@ function OperationalGuidanceTab({
             <span className="text-right">Cloud</span>
           </div>
           <div className="grid min-h-0 flex-1 auto-rows-fr gap-2 overflow-auto sm:grid-cols-2 xl:grid-cols-3">
-            {forecastItems.slice(0, 6).map((period) => (
+            {forecastItems.map((period) => (
               <ForecastBlock key={period.forecast_timestamp} period={period} />
             ))}
           </div>
@@ -689,9 +690,9 @@ function StatusLine({ label, value }: { label: string; value: string }) {
 
 function MiniMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex h-full min-h-[4.25rem] flex-col items-center justify-center rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-center">
-      <p className="text-[10px] uppercase tracking-[0.14em] text-slate-400">{label}</p>
-      <p className="mt-1 min-w-0 break-words text-[0.84rem] font-semibold leading-snug text-white">{value}</p>
+    <div className="flex h-full min-h-[3.5rem] flex-col items-center justify-center rounded-xl border border-slate-800 bg-slate-950/60 px-2.5 py-1.5 text-center">
+      <p className="text-[9px] uppercase tracking-[0.12em] text-slate-400">{label}</p>
+      <p className="mt-0.5 min-w-0 break-words text-[0.8rem] font-semibold leading-snug text-white">{value}</p>
     </div>
   );
 }
@@ -725,6 +726,31 @@ function formatForecastTimestamp(value: string): string {
     minute: "2-digit",
     timeZoneName: "short",
   }).format(date);
+}
+
+function getUpcomingForecastItems(
+  forecastItems: ForecastData[],
+  referenceTime: Date = new Date(),
+  count = 6,
+): ForecastData[] {
+  const now = referenceTime.getTime();
+  const recentWindowStart = now - 30 * 60 * 1000;
+
+  const sortedItems = [...forecastItems].sort(
+    (left, right) =>
+      new Date(left.forecast_timestamp).getTime() - new Date(right.forecast_timestamp).getTime(),
+  );
+
+  const upcomingItems = sortedItems.filter((item) => {
+    const timestamp = new Date(item.forecast_timestamp).getTime();
+    return !Number.isNaN(timestamp) && timestamp >= recentWindowStart;
+  });
+
+  if (upcomingItems.length >= count) {
+    return upcomingItems.slice(0, count);
+  }
+
+  return sortedItems.slice(0, count);
 }
 
 function LoadingState() {
