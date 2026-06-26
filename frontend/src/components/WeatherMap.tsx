@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   CircleMarker,
-  Circle,
   LayerGroup,
   LayersControl,
+  ImageOverlay,
   MapContainer,
   Marker,
   Popup,
@@ -28,11 +28,12 @@ import {
   getOpenWeatherQuotaState,
   recordOpenWeatherTileRequest,
 } from "../services/openweatherQuota";
-import type { GridStatus } from "../types/dashboard";
+import type { ForecastData, GridStatus } from "../types/dashboard";
 
 interface WeatherMapProps {
   gridStatus: GridStatus;
   rainfallMmHr: number;
+  forecastItems?: ForecastData[];
   className?: string;
 }
 
@@ -48,14 +49,32 @@ const DEFAULT_CENTER: [number, number] = [10.6918, -61.2225];
 const DEFAULT_ZOOM = 8;
 const OPENWEATHER_CLOUD_TILE_URL =
   "https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid={API_KEY}";
-const TOBAGO_CENTER: [number, number] = [11.1833, -60.7333];
-
 const generationCoordinates: Record<string, [number, number]> = {
   "Point Lisas": [10.388, -61.5],
   Cove: [10.534, -61.459],
   Penal: [10.166, -61.44],
   "La Brea": [10.236, -61.63],
 };
+
+type RainfallSeed = {
+  center: [number, number];
+  spread: number;
+  weight: number;
+};
+
+const RAINFALL_SEEDS: RainfallSeed[] = [
+  { center: [10.52, -61.53], spread: 2.0, weight: 1.08 },
+  { center: [10.40, -61.34], spread: 2.35, weight: 1.0 },
+  { center: [10.56, -61.10], spread: 2.05, weight: 1.04 },
+  { center: [10.22, -61.33], spread: 2.2, weight: 1.12 },
+  { center: [10.74, -61.36], spread: 1.9, weight: 0.98 },
+  { center: [11.17, -60.73], spread: 1.5, weight: 0.9 },
+];
+
+const RAINFALL_BOUNDS: [[number, number], [number, number]] = [
+  [9.85, -62.05],
+  [11.5, -60.45],
+];
 
 type PinStyle = "generation" | "substation" | "load";
 
@@ -140,29 +159,117 @@ function getRainfallCategory(rainfallMmHr: number): {
   return { label: "Severe Rain", color: "#ef4444", fillOpacity: 0.28 };
 }
 
-function getRainfallRadius(rainfallMmHr: number): number {
-  if (rainfallMmHr <= 0) {
-    return 18000;
+function buildRainfallField(rainfallMmHr: number, forecastItems: ForecastData[]) {
+  const forecastSlice = forecastItems.slice(0, 6);
+  const forecastRain =
+    forecastSlice.length > 0
+      ? forecastSlice.reduce((sum, item) => sum + item.rainfall_mm_hr, 0) / forecastSlice.length
+      : rainfallMmHr;
+  const forecastHumidity =
+    forecastSlice.length > 0
+      ? forecastSlice.reduce((sum, item) => sum + item.humidity_percent, 0) / forecastSlice.length
+      : 0;
+  const forecastProbability =
+    forecastSlice.length > 0
+      ? forecastSlice.reduce((sum, item) => sum + item.precipitation_probability_percent, 0) /
+        forecastSlice.length
+      : 0;
+
+  const baseSignal = Math.max(rainfallMmHr, forecastRain * 0.9, forecastProbability / 16);
+
+  if (baseSignal <= 0) {
+    return { label: "No Rain", url: null as string | null };
   }
 
-  if (rainfallMmHr <= 2) {
-    return 22000;
+  const canvas = document.createElement("canvas");
+  canvas.width = 768;
+  canvas.height = 768;
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    return { label: getRainfallCategory(baseSignal).label, url: null as string | null };
   }
 
-  if (rainfallMmHr <= 8) {
-    return 32000;
+  const image = context.createImageData(canvas.width, canvas.height);
+  const latitudeSpan = RAINFALL_BOUNDS[1][0] - RAINFALL_BOUNDS[0][0];
+  const longitudeSpan = RAINFALL_BOUNDS[1][1] - RAINFALL_BOUNDS[0][1];
+  const humidityBoost = Math.max(0.65, Math.min(1.2, forecastHumidity / 100));
+  const fieldStrength = Math.max(0.12, Math.min(1.0, baseSignal / 14));
+  const drift = 0.02 + fieldStrength * 0.04;
+  const motionPhase = ((Math.floor(Date.now() / 120000) % 8) - 4) / 4;
+
+  for (let y = 0; y < canvas.height; y += 1) {
+    for (let x = 0; x < canvas.width; x += 1) {
+      const lat =
+        RAINFALL_BOUNDS[1][0] - (y / (canvas.height - 1)) * latitudeSpan;
+      const lon =
+        RAINFALL_BOUNDS[0][1] + (x / (canvas.width - 1)) * longitudeSpan;
+
+      let intensity = 0;
+      for (const [index, seed] of RAINFALL_SEEDS.entries()) {
+        const driftX = motionPhase * drift * (index % 2 === 0 ? 1 : -1);
+        const driftY = motionPhase * drift * (index % 3 === 0 ? -1 : 1);
+        const deltaLat = (lat - (seed.center[0] + driftY)) / seed.spread;
+        const deltaLon = (lon - (seed.center[1] + driftX)) / (seed.spread * 1.2);
+        const gaussian = Math.exp(-(deltaLat * deltaLat + deltaLon * deltaLon));
+        intensity += gaussian * seed.weight;
+      }
+
+      intensity = Math.max(0, Math.min(1, intensity * fieldStrength * humidityBoost));
+
+      const color = interpolateRainfallColor(intensity);
+      const pixelIndex = (y * canvas.width + x) * 4;
+      image.data[pixelIndex] = color[0];
+      image.data[pixelIndex + 1] = color[1];
+      image.data[pixelIndex + 2] = color[2];
+      image.data[pixelIndex + 3] = color[3];
+    }
   }
 
-  if (rainfallMmHr <= 15) {
-    return 44000;
+  context.putImageData(image, 0, 0);
+
+  return {
+    label: getRainfallCategory(baseSignal).label,
+    url: canvas.toDataURL("image/png"),
+  };
+}
+
+function interpolateRainfallColor(intensity: number): [number, number, number, number] {
+  const stops = [
+    { stop: 0, color: [148, 163, 184], alpha: 0 },
+    { stop: 0.14, color: [125, 211, 252], alpha: 28 },
+    { stop: 0.42, color: [59, 130, 246], alpha: 62 },
+    { stop: 0.72, color: [245, 158, 11], alpha: 92 },
+    { stop: 1, color: [239, 68, 68], alpha: 124 },
+  ] as const;
+
+  const clamped = Math.max(0, Math.min(1, intensity));
+  let lower = stops[0];
+  let upper = stops[stops.length - 1];
+
+  for (let index = 0; index < stops.length - 1; index += 1) {
+    if (clamped >= stops[index].stop && clamped <= stops[index + 1].stop) {
+      lower = stops[index];
+      upper = stops[index + 1];
+      break;
+    }
   }
 
-  return 56000;
+  const span = upper.stop - lower.stop || 1;
+  const mix = (clamped - lower.stop) / span;
+
+  const red = Math.round(lower.color[0] + (upper.color[0] - lower.color[0]) * mix);
+  const green = Math.round(lower.color[1] + (upper.color[1] - lower.color[1]) * mix);
+  const blue = Math.round(lower.color[2] + (upper.color[2] - lower.color[2]) * mix);
+  const alpha = Math.round(lower.alpha + (upper.alpha - lower.alpha) * mix);
+
+  return [red, green, blue, alpha];
 }
 
 export default function WeatherMap({
   gridStatus,
   rainfallMmHr,
+  forecastItems = [],
   className = "",
 }: WeatherMapProps) {
   const [cloudEnabled, setCloudEnabled] = useState(false);
@@ -192,9 +299,10 @@ export default function WeatherMap({
     cloudEnabled && cloudOverlayAllowed
       ? OPENWEATHER_CLOUD_TILE_URL.replace("{API_KEY}", openWeatherApiKey)
       : null;
-  const rainfallCategory = getRainfallCategory(rainfallMmHr);
-  const rainfallRadius = getRainfallRadius(rainfallMmHr);
-  const rainfallCenters = rainfallMmHr > 0 ? [DEFAULT_CENTER, TOBAGO_CENTER] : [DEFAULT_CENTER];
+  const rainfallField = useMemo(() => buildRainfallField(rainfallMmHr, forecastItems), [
+    forecastItems,
+    rainfallMmHr,
+  ]);
 
   const quotaMessage = getOpenWeatherQuotaMessage(cloudQuotaState);
 
@@ -281,27 +389,13 @@ export default function WeatherMap({
 
             <LayersControl.Overlay checked name="Rainfall Intensity">
               <LayerGroup>
-                {rainfallCenters.map((center, index) => (
-                  <Circle
-                    key={`${center[0]}-${center[1]}-${index}`}
-                    center={center}
-                    radius={rainfallRadius}
-                    pathOptions={{
-                      color: rainfallCategory.color,
-                      weight: 2,
-                      opacity: 0.8,
-                      fillColor: rainfallCategory.color,
-                      fillOpacity: rainfallCategory.fillOpacity,
-                    }}
-                  >
-                    <Popup>
-                      <div className="text-sm">
-                        <p className="font-semibold">{rainfallCategory.label}</p>
-                        <p>{rainfallMmHr.toFixed(1)} mm/hr</p>
-                      </div>
-                    </Popup>
-                  </Circle>
-                ))}
+                {rainfallField.url ? (
+                  <ImageOverlay
+                    opacity={0.82}
+                    url={rainfallField.url}
+                    bounds={RAINFALL_BOUNDS}
+                  />
+                ) : null}
               </LayerGroup>
             </LayersControl.Overlay>
 
@@ -405,7 +499,7 @@ export default function WeatherMap({
             <div className="rounded-lg border border-slate-700/80 bg-slate-950/85 px-3 py-2 text-[11px] text-slate-200 shadow-lg shadow-black/25 backdrop-blur">
               <p className="font-semibold text-cyan-200">Legend</p>
               <p className="mt-1 text-[11px] text-slate-300">
-                Current rainfall: {rainfallMmHr.toFixed(1)} mm/hr - {rainfallCategory.label}
+                Live rainfall coverage: {rainfallField.label}
               </p>
               <div className="mt-2 grid gap-1">
                 <LegendItem color="#94a3b8" label="No Rain" />

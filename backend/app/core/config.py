@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,7 +10,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./wgdss.db"
     DB_ECHO: bool = False
 
-    OPEN_METEO_BASE_URL: str = "https://api.open-meteo.com/v1/ecmwf"
+    OPEN_METEO_BASE_URL: str = "https://api.open-meteo.com/v1/forecast"
     WEATHER_API_BASE_URL: str = "https://api.weatherapi.com/v1"
     WEATHER_API_KEY: str = ""
 
@@ -25,6 +26,17 @@ class Settings(BaseSettings):
         env_file=".env",
         case_sensitive=True,
     )
+
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def _coerce_debug(cls, value):
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "on"}:
+                return True
+            if normalized in {"false", "0", "no", "off", "release"}:
+                return False
+        return value
 
 
 settings = Settings()

@@ -20,6 +20,47 @@ type DashboardTab =
   | "operationalGuidance"
   | "analytics";
 
+const FALLBACK_WEATHER: DashboardSnapshot["weather"] = {
+  timestamp: null,
+  temperature_c: 0,
+  humidity_percent: 0,
+  rainfall_mm_hr: 0,
+  cloud_cover_percent: 0,
+  wind_speed_kmh: 0,
+  weather_condition: "Unavailable",
+  heat_index_c: 0,
+  rain_severity: "DRY",
+  wind_direction_deg: null,
+  pressure_hpa: null,
+  provider_name: "Unavailable",
+};
+
+const FALLBACK_GRID: DashboardSnapshot["grid"] = {
+  timestamp: null,
+  current_demand_mw: 0,
+  current_generation_mw: 0,
+  total_available_capacity_mw: 0,
+  reserve_margin_percent: 0,
+  grid_status: "Unavailable",
+  demand_period: "Unavailable",
+  source_provider: "Unavailable",
+  generation_units: [],
+};
+
+const FALLBACK_PROBABILITY: DashboardSnapshot["probability"] = {
+  probability_score: 0,
+  risk_level: "LOW",
+  forecast_demand_30m: 0,
+  forecast_demand_60m: 0,
+  factors: [],
+  reason: "No live probability data available.",
+};
+
+const FALLBACK_RECOMMENDATION: DashboardSnapshot["recommendation"] = {
+  ...FALLBACK_PROBABILITY,
+  recommendation: "NO ACTION REQUIRED",
+};
+
 export default function Dashboard() {
   const [state, setState] = useState<LoadState>("loading");
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
@@ -88,20 +129,26 @@ export default function Dashboard() {
     );
   }
 
-  const probability = snapshot.probability;
-  const recommendation = snapshot.recommendation;
+  const weather = snapshot.weather ?? FALLBACK_WEATHER;
+  const grid = snapshot.grid ?? FALLBACK_GRID;
+  const probability = snapshot.probability ?? FALLBACK_PROBABILITY;
+  const recommendation = snapshot.recommendation ?? FALLBACK_RECOMMENDATION;
+  const forecastItems = Array.isArray(snapshot.forecast?.items)
+    ? snapshot.forecast.items
+    : [];
 
   return (
     <Shell
-      lastUpdated={snapshot.weather.timestamp}
+      lastUpdated={weather.timestamp}
       systemStatus={systemStatus}
-      gridStatus={snapshot.grid.grid_status}
+      gridStatus={grid.grid_status}
     >
       <div className="grid h-full min-h-0 w-full min-w-0 gap-3 xl:grid-cols-[clamp(300px,28vw,390px)_minmax(0,1fr)] xl:items-stretch">
         <section className="min-h-0 min-w-0 xl:sticky xl:top-3 xl:self-start xl:h-[calc(100vh-6.25rem)]">
           <WeatherMap
-            gridStatus={snapshot.grid}
-            rainfallMmHr={snapshot.weather.rainfall_mm_hr}
+            gridStatus={grid}
+            rainfallMmHr={weather.rainfall_mm_hr}
+            forecastItems={forecastItems}
             className="h-full min-h-0"
           />
         </section>
@@ -114,11 +161,11 @@ export default function Dashboard() {
               {activeTab === "home" ? (
                 <WorkspacePage>
                   <HomeTab
-                    grid={snapshot.grid}
-                    weather={snapshot.weather}
+                    grid={grid}
+                    weather={weather}
                     probability={probability}
                     recommendation={recommendation}
-                    forecastItems={snapshot.forecast.items}
+                    forecastItems={forecastItems}
                   />
                 </WorkspacePage>
               ) : null}
@@ -126,34 +173,33 @@ export default function Dashboard() {
               {activeTab === "operations" ? (
                 <WorkspacePage>
                   <OperationsTab
-                    grid={snapshot.grid}
+                    grid={grid}
                     probability={probability}
                     recommendation={recommendation}
-                    lastUpdated={snapshot.weather.timestamp}
+                    lastUpdated={weather.timestamp}
                   />
                 </WorkspacePage>
               ) : null}
 
               {activeTab === "weather" ? (
                 <WorkspacePage>
-                  <WeatherTab weather={snapshot.weather} forecastItems={snapshot.forecast.items} />
+                  <WeatherTab weather={weather} forecastItems={forecastItems} />
                 </WorkspacePage>
               ) : null}
 
               {activeTab === "demandForecast" ? (
                 <WorkspacePage>
                   <DemandForecastTab
-                    grid={snapshot.grid}
+                    grid={grid}
                     probability={probability}
                     recommendation={recommendation}
-                    forecastItems={snapshot.forecast.items}
                   />
                 </WorkspacePage>
               ) : null}
 
               {activeTab === "riskGauge" ? (
                 <WorkspacePage>
-                  <RiskGaugeTab grid={snapshot.grid} probability={probability} />
+                  <RiskGaugeTab grid={grid} probability={probability} />
                 </WorkspacePage>
               ) : null}
 
@@ -161,7 +207,7 @@ export default function Dashboard() {
                 <WorkspacePage>
                   <OperationalGuidanceTab
                     recommendation={recommendation}
-                    forecastItems={snapshot.forecast.items}
+                    forecastItems={forecastItems}
                   />
                 </WorkspacePage>
               ) : null}
@@ -169,8 +215,8 @@ export default function Dashboard() {
               {activeTab === "analytics" ? (
                 <WorkspacePage>
                   <AnalyticsTab
-                    grid={snapshot.grid}
-                    weather={snapshot.weather}
+                    grid={grid}
+                    weather={weather}
                     probability={probability}
                     recommendation={recommendation}
                   />
