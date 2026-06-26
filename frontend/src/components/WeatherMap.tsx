@@ -3,7 +3,6 @@ import {
   CircleMarker,
   LayerGroup,
   LayersControl,
-  ImageOverlay,
   MapContainer,
   Marker,
   Popup,
@@ -22,12 +21,6 @@ import {
   substations,
   transmissionLines,
 } from "../data/infrastructureLayers";
-import {
-  canUseOpenWeatherCloudLayer,
-  getOpenWeatherQuotaMessage,
-  getOpenWeatherQuotaState,
-  recordOpenWeatherTileRequest,
-} from "../services/openweatherQuota";
 import type { ForecastData, GridStatus } from "../types/dashboard";
 
 interface WeatherMapProps {
@@ -47,8 +40,13 @@ type MapPoint = {
 
 const DEFAULT_CENTER: [number, number] = [10.6918, -61.2225];
 const DEFAULT_ZOOM = 8;
-const OPENWEATHER_CLOUD_TILE_URL =
-  "https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid={API_KEY}";
+const GIBS_GEO_COLOR_LAYER = "GOES-East_ABI_GeoColor";
+const GIBS_GEO_COLOR_TILESET = "GoogleMapsCompatible_Level7";
+const GIBS_PRECIP_LAYER = "IMERG_Precipitation_Rate_30min";
+const GIBS_PRECIP_TILESET = "GoogleMapsCompatible_Level6";
+const CLOUD_SYSTEMS_LAYER_NAME = "Cloud Systems";
+const CLOUDS_LATEST = "default";
+const RAIN_LATEST = "default";
 const generationCoordinates: Record<string, [number, number]> = {
   "Point Lisas": [10.388, -61.5],
   Cove: [10.534, -61.459],
@@ -75,6 +73,14 @@ const RAINFALL_BOUNDS: [[number, number], [number, number]] = [
   [9.85, -62.05],
   [11.5, -60.45],
 ];
+
+function buildGeoColorUrl(timeToken: string): string {
+  return `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${GIBS_GEO_COLOR_LAYER}/default/${timeToken}/${GIBS_GEO_COLOR_TILESET}/{z}/{y}/{x}.png`;
+}
+
+function buildPrecipitationUrl(timeToken: string): string {
+  return `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${GIBS_PRECIP_LAYER}/default/${timeToken}/${GIBS_PRECIP_TILESET}/{z}/{y}/{x}.png`;
+}
 
 type PinStyle = "generation" | "substation" | "load";
 
@@ -272,12 +278,8 @@ export default function WeatherMap({
   forecastItems = [],
   className = "",
 }: WeatherMapProps) {
-  const [cloudEnabled, setCloudEnabled] = useState(false);
-  const [cloudNotice, setCloudNotice] = useState<string | null>(null);
-  const [cloudQuotaState, setCloudQuotaState] = useState(() => getOpenWeatherQuotaState());
+  const [cloudSystemsEnabled, setCloudSystemsEnabled] = useState(true);
   const [hurricaneEnabled, setHurricaneEnabled] = useState(false);
-  const openWeatherApiKey = import.meta.env.VITE_OPENWEATHER_MAP_API_KEY?.trim() ?? "";
-  const hasOpenWeatherApiKey = openWeatherApiKey.length > 0;
 
   const points = useMemo<MapPoint[]>(
     () =>
@@ -294,32 +296,14 @@ export default function WeatherMap({
     [gridStatus.generation_units],
   );
 
-  const cloudOverlayAllowed = canUseOpenWeatherCloudLayer(hasOpenWeatherApiKey);
-  const cloudTileUrl =
-    cloudEnabled && cloudOverlayAllowed
-      ? OPENWEATHER_CLOUD_TILE_URL.replace("{API_KEY}", openWeatherApiKey)
-      : null;
-  const rainfallField = useMemo(() => buildRainfallField(rainfallMmHr, forecastItems), [
-    forecastItems,
-    rainfallMmHr,
-  ]);
-
-  const quotaMessage = getOpenWeatherQuotaMessage(cloudQuotaState);
-
-  function handleCloudTileLoad() {
-    const nextQuota = recordOpenWeatherTileRequest();
-    setCloudQuotaState(nextQuota);
-
-    if (nextQuota.limitReached) {
-      setCloudEnabled(false);
-      setCloudNotice("OpenWeather daily limit reached. Cloud overlay disabled.");
-    }
-  }
-
-  function handleCloudTileError() {
-    setCloudNotice("Cloud overlay unavailable: missing OpenWeatherMap API key");
-    setCloudEnabled(false);
-  }
+  const cloudSystemsTileUrl = useMemo(
+    () => buildGeoColorUrl(CLOUDS_LATEST),
+    [],
+  );
+  const rainfallTileUrl = useMemo(
+    () => buildPrecipitationUrl(RAIN_LATEST),
+    [],
+  );
 
   return (
     <div className={`flex h-full w-full min-w-0 flex-col rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2 shadow-[0_0_40px_rgba(8,145,178,0.08)] ${className}`}>
@@ -347,10 +331,7 @@ export default function WeatherMap({
         >
           <MapResizeSync />
           <MapOverlaySync
-            hasOpenWeatherApiKey={hasOpenWeatherApiKey}
-            quotaReached={quotaMessage !== null}
-            onCloudChange={setCloudEnabled}
-            onCloudNotice={setCloudNotice}
+            onCloudSystemsChange={setCloudSystemsEnabled}
             onHurricaneChange={setHurricaneEnabled}
           />
 
@@ -369,31 +350,31 @@ export default function WeatherMap({
               />
             </LayersControl.BaseLayer>
 
-            <LayersControl.Overlay checked={cloudEnabled} name="Cloud Cover">
+            <LayersControl.Overlay checked={cloudSystemsEnabled} name={CLOUD_SYSTEMS_LAYER_NAME}>
               <LayerGroup>
-                {cloudTileUrl ? (
+                {cloudSystemsTileUrl ? (
                   <TileLayer
-                    attribution="Cloud data &copy; OpenWeatherMap"
-                    opacity={0.85}
+                    attribution="Cloud imagery &copy; NASA GIBS / NOAA"
+                    opacity={0.78}
+                    maxNativeZoom={7}
                     zIndex={500}
                     pane="overlayPane"
-                    url={cloudTileUrl}
-                    eventHandlers={{
-                      tileload: handleCloudTileLoad,
-                      tileerror: handleCloudTileError,
-                    }}
+                    url={cloudSystemsTileUrl}
                   />
                 ) : null}
               </LayerGroup>
             </LayersControl.Overlay>
 
-            <LayersControl.Overlay checked name="Rainfall Intensity">
+            <LayersControl.Overlay checked name="Rainfall Coverage">
               <LayerGroup>
-                {rainfallField.url ? (
-                  <ImageOverlay
-                    opacity={0.82}
-                    url={rainfallField.url}
-                    bounds={RAINFALL_BOUNDS}
+                {rainfallTileUrl ? (
+                  <TileLayer
+                    attribution="Rain imagery &copy; NASA GIBS / NASA GPM"
+                    opacity={0.72}
+                    maxNativeZoom={6}
+                    zIndex={490}
+                    pane="overlayPane"
+                    url={rainfallTileUrl}
                   />
                 ) : null}
               </LayerGroup>
@@ -499,25 +480,13 @@ export default function WeatherMap({
             <div className="rounded-lg border border-slate-700/80 bg-slate-950/85 px-3 py-2 text-[11px] text-slate-200 shadow-lg shadow-black/25 backdrop-blur">
               <p className="font-semibold text-cyan-200">Legend</p>
               <p className="mt-1 text-[11px] text-slate-300">
-                Live rainfall coverage: {rainfallField.label}
+                Cloud systems and rainfall imagery are live NASA GIBS layers.
               </p>
               <div className="mt-2 grid gap-1">
-                <LegendItem color="#94a3b8" label="No Rain" />
-                <LegendItem color="#7dd3fc" label="Light Rain" />
-                <LegendItem color="#3b82f6" label="Moderate Rain" />
-                <LegendItem color="#f59e0b" label="Heavy Rain" />
-                <LegendItem color="#ef4444" label="Severe Rain" />
+                <LegendItem color="#93c5fd" label="Cloud Systems" />
+                <LegendItem color="#60a5fa" label="Rainfall Coverage" />
               </div>
             </div>
-
-            {cloudNotice || (!hasOpenWeatherApiKey || quotaMessage) ? (
-              <div className="rounded-lg border border-amber-500/30 bg-amber-500/15 px-3 py-2 text-[11px] font-semibold text-amber-50 shadow-lg shadow-black/25 backdrop-blur">
-                {cloudNotice ??
-                  (quotaMessage
-                    ? "OpenWeather daily limit reached. Cloud overlay disabled."
-                    : "Cloud overlay unavailable: missing OpenWeatherMap API key")}
-              </div>
-            ) : null}
 
             {hurricaneEnabled ? (
               <div className="rounded-lg border border-slate-700/80 bg-slate-950/85 px-3 py-2 text-[11px] text-slate-200 shadow-lg shadow-black/25 backdrop-blur">
@@ -541,35 +510,16 @@ function LegendItem({ color, label }: { color: string; label: string }) {
 }
 
 function MapOverlaySync({
-  hasOpenWeatherApiKey,
-  quotaReached,
-  onCloudChange,
-  onCloudNotice,
+  onCloudSystemsChange,
   onHurricaneChange,
 }: {
-  hasOpenWeatherApiKey: boolean;
-  quotaReached: boolean;
-  onCloudChange: (enabled: boolean) => void;
-  onCloudNotice: (message: string | null) => void;
+  onCloudSystemsChange: (enabled: boolean) => void;
   onHurricaneChange: (enabled: boolean) => void;
 }) {
   useMapEvents({
     overlayadd(event) {
-      if (event.name === "Cloud Cover") {
-        if (!hasOpenWeatherApiKey) {
-          onCloudNotice("Cloud overlay unavailable: missing OpenWeatherMap API key");
-          onCloudChange(false);
-          return;
-        }
-
-        if (quotaReached) {
-          onCloudNotice("OpenWeather daily limit reached. Cloud overlay disabled.");
-          onCloudChange(false);
-          return;
-        }
-
-        onCloudNotice(null);
-        onCloudChange(true);
+      if (event.name === CLOUD_SYSTEMS_LAYER_NAME) {
+        onCloudSystemsChange(true);
       }
 
       if (event.name === "Hurricane / Tropical Storm Tracking") {
@@ -577,8 +527,8 @@ function MapOverlaySync({
       }
     },
     overlayremove(event) {
-      if (event.name === "Cloud Cover") {
-        onCloudChange(false);
+      if (event.name === CLOUD_SYSTEMS_LAYER_NAME) {
+        onCloudSystemsChange(false);
       }
 
       if (event.name === "Hurricane / Tropical Storm Tracking") {

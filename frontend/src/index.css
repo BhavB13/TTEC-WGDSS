@@ -55,3 +55,16 @@ body {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
+
+/* Smooth raster overlays so Leaflet tile edges don't show as square seams. */
+.leaflet-container .leaflet-tile {
+  outline: 1px solid transparent;
+  image-rendering: auto;
+  backface-visibility: hidden;
+  transform: translateZ(0);
+}
+
+.leaflet-container .leaflet-overlay-pane img {
+  image-rendering: auto;
+  backface-visibility: hidden;
+}
