@@ -47,12 +47,20 @@ const GIBS_PRECIP_TILESET = "GoogleMapsCompatible_Level6";
 const CLOUD_SYSTEMS_LAYER_NAME = "Cloud Systems";
 const CLOUDS_LATEST = "default";
 const RAIN_LATEST = "default";
-const TILE_LAYER_OPTIONS = {
-  keepBuffer: 4,
-  updateInterval: 200,
+const BASE_TILE_LAYER_OPTIONS = {
+  keepBuffer: 6,
+  updateInterval: 100,
+  updateWhenIdle: false,
+  updateWhenZooming: true,
+  detectRetina: false,
+} as const;
+const WEATHER_TILE_LAYER_OPTIONS = {
+  keepBuffer: 10,
+  updateInterval: 150,
   updateWhenIdle: true,
   updateWhenZooming: false,
   detectRetina: false,
+  noWrap: true,
 } as const;
 const generationCoordinates: Record<string, [number, number]> = {
   "Point Lisas": [10.388, -61.5],
@@ -333,10 +341,15 @@ export default function WeatherMap({
         <MapContainer
           center={DEFAULT_CENTER}
           zoom={DEFAULT_ZOOM}
+          minZoom={6}
+          maxZoom={11}
           scrollWheelZoom={false}
+          fadeAnimation={false}
           className="h-full w-full"
         >
           <MapResizeSync />
+          <MapViewSync />
+          <MapTileStabilizer />
           <MapOverlaySync
             onCloudSystemsChange={setCloudSystemsEnabled}
             onHurricaneChange={setHurricaneEnabled}
@@ -347,7 +360,7 @@ export default function WeatherMap({
               <TileLayer
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                {...TILE_LAYER_OPTIONS}
+                {...BASE_TILE_LAYER_OPTIONS}
               />
             </LayersControl.BaseLayer>
 
@@ -355,7 +368,7 @@ export default function WeatherMap({
               <TileLayer
                 attribution="Tiles &copy; Esri"
                 url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                {...TILE_LAYER_OPTIONS}
+                {...BASE_TILE_LAYER_OPTIONS}
               />
             </LayersControl.BaseLayer>
 
@@ -366,10 +379,11 @@ export default function WeatherMap({
                     attribution="Cloud imagery &copy; NASA GIBS / NOAA"
                     opacity={0.78}
                     maxNativeZoom={7}
+                    maxZoom={11}
                     zIndex={500}
                     pane="overlayPane"
                     url={cloudSystemsTileUrl}
-                    {...TILE_LAYER_OPTIONS}
+                    {...WEATHER_TILE_LAYER_OPTIONS}
                   />
                 ) : null}
               </LayerGroup>
@@ -382,10 +396,11 @@ export default function WeatherMap({
                     attribution="Rain imagery &copy; NASA GIBS / NASA GPM"
                     opacity={0.72}
                     maxNativeZoom={6}
+                    maxZoom={11}
                     zIndex={490}
                     pane="overlayPane"
                     url={rainfallTileUrl}
-                    {...TILE_LAYER_OPTIONS}
+                    {...WEATHER_TILE_LAYER_OPTIONS}
                   />
                 ) : null}
               </LayerGroup>
@@ -550,6 +565,31 @@ function MapResizeSync() {
       observer?.disconnect();
     };
   }, [map]);
+
+  return null;
+}
+
+function MapViewSync() {
+  const map = useMap();
+
+  useEffect(() => {
+    map.setView(DEFAULT_CENTER, DEFAULT_ZOOM, { animate: false });
+  }, [map]);
+
+  return null;
+}
+
+function MapTileStabilizer() {
+  const map = useMap();
+
+  useMapEvents({
+    moveend() {
+      window.setTimeout(() => map.invalidateSize(), 75);
+    },
+    zoomend() {
+      window.setTimeout(() => map.invalidateSize(), 75);
+    },
+  });
 
   return null;
 }
