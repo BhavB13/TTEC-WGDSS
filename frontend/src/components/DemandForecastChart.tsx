@@ -10,13 +10,14 @@ import {
 } from "chart.js";
 import { Line } from "react-chartjs-2";
 
-import type { GridStatus, ProbabilityData } from "../types/dashboard";
+import type { CalibrationSnapshot, GridStatus, ProbabilityData } from "../types/dashboard";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend);
 
 interface DemandForecastChartProps {
   gridStatus: GridStatus;
   probability: ProbabilityData;
+  calibration?: CalibrationSnapshot | null;
   className?: string;
   showHeader?: boolean;
   showSummary?: boolean;
@@ -25,12 +26,51 @@ interface DemandForecastChartProps {
 export default function DemandForecastChart({
   gridStatus,
   probability,
+  calibration = null,
   className = "",
   showHeader = true,
   showSummary = true,
 }: DemandForecastChartProps) {
-  const data = useMemo(
-    () => ({
+  const activeScenario = useMemo(() => {
+    if (!calibration?.scenarios?.length) {
+      return null;
+    }
+    return (
+      calibration.scenarios.find((scenario) => scenario.scenario_key === calibration.selected_scenario_key) ??
+      calibration.scenarios[0]
+    );
+  }, [calibration]);
+
+  const chartConfig = useMemo(() => {
+    if (activeScenario?.demand_curve?.length) {
+      return {
+        labels: activeScenario.demand_curve.map((point) => `H${point.hour}`),
+        datasets: [
+          {
+            label: `${activeScenario.scenario_label} Demand (MW)`,
+            data: activeScenario.demand_curve.map((point) => point.demand_mw ?? null),
+            borderColor: "rgba(34, 211, 238, 1)",
+            backgroundColor: "rgba(34, 211, 238, 0.18)",
+            borderWidth: 2,
+            tension: 0.35,
+            pointRadius: 2.5,
+            yAxisID: "demand",
+          },
+          {
+            label: "SCADA Temperature (°C)",
+            data: activeScenario.scada_temperature_trace.map((point) => point.temperature_c ?? null),
+            borderColor: "rgba(244, 114, 182, 1)",
+            backgroundColor: "rgba(244, 114, 182, 0.12)",
+            borderWidth: 2,
+            tension: 0.35,
+            pointRadius: 2,
+            yAxisID: "temperature",
+          },
+        ],
+      };
+    }
+
+    return {
       labels: ["Current", "30m Forecast", "60m Forecast"],
       datasets: [
         {
@@ -40,14 +80,22 @@ export default function DemandForecastChart({
             probability.forecast_demand_30m,
             probability.forecast_demand_60m,
           ],
-          backgroundColor: ["rgba(34, 211, 238, 0.55)", "rgba(59, 130, 246, 0.55)", "rgba(244, 114, 182, 0.55)"],
-          borderColor: ["rgba(34, 211, 238, 1)", "rgba(59, 130, 246, 1)", "rgba(244, 114, 182, 1)"],
+          backgroundColor: [
+            "rgba(34, 211, 238, 0.55)",
+            "rgba(59, 130, 246, 0.55)",
+            "rgba(244, 114, 182, 0.55)",
+          ],
+          borderColor: [
+            "rgba(34, 211, 238, 1)",
+            "rgba(59, 130, 246, 1)",
+            "rgba(244, 114, 182, 1)",
+          ],
           borderWidth: 1,
+          yAxisID: "demand",
         },
       ],
-    }),
-    [gridStatus.current_demand_mw, probability.forecast_demand_30m, probability.forecast_demand_60m],
-  );
+    };
+  }, [activeScenario, gridStatus.current_demand_mw, probability.forecast_demand_30m, probability.forecast_demand_60m]);
 
   const options = useMemo(
     () => ({
@@ -55,32 +103,75 @@ export default function DemandForecastChart({
       maintainAspectRatio: false,
       plugins: {
         legend: {
-          display: false,
-        },
-      },
-      scales: {
-        x: {
-          ticks: {
+          display: Boolean(activeScenario),
+          labels: {
             color: "#cbd5e1",
-          },
-          grid: {
-            color: "rgba(148, 163, 184, 0.14)",
-          },
-        },
-        y: {
-          min: 700,
-          max: 1500,
-          ticks: {
-            color: "#cbd5e1",
-            stepSize: 100,
-          },
-          grid: {
-            color: "rgba(148, 163, 184, 0.14)",
+            usePointStyle: true,
+            pointStyle: "line",
           },
         },
       },
+      scales: activeScenario
+        ? {
+            x: {
+              ticks: {
+                color: "#cbd5e1",
+              },
+              grid: {
+                color: "rgba(148, 163, 184, 0.14)",
+              },
+            },
+            demand: {
+              type: "linear" as const,
+              position: "left" as const,
+              min: 700,
+              max: 1500,
+              ticks: {
+                color: "#cbd5e1",
+                stepSize: 100,
+              },
+              grid: {
+                color: "rgba(148, 163, 184, 0.14)",
+              },
+            },
+            temperature: {
+              type: "linear" as const,
+              position: "right" as const,
+              min: 20,
+              max: 36,
+              ticks: {
+                color: "#f9a8d4",
+              },
+              grid: {
+                drawOnChartArea: false,
+              },
+            },
+          }
+        : {
+            x: {
+              ticks: {
+                color: "#cbd5e1",
+              },
+              grid: {
+                color: "rgba(148, 163, 184, 0.14)",
+              },
+            },
+            demand: {
+              type: "linear" as const,
+              position: "left" as const,
+              min: 700,
+              max: 1500,
+              ticks: {
+                color: "#cbd5e1",
+                stepSize: 100,
+              },
+              grid: {
+                color: "rgba(148, 163, 184, 0.14)",
+              },
+            },
+          },
     }),
-    [],
+    [activeScenario],
   );
 
   return (
@@ -92,18 +183,21 @@ export default function DemandForecastChart({
               Demand Forecast
             </p>
             <h2 className="mt-1 text-[0.98rem] font-semibold text-white">
-              Current and Near-Term Load
+              {activeScenario ? `${activeScenario.scenario_label} Profile` : "Current and Near-Term Load"}
             </h2>
+            {calibration?.selection_reason ? (
+              <p className="mt-1 text-[11px] text-slate-400">{calibration.selection_reason}</p>
+            ) : null}
           </div>
           <span className="rounded-full border border-slate-700 px-2.5 py-1 text-[11px] font-medium text-slate-300">
-            Chart.js
+            {activeScenario ? "SCADA + Scenario" : "Chart.js"}
           </span>
         </div>
       ) : null}
 
       <div className="min-h-[clamp(9rem,16vh,11rem)] flex-1 w-full min-w-0">
         <Line
-          data={data}
+          data={chartConfig}
           options={{
             ...options,
             elements: {

@@ -17,13 +17,27 @@ const API_BASE_URL = (
 const DASHBOARD_SNAPSHOT_PATH = "/api/dashboard/snapshot";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: {
-      Accept: "application/json",
-      ...(init?.headers ?? {}),
-    },
-    ...init,
-  });
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 20_000);
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers: {
+        Accept: "application/json",
+        ...(init?.headers ?? {}),
+      },
+      signal: init?.signal ?? controller.signal,
+    });
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === "AbortError") {
+      throw new Error("Dashboard request timed out after 20 seconds");
+    }
+    throw cause;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     const message = await readErrorMessage(response);

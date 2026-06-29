@@ -41,7 +41,7 @@ class MockGridProvider(GridProvider):
 
         demand_period, current_demand_mw = self._demand_period(self._current_local_hour())
         reserve_margin_percent = round(
-            ((total_available_capacity_mw - current_generation_mw) / current_generation_mw)
+            ((total_available_capacity_mw - current_demand_mw) / max(current_demand_mw, 1.0))
             * 100.0,
             2,
         )

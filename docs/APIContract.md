@@ -1,53 +1,75 @@
-API Contract
-Health Endpoints
-GET /health
-Response:
+# API Contract
+
+All Version 1 service routes use the `/api/v1` prefix. The dashboard aggregation
+route is also exposed at `/api/dashboard/snapshot` for frontend compatibility.
+
+## Dashboard snapshot
+
+`GET /api/dashboard/snapshot`
+
+Query parameters:
+
+- `latitude` and `longitude`: weather location, defaulting to Trinidad.
+- `days`: forecast horizon from 1 to 14 days.
+- `force_refresh`: bypasses the five-minute in-memory weather cache.
+
+The response contains:
+
+```json
 {
-  "status": "healthy"
+  "weather": {},
+  "grid": {},
+  "forecast": { "items": [] },
+  "probability": {},
+  "recommendation": {},
+  "calibration": {
+    "selected_scenario_key": "rainy",
+    "selection_confidence": 0.64,
+    "scenario_scores": {
+      "hot": 0.21,
+      "typical": 0.37,
+      "rainy": 0.51
+    },
+    "scenarios": []
+  },
+  "data_quality": {
+    "overall_status": "GOOD",
+    "weather_status": "LIVE",
+    "grid_status": "SIMULATED",
+    "calibration_status": "CALIBRATED",
+    "weather_source": "Open-Meteo",
+    "grid_source": "MockGridProvider",
+    "age_seconds": 900,
+    "is_stale": false,
+    "fallback_used": false,
+    "notes": []
+  }
 }
+```
 
+Weather status values are `LIVE`, `CALIBRATED`, `FALLBACK`, and `STALE`.
+Grid status identifies the Version 1 mock source as `SIMULATED`.
 
-Recommendation Endpoints
-GET /recommendations
-Response:
-{
-  "probability_score": 0.90,
-  "recommendation": "START",
-  "reason": "Reserve margin below operating threshold."
-}
+Each hourly forecast item includes `source_count`, `source_names`,
+`temperature_spread_c`, and `cloud_cover_spread_percent`. The normal operating
+path reconciles Open-Meteo Best Match, MET Norway Locationforecast, and NOAA GFS
+by timestamp. `confidence_score` is reduced when the sources disagree or fewer
+than two sources are available. Imported SCADA temperature remains calibration
+metadata; it does not replace a live weather observation.
 
+## Health
 
-Future Weather Endpoints
-GET /weather/current
-Response:
-{
-  "temperature_c": 30.5,
-  "humidity_percent": 75,
-  "wind_speed_kph": 22,
-  "wind_direction_deg": 120,
-  "pressure_hpa": 1012,
-  "precipitation_mm": 0,
-  "provider_name": "Open-Meteo"
-}
+`GET /api/v1/health`
 
-GET /weather/forecast
-Response:
-{
-  "forecast_timestamp": "2026-06-13T12:00:00Z",
-  "temperature_c": 31,
-  "wind_speed_kph": 25,
-  "precipitation_probability_percent": 45,
-  "confidence_score": 0.88
-}
+Returns database connectivity, primary, consensus, and fallback weather-provider
+configuration, Open-Meteo daily request usage, and calibration row/sample
+availability.
 
+## Supporting routes
 
-Future Grid Endpoints
-GET /grid/status
-Response:
-{
-  "total_available_capacity_mw": 1200,
-  "total_generation_mw": 950,
-  "reserve_margin_percent": 26.3,
-  "grid_status": "NORMAL"
-}
+- `GET /api/v1/weather/current`
+- `GET /api/v1/weather/forecast`
+- `GET /api/v1/grid/status`
+- `GET /api/v1/recommendations`
 
+The OpenAPI schema and interactive documentation are available at `/docs`.

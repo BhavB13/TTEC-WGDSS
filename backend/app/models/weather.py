@@ -43,14 +43,14 @@ class Weather(Base):
         nullable=False
     )
 
-    wind_direction_deg: Mapped[float] = mapped_column(
+    wind_direction_deg: Mapped[float | None] = mapped_column(
         Float,
-        nullable=False
+        nullable=True
     )
 
-    pressure_hpa: Mapped[float] = mapped_column(
+    pressure_hpa: Mapped[float | None] = mapped_column(
         Float,
-        nullable=False
+        nullable=True
     )
 
     precipitation_mm: Mapped[float | None] = mapped_column(

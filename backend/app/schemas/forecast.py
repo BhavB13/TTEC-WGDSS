@@ -1,5 +1,5 @@
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ForecastResponse(BaseModel):
@@ -15,3 +15,7 @@ class ForecastResponse(BaseModel):
     confidence_score: float
     rain_severity: str
     provider_name: str
+    source_count: int = 1
+    source_names: list[str] = Field(default_factory=list)
+    temperature_spread_c: float = 0.0
+    cloud_cover_spread_percent: float = 0.0

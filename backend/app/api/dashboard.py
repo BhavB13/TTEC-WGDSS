@@ -13,8 +13,8 @@ dashboard_service = DashboardService()
     response_model=DashboardSnapshotResponse,
 )
 async def get_dashboard_snapshot(
-    latitude: float = Query(default=settings.DEFAULT_LATITUDE),
-    longitude: float = Query(default=settings.DEFAULT_LONGITUDE),
+    latitude: float = Query(default=settings.DEFAULT_LATITUDE, ge=-90, le=90),
+    longitude: float = Query(default=settings.DEFAULT_LONGITUDE, ge=-180, le=180),
     days: int = Query(default=7, ge=1, le=14),
     force_refresh: bool = Query(default=False),
 ) -> DashboardSnapshotResponse:

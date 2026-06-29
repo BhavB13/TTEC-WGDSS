@@ -12,11 +12,26 @@ class RecommendationEngine:
         self,
         weather: dict[str, Any],
         grid_status: dict[str, Any],
+        calibration: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         temperature_c = float(weather.get("temperature_c", 0.0))
         humidity_percent = float(weather.get("humidity_percent", 0.0))
         rainfall_mm_hr = float(weather.get("rainfall_mm_hr", 0.0))
         cloud_cover_percent = float(weather.get("cloud_cover_percent", 0.0))
+
+        selected_scenario_label = None
+        selected_demand_mw = None
+        selected_next_demand_mw = None
+        selected_spin_mw = None
+        selected_temperature_c = None
+        if calibration:
+            selected_scenario_label = calibration.get("selected_scenario_label")
+            selected_demand_mw = self._safe_float(calibration.get("selected_demand_mw"))
+            selected_next_demand_mw = self._safe_float(calibration.get("selected_next_demand_mw"))
+            selected_spin_mw = self._safe_float(calibration.get("selected_spin_mw"))
+            selected_temperature_c = self._safe_float(calibration.get("selected_temperature_c"))
+            if selected_temperature_c is not None:
+                temperature_c = selected_temperature_c
 
         current_demand_mw = float(grid_status.get("current_demand_mw", 0.0))
         current_generation_mw = float(grid_status.get("current_generation_mw", 0.0))
@@ -64,6 +79,29 @@ class RecommendationEngine:
             score += 0.20
             factors.append("Demand is projected to exceed available capacity")
 
+        if selected_demand_mw is not None:
+            scenario_gap = max(0.0, selected_demand_mw - current_generation_mw)
+            if scenario_gap > 0:
+                scenario_pressure = min(
+                    (scenario_gap / max(current_generation_mw, 1.0)) * 0.22,
+                    0.22,
+                )
+                score += scenario_pressure
+                factors.append(
+                    f"Imported {selected_scenario_label or 'scenario'} profile indicates higher load"
+                )
+
+        if selected_spin_mw is not None and selected_spin_mw > 0:
+            spin_pressure = min(
+                max(0.0, 0.15 - selected_spin_mw / max(selected_demand_mw or current_demand_mw, 1.0))
+                / 0.15
+                * 0.12,
+                0.12,
+            )
+            if spin_pressure > 0:
+                score += spin_pressure
+                factors.append("Imported spinning reserve is below the 15% planning threshold")
+
         probability_score = max(0.0, min(1.0, round(score, 2)))
         risk_level = self._risk_level(probability_score, reserve_margin_percent)
         forecast_demand_30m = round(
@@ -74,6 +112,8 @@ class RecommendationEngine:
                 rainfall_mm_hr,
                 cloud_cover_percent,
                 horizon_minutes=30,
+                scenario_base_demand=selected_demand_mw,
+                scenario_followup_demand=selected_next_demand_mw,
             ),
             2,
         )
@@ -85,6 +125,8 @@ class RecommendationEngine:
                 rainfall_mm_hr,
                 cloud_cover_percent,
                 horizon_minutes=60,
+                scenario_base_demand=selected_demand_mw,
+                scenario_followup_demand=selected_next_demand_mw,
             ),
             2,
         )
@@ -125,6 +167,8 @@ class RecommendationEngine:
         rainfall_mm_hr: float,
         cloud_cover_percent: float,
         horizon_minutes: int,
+        scenario_base_demand: float | None = None,
+        scenario_followup_demand: float | None = None,
     ) -> float:
         weather_pressure = 0.0
         if temperature_c > 29:
@@ -138,5 +182,19 @@ class RecommendationEngine:
 
         horizon_modifier = 1.0 if horizon_minutes <= 30 else 1.25
         projected = current_demand_mw + weather_pressure * horizon_modifier
+        if scenario_base_demand is not None:
+            scenario_anchor = scenario_base_demand
+            if horizon_minutes > 30 and scenario_followup_demand is not None:
+                scenario_anchor = (scenario_base_demand + scenario_followup_demand) / 2.0
+            projected = (projected + scenario_anchor) / 2.0
         floor = current_demand_mw * 0.92
         return max(floor, projected)
+
+    @staticmethod
+    def _safe_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None

@@ -17,6 +17,19 @@ body {
   overflow: hidden;
 }
 
+@media (max-width: 1279px) {
+  body {
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .workspace-page {
+    height: auto;
+    min-height: 40rem;
+    overflow: visible;
+  }
+}
+
 * {
   box-sizing: border-box;
 }

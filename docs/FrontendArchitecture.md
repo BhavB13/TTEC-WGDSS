@@ -6,7 +6,7 @@ TypeScript
 Vite
 Leaflet
 OpenStreetMap
-Esri World Imagery
+NASA GIBS Blue Marble
 
 
 Dashboard Layout
@@ -69,14 +69,12 @@ Leaflet
 Base Layers:
 
 OpenStreetMap
-Esri World Imagery
+NASA GIBS Blue Marble
 
 Weather Layers:
 
-Temperature
-Wind
-Precipitation
-Clouds
+NASA GPM IMERG precipitation
+NASA GOES-East cloud systems
 
 Future Layers:
 
@@ -89,12 +87,10 @@ Load Centers
 API Integration
 Backend Endpoints:
 
-GET /health
-GET /recommendations
-
-Future:
-
-GET /weather/current
-GET /weather/forecast
-GET /grid/status
+GET /api/dashboard/snapshot
+GET /api/v1/health
+GET /api/v1/recommendations
+GET /api/v1/weather/current
+GET /api/v1/weather/forecast
+GET /api/v1/grid/status
 

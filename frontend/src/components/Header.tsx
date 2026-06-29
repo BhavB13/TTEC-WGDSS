@@ -1,7 +1,10 @@
+import type { DataQuality } from "../types/dashboard";
+
 interface HeaderProps {
   lastUpdated?: string | null;
   systemStatus?: string;
   gridStatus?: string;
+  dataQuality?: DataQuality | null;
 }
 
 function formatTimestamp(value?: string | null): string {
@@ -24,25 +27,34 @@ export default function Header({
   lastUpdated,
   systemStatus = "Operational",
   gridStatus,
+  dataQuality,
 }: HeaderProps) {
   return (
-    <header className="border-b border-cyan-500/10 bg-slate-950/95 px-4 py-3 text-slate-100 shadow-[0_0_32px_rgba(8,145,178,0.08)] backdrop-blur">
-      <div className="mx-auto grid w-full max-w-[1680px] gap-3 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)] xl:items-center">
+    <header className="border-b border-cyan-500/10 bg-slate-950/95 px-4 py-2 text-slate-100 shadow-[0_0_32px_rgba(8,145,178,0.08)] backdrop-blur">
+      <div className="mx-auto grid w-full max-w-[1680px] gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(500px,0.9fr)] xl:items-center">
         <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-cyan-300">
+          <p className="hidden text-[11px] font-semibold uppercase tracking-[0.3em] text-cyan-300 sm:block">
             WGDSS Control Room
           </p>
-          <h1 className="mt-1.5 text-2xl font-semibold text-white sm:text-[1.85rem]">
-            T&amp;TEC Weather Grid Decision Support System
+          <h1 className="mt-1 max-w-full whitespace-normal text-xl font-semibold leading-tight text-white sm:text-[1.45rem]">
+            <span className="block sm:inline">T&amp;TEC Weather Grid</span>{" "}
+            <span className="block sm:inline">Decision Support System</span>
           </h1>
         </div>
 
-        <div className="flex min-w-0 flex-wrap items-center gap-2 xl:justify-end">
+        <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3">
           <HeaderMetric
             label="Grid Status"
             value={gridStatus ?? systemStatus}
             tone="emerald"
           />
+          {dataQuality ? (
+            <HeaderMetric
+              label="Data Quality"
+              value={`${dataQuality.weather_status} / ${dataQuality.grid_status}`}
+              tone={dataQuality.overall_status === "GOOD" ? "cyan" : "amber"}
+            />
+          ) : null}
           <HeaderMetric
             label="Last Updated"
             value={formatTimestamp(lastUpdated)}
@@ -71,11 +83,11 @@ function HeaderMetric({
   };
 
   return (
-    <div className={`min-w-0 rounded-2xl border px-4 py-3 text-center shadow-[0_0_24px_rgba(8,145,178,0.06)] ${toneClasses[tone]}`}>
+    <div className={`flex min-h-[3.75rem] min-w-0 flex-col items-center justify-center rounded-xl border px-3 py-2 text-center shadow-[0_0_24px_rgba(8,145,178,0.06)] ${toneClasses[tone]}`}>
       <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-300">
         {label}
       </p>
-      <p className="mt-2 break-words text-[0.9rem] font-semibold leading-tight text-white sm:text-[0.95rem]">
+      <p className="mt-1 break-words text-[0.82rem] font-semibold leading-tight text-white sm:text-[0.88rem]">
         {value}
       </p>
     </div>

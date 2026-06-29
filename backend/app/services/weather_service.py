@@ -7,12 +7,17 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.core.config import settings
+from app.providers.met_norway_provider import MetNorwayProvider
 from app.providers.open_meteo_provider import OpenMeteoProvider
 from app.providers.weather_provider import WeatherProvider
+from app.providers.weatherapi_provider import WeatherAPIProvider
+from app.services.provider_health import record_provider_failure, record_provider_success
 
 logger = logging.getLogger(__name__)
+TRINIDAD_TZ = ZoneInfo("America/Port_of_Spain")
 
 
 @dataclass
@@ -26,15 +31,35 @@ class WeatherService:
         self,
         provider: WeatherProvider | None = None,
         fallback_provider: WeatherProvider | None = None,
+        consensus_providers: list[WeatherProvider] | None = None,
         cache_ttl_seconds: int | None = None,
     ) -> None:
+        use_default_ensemble = provider is None and fallback_provider is None
         self.primary_provider = provider or OpenMeteoProvider()
-        self.fallback_provider = fallback_provider or OpenMeteoProvider(
-            base_url="https://api.open-meteo.com/v1/forecast"
+        self.fallback_provider = fallback_provider or self._default_fallback_provider()
+        self.consensus_providers = (
+            consensus_providers
+            if consensus_providers is not None
+            else (
+                [MetNorwayProvider(), OpenMeteoProvider(model="gfs_global")]
+                if use_default_ensemble
+                else []
+            )
         )
         self.cache_ttl_seconds = cache_ttl_seconds or settings.WEATHER_CACHE_TTL_SECONDS
         self._cache: dict[str, _CacheEntry] = {}
         self._cache_lock = asyncio.Lock()
+        self.last_current_fallback_used = False
+        self.last_forecast_fallback_used = False
+        self.last_forecast_consensus_degraded = False
+        self.last_forecast_source_count = 0
+        self.last_forecast_provider_names: list[str] = []
+
+    @staticmethod
+    def _default_fallback_provider() -> WeatherProvider:
+        if settings.ENABLE_WEATHERAPI_FALLBACK and settings.WEATHER_API_KEY:
+            return WeatherAPIProvider()
+        return OpenMeteoProvider(model="gfs_global")
 
     async def get_current_weather(
         self,
@@ -66,8 +91,28 @@ class WeatherService:
             if cached is not None:
                 return cached
 
-        raw = await self._fetch_forecast_with_failover(latitude, longitude, days)
-        normalized = [self._normalize_forecast_item(item) for item in raw]
+        if self.consensus_providers:
+            source_payloads = await self._fetch_forecast_consensus(
+                latitude,
+                longitude,
+                days,
+            )
+            normalized_sources = [
+                [self._normalize_forecast_item(item) for item in payload]
+                for payload in source_payloads
+            ]
+            normalized = self._reconcile_forecasts(normalized_sources)
+        else:
+            raw = await self._fetch_forecast_with_failover(latitude, longitude, days)
+            normalized = [self._normalize_forecast_item(item) for item in raw]
+            self.last_forecast_source_count = 1
+            self.last_forecast_provider_names = sorted(
+                {
+                    str(item.get("provider_name", "Unknown"))
+                    for item in normalized
+                }
+            )
+            self.last_forecast_consensus_degraded = False
         normalized.sort(key=self._forecast_sort_key)
         await self._set_cache(cache_key, normalized)
         return copy.deepcopy(normalized)
@@ -92,12 +137,19 @@ class WeatherService:
         providers = [self.primary_provider, self.fallback_provider]
         last_error: Exception | None = None
 
-        for provider in providers:
+        for index, provider in enumerate(providers):
+            role = "weather_primary" if index == 0 else "weather_fallback"
             try:
-                payload = await provider.get_current_weather(latitude, longitude)
+                payload = await asyncio.wait_for(
+                    provider.get_current_weather(latitude, longitude),
+                    timeout=settings.WEATHER_CONSENSUS_TIMEOUT_SECONDS,
+                )
+                self.last_current_fallback_used = index > 0
+                record_provider_success(role, provider.__class__.__name__)
                 logger.info("Weather fetched from %s", provider.__class__.__name__)
                 return payload
             except Exception as exc:  # pragma: no cover - defensive logging
+                record_provider_failure(role, provider.__class__.__name__, exc)
                 last_error = exc
                 logger.warning(
                     "Weather provider %s failed: %s",
@@ -116,12 +168,19 @@ class WeatherService:
         providers = [self.primary_provider, self.fallback_provider]
         last_error: Exception | None = None
 
-        for provider in providers:
+        for index, provider in enumerate(providers):
+            role = "weather_primary" if index == 0 else "weather_fallback"
             try:
-                payload = await provider.get_forecast(latitude, longitude, days)
+                payload = await asyncio.wait_for(
+                    provider.get_forecast(latitude, longitude, days),
+                    timeout=settings.WEATHER_CONSENSUS_TIMEOUT_SECONDS,
+                )
+                self.last_forecast_fallback_used = index > 0
+                record_provider_success(role, provider.__class__.__name__)
                 logger.info("Forecast fetched from %s", provider.__class__.__name__)
                 return payload
             except Exception as exc:  # pragma: no cover - defensive logging
+                record_provider_failure(role, provider.__class__.__name__, exc)
                 last_error = exc
                 logger.warning(
                     "Forecast provider %s failed: %s",
@@ -130,6 +189,262 @@ class WeatherService:
                 )
 
         raise RuntimeError("All weather providers failed") from last_error
+
+    async def _fetch_forecast_consensus(
+        self,
+        latitude: float,
+        longitude: float,
+        days: int,
+    ) -> list[list[dict[str, Any]]]:
+        providers = [self.primary_provider, *self.consensus_providers]
+
+        async def fetch(
+            index: int,
+            provider: WeatherProvider,
+        ) -> tuple[int, WeatherProvider, list[dict[str, Any]] | Exception]:
+            try:
+                payload = await asyncio.wait_for(
+                    provider.get_forecast(latitude, longitude, days),
+                    timeout=settings.WEATHER_CONSENSUS_TIMEOUT_SECONDS,
+                )
+                if not payload:
+                    raise RuntimeError("provider returned an empty forecast")
+                return index, provider, payload
+            except Exception as exc:  # pragma: no cover - defensive logging
+                return index, provider, exc
+
+        results = await asyncio.gather(
+            *(fetch(index, provider) for index, provider in enumerate(providers))
+        )
+
+        successful: list[list[dict[str, Any]]] = []
+        provider_names: list[str] = []
+        primary_succeeded = False
+        for index, provider, result in results:
+            role = "weather_primary" if index == 0 else (
+                "weather_consensus" if index == 1 else f"weather_consensus_{index}"
+            )
+            provider_name = self._provider_identity(provider)
+            if isinstance(result, Exception):
+                record_provider_failure(role, provider_name, result)
+                logger.warning("Forecast provider %s failed: %s", provider_name, result)
+                continue
+
+            record_provider_success(role, provider_name)
+            successful.append(result)
+            provider_names.append(provider_name)
+            primary_succeeded = primary_succeeded or index == 0
+
+        if not successful:
+            logger.warning("All consensus providers failed; attempting forecast fallback")
+            fallback_payload = await asyncio.wait_for(
+                self.fallback_provider.get_forecast(latitude, longitude, days),
+                timeout=settings.WEATHER_CONSENSUS_TIMEOUT_SECONDS,
+            )
+            successful = [fallback_payload]
+            provider_names = [self.fallback_provider.__class__.__name__]
+            self.last_forecast_fallback_used = True
+        else:
+            self.last_forecast_fallback_used = not primary_succeeded
+
+        self.last_forecast_source_count = len(successful)
+        self.last_forecast_provider_names = provider_names
+        self.last_forecast_consensus_degraded = len(successful) < 2
+        logger.info(
+            "Forecast assembled from %s source(s): %s",
+            len(successful),
+            ", ".join(provider_names),
+        )
+        return successful
+
+    def _reconcile_forecasts(
+        self,
+        sources: list[list[dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
+        periods: dict[datetime, list[dict[str, Any]]] = {}
+        for source in sources:
+            for item in source:
+                timestamp = self._parse_datetime(item.get("forecast_timestamp"))
+                if timestamp is None:
+                    continue
+                utc_hour = timestamp.astimezone(timezone.utc).replace(
+                    minute=0,
+                    second=0,
+                    microsecond=0,
+                )
+                periods.setdefault(utc_hour, []).append(item)
+
+        reconciled: list[dict[str, Any]] = []
+        for timestamp, items in sorted(periods.items()):
+            provider_names = list(
+                dict.fromkeys(str(item.get("provider_name", "Unknown")) for item in items)
+            )
+            temperature_values = self._values(items, "temperature_c")
+            humidity_values = self._values(items, "humidity_percent")
+            rainfall_values = self._values(items, "rainfall_mm_hr")
+            cloud_values = self._values(items, "cloud_cover_percent")
+            wind_values = self._values(items, "wind_speed_kmh")
+            probability_values = self._values(
+                items,
+                "precipitation_probability_percent",
+            )
+
+            temperature = self._weighted_mean(items, "temperature_c")
+            humidity = self._clamp(
+                self._weighted_mean(items, "humidity_percent"),
+                0.0,
+                100.0,
+            )
+            rainfall = max(0.0, self._weighted_mean(items, "rainfall_mm_hr"))
+            cloud_cover = self._clamp(
+                self._weighted_mean(items, "cloud_cover_percent"),
+                0.0,
+                100.0,
+            )
+            wind_speed = max(0.0, self._weighted_mean(items, "wind_speed_kmh"))
+            precipitation_probability = (
+                max(probability_values)
+                if probability_values
+                else self._rain_probability(rainfall)
+            )
+            condition = self._consensus_condition(items, rainfall, cloud_cover)
+            confidence = self._consensus_confidence(
+                len(items),
+                self._spread(temperature_values),
+                self._spread(cloud_values),
+                self._spread(rainfall_values),
+            )
+
+            reconciled.append(
+                {
+                    "forecast_timestamp": timestamp.astimezone(TRINIDAD_TZ).isoformat(),
+                    "temperature_c": round(temperature, 1),
+                    "humidity_percent": round(humidity, 1),
+                    "rainfall_mm_hr": round(rainfall, 2),
+                    "cloud_cover_percent": round(cloud_cover, 1),
+                    "wind_speed_kmh": round(wind_speed, 1),
+                    "weather_condition": condition,
+                    "heat_index_c": self._calculate_heat_index(temperature, humidity),
+                    "precipitation_probability_percent": round(
+                        self._clamp(precipitation_probability, 0.0, 100.0),
+                        1,
+                    ),
+                    "confidence_score": confidence,
+                    "rain_severity": self._rain_severity(rainfall),
+                    "provider_name": (
+                        f"Consensus ({' + '.join(provider_names)})"
+                        if len(provider_names) > 1
+                        else provider_names[0]
+                    ),
+                    "source_count": len(provider_names),
+                    "source_names": provider_names,
+                    "temperature_spread_c": round(
+                        self._spread(temperature_values),
+                        2,
+                    ),
+                    "cloud_cover_spread_percent": round(
+                        self._spread(cloud_values),
+                        1,
+                    ),
+                }
+            )
+        return reconciled
+
+    @staticmethod
+    def _values(items: list[dict[str, Any]], key: str) -> list[float]:
+        values: list[float] = []
+        for item in items:
+            try:
+                value = item.get(key)
+                if value is not None:
+                    values.append(float(value))
+            except (TypeError, ValueError):
+                continue
+        return values
+
+    def _weighted_mean(self, items: list[dict[str, Any]], key: str) -> float:
+        weighted_total = 0.0
+        total_weight = 0.0
+        for item in items:
+            value = item.get(key)
+            if value is None:
+                continue
+            try:
+                numeric_value = float(value)
+            except (TypeError, ValueError):
+                continue
+            weight = self._provider_weight(str(item.get("provider_name", "")))
+            weighted_total += numeric_value * weight
+            total_weight += weight
+        return weighted_total / total_weight if total_weight else 0.0
+
+    @staticmethod
+    def _provider_weight(provider_name: str) -> float:
+        normalized = provider_name.lower()
+        if "best match" in normalized:
+            return 0.5
+        if "gfs" in normalized:
+            return 0.2
+        if "met norway" in normalized:
+            return 0.3
+        if "open-meteo" in normalized:
+            return 0.5
+        if "weatherapi" in normalized:
+            return 0.5
+        return 0.35
+
+    @staticmethod
+    def _provider_identity(provider: WeatherProvider) -> str:
+        configured_name = getattr(provider, "provider_name", None)
+        if isinstance(configured_name, str) and configured_name:
+            return configured_name
+        if isinstance(provider, MetNorwayProvider):
+            return "MET Norway"
+        return provider.__class__.__name__
+
+    @staticmethod
+    def _spread(values: list[float]) -> float:
+        return max(values) - min(values) if len(values) > 1 else 0.0
+
+    @staticmethod
+    def _clamp(value: float, lower: float, upper: float) -> float:
+        return max(lower, min(upper, value))
+
+    @classmethod
+    def _consensus_confidence(
+        cls,
+        source_count: int,
+        temperature_spread: float,
+        cloud_spread: float,
+        rainfall_spread: float,
+    ) -> float:
+        if source_count < 2:
+            return 0.68
+        disagreement_penalty = (
+            min(temperature_spread / 8.0, 1.0) * 0.16
+            + min(cloud_spread / 100.0, 1.0) * 0.12
+            + min(rainfall_spread / 10.0, 1.0) * 0.10
+        )
+        return round(cls._clamp(0.96 - disagreement_penalty, 0.58, 0.96), 2)
+
+    @staticmethod
+    def _consensus_condition(
+        items: list[dict[str, Any]],
+        rainfall: float,
+        cloud_cover: float,
+    ) -> str:
+        conditions = [str(item.get("weather_condition", "")).lower() for item in items]
+        if any("thunder" in condition for condition in conditions):
+            return "Thunderstorm"
+        if rainfall >= 7:
+            return "Heavy rain"
+        if rainfall >= 0.1 or any("rain" in condition for condition in conditions):
+            return "Rain showers"
+        if cloud_cover >= 85:
+            return "Overcast"
+        if cloud_cover >= 45:
+            return "Partly cloudy"
+        return "Mainly clear"
 
     async def _get_cache(self, key: str) -> Any | None:
         async with self._cache_lock:
@@ -324,7 +639,7 @@ class WeatherService:
         for candidate in candidates:
             try:
                 parsed = datetime.fromisoformat(candidate)
-                return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+                return parsed if parsed.tzinfo else parsed.replace(tzinfo=TRINIDAD_TZ)
             except ValueError:
                 continue
 

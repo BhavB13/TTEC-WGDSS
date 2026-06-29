@@ -36,10 +36,63 @@ export interface ForecastData {
   confidence_score: number;
   rain_severity: string;
   provider_name: string;
+  source_count?: number;
+  source_names?: string[];
+  temperature_spread_c?: number;
+  cloud_cover_spread_percent?: number;
 }
 
 export interface ForecastBundle {
   items: ForecastData[];
+}
+
+export interface CalibrationPoint {
+  hour: number;
+  demand_mw?: number | null;
+  spin_mw?: number | null;
+  temperature_c?: number | null;
+  quality_status?: string | null;
+}
+
+export interface CalibrationScenario {
+  scenario_key: string;
+  scenario_label: string;
+  operating_regime: string;
+  source_workbook: string;
+  source_sheet: string;
+  demand_curve: CalibrationPoint[];
+  scada_temperature_trace: CalibrationPoint[];
+}
+
+export interface CalibrationSnapshot {
+  source_archive?: string | null;
+  imported_at?: string | null;
+  selected_scenario_key?: string | null;
+  selected_scenario_label?: string | null;
+  selected_hour?: number | null;
+  selected_temperature_c?: number | null;
+  selected_demand_mw?: number | null;
+  selected_next_demand_mw?: number | null;
+  selected_spin_mw?: number | null;
+  selected_next_spin_mw?: number | null;
+  selection_reason?: string | null;
+  selection_confidence?: number | null;
+  scenario_scores: Record<string, number>;
+  scenarios: CalibrationScenario[];
+}
+
+export interface DataQuality {
+  overall_status: "GOOD" | "DEGRADED" | string;
+  weather_status: "LIVE" | "CALIBRATED" | "STALE" | "FALLBACK" | string;
+  grid_status: "LIVE" | "SIMULATED" | string;
+  calibration_status: "CALIBRATED" | "UNAVAILABLE" | string;
+  weather_source: string;
+  grid_source: string;
+  observed_at?: string | null;
+  age_seconds?: number | null;
+  is_stale: boolean;
+  fallback_used: boolean;
+  notes: string[];
 }
 
 export interface GridStatus {
@@ -73,6 +126,8 @@ export interface DashboardSnapshot {
   forecast: ForecastBundle;
   probability: ProbabilityData;
   recommendation: RecommendationData;
+  calibration?: CalibrationSnapshot | null;
+  data_quality: DataQuality;
 }
 
 // Backwards-compatible aliases for existing component imports.

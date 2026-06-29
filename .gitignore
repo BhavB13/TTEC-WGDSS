@@ -10,6 +10,8 @@ env/
 # Environment files
 .env
 .env.*
+!.env.example
+!**/.env.example
 
 # Python build artifacts
 build/
@@ -31,6 +33,7 @@ frontend/build/
 
 # Logs
 *.log
+*.db
 
 # OS files
 .DS_Store

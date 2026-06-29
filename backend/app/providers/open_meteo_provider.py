@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import time
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
+from threading import Lock
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -11,21 +16,43 @@ from app.core.config import settings
 from app.providers.weather_provider import WeatherProvider
 
 logger = logging.getLogger(__name__)
+TRINIDAD_TZ = ZoneInfo("America/Port_of_Spain")
+
+
+class OpenMeteoDailyLimitError(RuntimeError):
+    pass
+
+
+@dataclass
+class _CachedResponse:
+    payload: dict[str, Any]
+    expires_at: float
 
 
 class OpenMeteoProvider(WeatherProvider):
+    _usage_lock = Lock()
+    _usage_date: date = datetime.now(timezone.utc).date()
+    _daily_request_count = 0
+
     def __init__(
         self,
         base_url: str | None = None,
+        model: str | None = None,
         timeout_seconds: float | None = None,
         retry_attempts: int | None = None,
         backoff_seconds: float | None = None,
+        cache_ttl_seconds: int | None = None,
     ) -> None:
         self.base_url = base_url or settings.OPEN_METEO_BASE_URL
+        self.model = model
         self.timeout_seconds = timeout_seconds or settings.WEATHER_TIMEOUT_SECONDS
         self.retry_attempts = retry_attempts or settings.WEATHER_RETRY_ATTEMPTS
         self.backoff_seconds = backoff_seconds or settings.WEATHER_RETRY_BACKOFF_SECONDS
+        self.cache_ttl_seconds = cache_ttl_seconds or settings.WEATHER_CACHE_TTL_SECONDS
         self.session = requests.Session()
+        self._response_cache: dict[tuple[tuple[str, str], ...], _CachedResponse] = {}
+        self._cache_lock = Lock()
+        self._request_lock = Lock()
 
     async def get_current_weather(
         self,
@@ -56,49 +83,47 @@ class OpenMeteoProvider(WeatherProvider):
         latitude: float,
         longitude: float,
     ) -> dict[str, Any]:
+        current_fields = [
+            "temperature_2m",
+            "relative_humidity_2m",
+            "apparent_temperature",
+            "precipitation",
+            "rain",
+            "showers",
+            "cloud_cover",
+            "wind_speed_10m",
+            "wind_direction_10m",
+            "surface_pressure",
+            "weather_code",
+        ]
         payload = self._request_json(
             params={
                 "latitude": latitude,
                 "longitude": longitude,
                 "cell_selection": "nearest",
-                "elevation": "nan",
-                "current": ",".join(
-                    [
-                        "temperature_2m",
-                        "relative_humidity_2m",
-                        "apparent_temperature",
-                        "precipitation",
-                        "rain",
-                        "showers",
-                        "cloud_cover",
-                        "wind_speed_10m",
-                        "wind_direction_10m",
-                        "surface_pressure",
-                        "weather_code",
-                    ]
-                ),
+                "elevation": settings.WEATHER_SITE_ALTITUDE_METERS,
+                "current": ",".join(current_fields),
+                "hourly": ",".join(current_fields),
+                "forecast_days": 1,
                 "timezone": "America/Port_of_Spain",
                 "temperature_unit": "celsius",
                 "wind_speed_unit": "kmh",
                 "precipitation_unit": "mm",
+                **({"models": self.model} if self.model else {}),
             }
         )
         current = payload.get("current") or {}
         hourly = payload.get("hourly") or {}
         if not current:
+            nearest_index = self._nearest_hour_index(hourly.get("time", []))
             current = {
-                "time": self._safe_list_value(hourly.get("time", []), 0),
-                "temperature_2m": self._safe_list_value(hourly.get("temperature_2m", []), 0),
-                "relative_humidity_2m": self._safe_list_value(hourly.get("relative_humidity_2m", []), 0),
-                "precipitation": self._safe_list_value(hourly.get("precipitation", []), 0),
-                "rain": self._safe_list_value(hourly.get("rain", []), 0, 0.0),
-                "cloud_cover": self._safe_list_value(hourly.get("cloud_cover", []), 0, 0.0),
-                "wind_speed_10m": self._safe_list_value(hourly.get("wind_speed_10m", []), 0, 0.0),
-                "wind_direction_10m": self._safe_list_value(hourly.get("wind_direction_10m", []), 0),
-                "surface_pressure": self._safe_list_value(hourly.get("surface_pressure", []), 0),
-                "weather_code": self._safe_list_value(hourly.get("weather_code", []), 0),
-                "apparent_temperature": self._safe_list_value(hourly.get("apparent_temperature", []), 0),
+                field: self._safe_list_value(hourly.get(field, []), nearest_index)
+                for field in current_fields
             }
+            current["time"] = self._safe_list_value(hourly.get("time", []), nearest_index)
+
+        if current.get("temperature_2m") is None or current.get("relative_humidity_2m") is None:
+            raise RuntimeError("Open-Meteo returned incomplete current weather data")
         logger.debug("Open-Meteo current payload received")
 
         return {
@@ -121,7 +146,7 @@ class OpenMeteoProvider(WeatherProvider):
             ),
             "weather_code": current.get("weather_code"),
             "pressure_hpa": current.get("surface_pressure"),
-            "provider_name": "Open-Meteo",
+            "provider_name": self.provider_name,
         }
 
     def _get_forecast_sync(
@@ -135,7 +160,7 @@ class OpenMeteoProvider(WeatherProvider):
                 "latitude": latitude,
                 "longitude": longitude,
                 "cell_selection": "nearest",
-                "elevation": "nan",
+                "elevation": settings.WEATHER_SITE_ALTITUDE_METERS,
                 "hourly": ",".join(
                     [
                         "temperature_2m",
@@ -150,11 +175,14 @@ class OpenMeteoProvider(WeatherProvider):
                         "precipitation_probability",
                     ]
                 ),
-                "forecast_days": days,
+                # `forecast_hours` means a true rolling horizon. `forecast_days`
+                # would truncate a one-day request at midnight.
+                "forecast_hours": max(1, min(days, 16)) * 24,
                 "timezone": "America/Port_of_Spain",
                 "temperature_unit": "celsius",
                 "wind_speed_unit": "kmh",
                 "precipitation_unit": "mm",
+                **({"models": self.model} if self.model else {}),
             }
         )
 
@@ -173,11 +201,15 @@ class OpenMeteoProvider(WeatherProvider):
 
         forecast: list[dict[str, Any]] = []
         for index, timestamp in enumerate(times):
+            temperature = self._safe_list_value(temperatures, index)
+            humidity = self._safe_list_value(humidities, index)
+            if temperature is None or humidity is None:
+                continue
             forecast.append(
                 {
                     "forecast_timestamp": timestamp,
-                    "temperature_c": self._safe_list_value(temperatures, index),
-                    "humidity_percent": self._safe_list_value(humidities, index),
+                    "temperature_c": temperature,
+                    "humidity_percent": humidity,
                     "rainfall_mm_hr": self._safe_list_value(precipitation, index)
                     if self._safe_list_value(precipitation, index) is not None
                     else self._safe_list_value(rain, index, 0.0),
@@ -189,7 +221,7 @@ class OpenMeteoProvider(WeatherProvider):
                     "heat_index_c": self._safe_list_value(
                         apparent_temperature,
                         index,
-                        self._safe_list_value(temperatures, index),
+                        temperature,
                     ),
                     "precipitation_probability_percent": self._safe_list_value(
                         precipitation_probability,
@@ -197,22 +229,57 @@ class OpenMeteoProvider(WeatherProvider):
                         0.0,
                     ),
                     "weather_code": self._safe_list_value(weather_code, index),
-                    "provider_name": "Open-Meteo",
+                    "provider_name": self.provider_name,
                 }
             )
 
         logger.debug("Open-Meteo forecast payload received: %s points", len(forecast))
         return forecast
 
+    @property
+    def provider_name(self) -> str:
+        if self.model == "gfs_global":
+            return "Open-Meteo NOAA GFS"
+        if self.model:
+            return f"Open-Meteo {self.model}"
+        return "Open-Meteo Best Match"
+
     def _request_json(self, params: dict[str, Any]) -> dict[str, Any]:
         url = self.base_url
         last_error: Exception | None = None
+        cache_key = tuple(sorted((key, str(value)) for key, value in params.items()))
+
+        with self._cache_lock:
+            cached = self._response_cache.get(cache_key)
+            if cached and cached.expires_at > time.monotonic():
+                return copy.deepcopy(cached.payload)
 
         for attempt in range(1, self.retry_attempts + 1):
             try:
-                response = self.session.get(url, params=params, timeout=self.timeout_seconds)
+                self._reserve_request()
+                with self._request_lock:
+                    response = self.session.get(
+                        url,
+                        params=params,
+                        timeout=self.timeout_seconds,
+                    )
                 response.raise_for_status()
-                return response.json()
+                payload = response.json()
+                with self._cache_lock:
+                    self._response_cache[cache_key] = _CachedResponse(
+                        payload=copy.deepcopy(payload),
+                        expires_at=time.monotonic() + self.cache_ttl_seconds,
+                    )
+                return payload
+            except OpenMeteoDailyLimitError:
+                with self._cache_lock:
+                    stale = self._response_cache.get(cache_key)
+                    if stale:
+                        logger.warning(
+                            "Serving cached Open-Meteo response at daily safety limit"
+                        )
+                        return copy.deepcopy(stale.payload)
+                raise
             except Exception as exc:  # pragma: no cover - defensive logging
                 last_error = exc
                 logger.warning(
@@ -224,7 +291,39 @@ class OpenMeteoProvider(WeatherProvider):
                 if attempt < self.retry_attempts:
                     time.sleep(self.backoff_seconds)
 
+        with self._cache_lock:
+            stale = self._response_cache.get(cache_key)
+            if stale:
+                logger.warning("Serving stale Open-Meteo response after provider failure")
+                return copy.deepcopy(stale.payload)
+
         raise RuntimeError("Open-Meteo request failed") from last_error
+
+    @classmethod
+    def _reserve_request(cls) -> None:
+        today = datetime.now(timezone.utc).date()
+        with cls._usage_lock:
+            if cls._usage_date != today:
+                cls._usage_date = today
+                cls._daily_request_count = 0
+            if cls._daily_request_count >= settings.OPEN_METEO_DAILY_REQUEST_LIMIT:
+                raise OpenMeteoDailyLimitError(
+                    "Open-Meteo daily request safety limit reached"
+                )
+            cls._daily_request_count += 1
+
+    @classmethod
+    def usage_state(cls) -> dict[str, int | str]:
+        today = datetime.now(timezone.utc).date()
+        with cls._usage_lock:
+            if cls._usage_date != today:
+                cls._usage_date = today
+                cls._daily_request_count = 0
+            return {
+                "date": cls._usage_date.isoformat(),
+                "count": cls._daily_request_count,
+                "limit": settings.OPEN_METEO_DAILY_REQUEST_LIMIT,
+            }
 
     @staticmethod
     def _safe_list_value(
@@ -236,6 +335,27 @@ class OpenMeteoProvider(WeatherProvider):
             return values[index]
         except Exception:
             return default
+
+    @staticmethod
+    def _nearest_hour_index(times: list[Any]) -> int:
+        if not times:
+            return 0
+
+        now = datetime.now(TRINIDAD_TZ)
+        nearest_index = 0
+        nearest_delta: float | None = None
+        for index, value in enumerate(times):
+            try:
+                parsed = datetime.fromisoformat(str(value))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=TRINIDAD_TZ)
+                delta = abs((parsed - now).total_seconds())
+            except (TypeError, ValueError):
+                continue
+            if nearest_delta is None or delta < nearest_delta:
+                nearest_index = index
+                nearest_delta = delta
+        return nearest_index
 
     @staticmethod
     def _describe_weather_code(code: Any) -> str:

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from threading import Lock
 from typing import Any
 
 import requests
@@ -13,7 +17,21 @@ from app.providers.weather_provider import WeatherProvider
 logger = logging.getLogger(__name__)
 
 
+class WeatherApiMonthlyLimitError(RuntimeError):
+    pass
+
+
+@dataclass
+class _CachedResponse:
+    payload: dict[str, Any]
+    expires_at: float
+
+
 class WeatherAPIProvider(WeatherProvider):
+    _usage_lock = Lock()
+    _usage_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    _monthly_request_count = 0
+
     def __init__(
         self,
         base_url: str | None = None,
@@ -21,13 +39,18 @@ class WeatherAPIProvider(WeatherProvider):
         timeout_seconds: float | None = None,
         retry_attempts: int | None = None,
         backoff_seconds: float | None = None,
+        cache_ttl_seconds: int | None = None,
     ) -> None:
         self.base_url = base_url or settings.WEATHER_API_BASE_URL
         self.api_key = api_key if api_key is not None else settings.WEATHER_API_KEY
         self.timeout_seconds = timeout_seconds or settings.WEATHER_TIMEOUT_SECONDS
         self.retry_attempts = retry_attempts or settings.WEATHER_RETRY_ATTEMPTS
         self.backoff_seconds = backoff_seconds or settings.WEATHER_RETRY_BACKOFF_SECONDS
+        self.cache_ttl_seconds = cache_ttl_seconds or settings.WEATHER_CACHE_TTL_SECONDS
         self.session = requests.Session()
+        self._response_cache: dict[tuple[str, tuple[tuple[str, str], ...]], _CachedResponse] = {}
+        self._cache_lock = Lock()
+        self._request_lock = Lock()
 
     async def get_current_weather(
         self,
@@ -135,12 +158,42 @@ class WeatherAPIProvider(WeatherProvider):
         url = f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
         query = {"key": self.api_key, **params}
         last_error: Exception | None = None
+        cache_key = (
+            path,
+            tuple(sorted((key, str(value)) for key, value in params.items())),
+        )
+
+        with self._cache_lock:
+            cached = self._response_cache.get(cache_key)
+            if cached and cached.expires_at > time.monotonic():
+                return copy.deepcopy(cached.payload)
 
         for attempt in range(1, self.retry_attempts + 1):
             try:
-                response = self.session.get(url, params=query, timeout=self.timeout_seconds)
+                self._reserve_request()
+                with self._request_lock:
+                    response = self.session.get(
+                        url,
+                        params=query,
+                        timeout=self.timeout_seconds,
+                    )
                 response.raise_for_status()
-                return response.json()
+                payload = response.json()
+                with self._cache_lock:
+                    self._response_cache[cache_key] = _CachedResponse(
+                        payload=copy.deepcopy(payload),
+                        expires_at=time.monotonic() + self.cache_ttl_seconds,
+                    )
+                return payload
+            except WeatherApiMonthlyLimitError:
+                with self._cache_lock:
+                    stale = self._response_cache.get(cache_key)
+                    if stale:
+                        logger.warning(
+                            "Serving cached WeatherAPI response at monthly safety limit"
+                        )
+                        return copy.deepcopy(stale.payload)
+                raise
             except Exception as exc:  # pragma: no cover - defensive logging
                 last_error = exc
                 logger.warning(
@@ -152,4 +205,36 @@ class WeatherAPIProvider(WeatherProvider):
                 if attempt < self.retry_attempts:
                     time.sleep(self.backoff_seconds)
 
+        with self._cache_lock:
+            stale = self._response_cache.get(cache_key)
+            if stale:
+                logger.warning("Serving stale WeatherAPI response after provider failure")
+                return copy.deepcopy(stale.payload)
+
         raise RuntimeError("WeatherAPI request failed") from last_error
+
+    @classmethod
+    def _reserve_request(cls) -> None:
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+        with cls._usage_lock:
+            if cls._usage_month != month:
+                cls._usage_month = month
+                cls._monthly_request_count = 0
+            if cls._monthly_request_count >= settings.WEATHER_API_MONTHLY_REQUEST_LIMIT:
+                raise WeatherApiMonthlyLimitError(
+                    "WeatherAPI monthly request safety limit reached"
+                )
+            cls._monthly_request_count += 1
+
+    @classmethod
+    def usage_state(cls) -> dict[str, int | str]:
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+        with cls._usage_lock:
+            if cls._usage_month != month:
+                cls._usage_month = month
+                cls._monthly_request_count = 0
+            return {
+                "month": cls._usage_month,
+                "count": cls._monthly_request_count,
+                "limit": settings.WEATHER_API_MONTHLY_REQUEST_LIMIT,
+            }

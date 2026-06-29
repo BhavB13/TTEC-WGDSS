@@ -3,11 +3,13 @@ import type { WeatherData } from "../types/dashboard";
 
 interface CurrentConditionsProps {
   weather: WeatherData;
+  qualityStatus?: string;
   className?: string;
 }
 
 export default function CurrentConditions({
   weather,
+  qualityStatus,
   className = "",
 }: CurrentConditionsProps) {
   return (
@@ -38,10 +40,19 @@ export default function CurrentConditions({
       <div className="mt-2 flex flex-wrap justify-center gap-2 text-[11px] text-slate-400">
         <Badge label={weather.weather_condition} />
         <Badge label={weather.provider_name} />
+        {qualityStatus ? <Badge label={qualityStatus} /> : null}
         {weather.timestamp ? (
           <Badge label={new Date(weather.timestamp).toLocaleTimeString()} />
         ) : null}
       </div>
+      <a
+        className="mt-1 text-center text-[10px] text-slate-500 hover:text-cyan-300"
+        href="https://creativecommons.org/licenses/by/4.0/"
+        target="_blank"
+        rel="noreferrer"
+      >
+        Weather data licensed under CC BY 4.0
+      </a>
     </div>
   );
 }

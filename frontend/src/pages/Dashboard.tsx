@@ -6,9 +6,10 @@ import GridStatusCard from "../components/GridStatusCard";
 import Header from "../components/Header";
 import ProbabilityGauge from "../components/ProbabilityGauge";
 import RecommendationCard from "../components/RecommendationCard";
+import ScenarioComparisonChart from "../components/ScenarioComparisonChart";
 import WeatherMap from "../components/WeatherMap";
 import { getDashboardSnapshot } from "../services/api";
-import type { DashboardSnapshot, ForecastData } from "../types/dashboard";
+import type { CalibrationSnapshot, DashboardSnapshot, ForecastData } from "../types/dashboard";
 
 type LoadState = "loading" | "ready" | "error";
 type DashboardTab =
@@ -133,6 +134,18 @@ export default function Dashboard() {
   const grid = snapshot.grid ?? FALLBACK_GRID;
   const probability = snapshot.probability ?? FALLBACK_PROBABILITY;
   const recommendation = snapshot.recommendation ?? FALLBACK_RECOMMENDATION;
+  const calibration = snapshot.calibration ?? null;
+  const dataQuality = snapshot.data_quality ?? {
+    overall_status: "DEGRADED",
+    weather_status: "UNKNOWN",
+    grid_status: grid.source_provider.includes("Mock") ? "SIMULATED" : "UNKNOWN",
+    calibration_status: calibration ? "CALIBRATED" : "UNAVAILABLE",
+    weather_source: weather.provider_name,
+    grid_source: grid.source_provider,
+    is_stale: false,
+    fallback_used: false,
+    notes: ["Data-quality metadata was not supplied by the API"],
+  };
   const forecastItems = Array.isArray(snapshot.forecast?.items)
     ? snapshot.forecast.items
     : [];
@@ -143,22 +156,20 @@ export default function Dashboard() {
       lastUpdated={weather.timestamp}
       systemStatus={systemStatus}
       gridStatus={grid.grid_status}
+      dataQuality={dataQuality}
     >
-      <div className="grid h-full min-h-0 w-full min-w-0 gap-3 xl:grid-cols-[clamp(300px,28vw,390px)_minmax(0,1fr)] xl:items-stretch">
-        <section className="min-h-0 min-w-0 xl:sticky xl:top-3 xl:self-start xl:h-[calc(100vh-6.25rem)]">
+      <div className="grid h-auto min-h-0 w-full min-w-0 gap-3 xl:h-full xl:grid-cols-[clamp(300px,28vw,390px)_minmax(0,1fr)] xl:items-stretch">
+        <section className="h-[28rem] min-h-0 min-w-0 xl:sticky xl:top-3 xl:self-start xl:h-[calc(100vh-5.25rem)]">
           <WeatherMap
-            gridStatus={grid}
-            rainfallMmHr={weather.rainfall_mm_hr}
-            forecastItems={forecastItems}
             className="h-full min-h-0"
           />
         </section>
 
-        <section className="flex min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 bg-slate-900/60 p-2.5 shadow-[0_0_40px_rgba(8,145,178,0.06)]">
+        <section className="flex min-h-[42rem] w-full min-w-0 flex-col overflow-visible rounded-2xl border border-cyan-500/15 bg-slate-900/60 p-2.5 shadow-[0_0_40px_rgba(8,145,178,0.06)] xl:min-h-0 xl:overflow-hidden">
           <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-2.5 overflow-hidden">
             <TabBar activeTab={activeTab} onChange={setActiveTab} />
 
-            <div className="min-h-0 flex-1 w-full min-w-0 overflow-hidden">
+            <div className="min-h-0 flex-1 w-full min-w-0 overflow-visible xl:overflow-hidden">
               {activeTab === "home" ? (
                 <WorkspacePage>
                   <HomeTab
@@ -167,6 +178,8 @@ export default function Dashboard() {
                     probability={probability}
                     recommendation={recommendation}
                     forecastItems={upcomingForecastItems}
+                    calibration={calibration}
+                    dataQuality={dataQuality}
                   />
                 </WorkspacePage>
               ) : null}
@@ -178,13 +191,18 @@ export default function Dashboard() {
                     probability={probability}
                     recommendation={recommendation}
                     lastUpdated={weather.timestamp}
+                    calibration={calibration}
                   />
                 </WorkspacePage>
               ) : null}
 
               {activeTab === "weather" ? (
                 <WorkspacePage>
-                  <WeatherTab weather={weather} forecastItems={upcomingForecastItems} />
+                  <WeatherTab
+                    weather={weather}
+                    forecastItems={upcomingForecastItems}
+                    qualityStatus={dataQuality.weather_status}
+                  />
                 </WorkspacePage>
               ) : null}
 
@@ -194,6 +212,7 @@ export default function Dashboard() {
                     grid={grid}
                     probability={probability}
                     recommendation={recommendation}
+                    calibration={calibration}
                   />
                 </WorkspacePage>
               ) : null}
@@ -220,6 +239,7 @@ export default function Dashboard() {
                     weather={weather}
                     probability={probability}
                     recommendation={recommendation}
+                    calibration={calibration}
                   />
                 </WorkspacePage>
               ) : null}
@@ -236,16 +256,23 @@ function Shell({
   lastUpdated,
   systemStatus,
   gridStatus,
+  dataQuality,
 }: {
   children?: ReactNode;
   lastUpdated: string | null;
   systemStatus: string;
   gridStatus?: string;
+  dataQuality?: DashboardSnapshot["data_quality"] | null;
 }) {
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(14,116,144,0.18),_transparent_36%),linear-gradient(180deg,#020617_0%,#020617_100%)] text-slate-100">
-      <Header lastUpdated={lastUpdated} systemStatus={systemStatus} gridStatus={gridStatus} />
-      <main className="flex w-full min-w-0 flex-1 min-h-0 overflow-hidden px-4 py-2.5 lg:px-6">
+    <div className="flex min-h-dvh flex-col overflow-visible bg-[radial-gradient(circle_at_top,_rgba(14,116,144,0.18),_transparent_36%),linear-gradient(180deg,#020617_0%,#020617_100%)] text-slate-100 xl:h-dvh xl:overflow-hidden">
+      <Header
+        lastUpdated={lastUpdated}
+        systemStatus={systemStatus}
+        gridStatus={gridStatus}
+        dataQuality={dataQuality}
+      />
+      <main className="flex w-full min-w-0 flex-1 min-h-0 overflow-visible px-4 py-2.5 lg:px-6 xl:overflow-hidden">
         {children}
       </main>
     </div>
@@ -306,12 +333,16 @@ function HomeTab({
   probability,
   recommendation,
   forecastItems,
+  calibration,
+  dataQuality,
 }: {
   grid: DashboardSnapshot["grid"];
   weather: DashboardSnapshot["weather"];
   probability: DashboardSnapshot["probability"];
   recommendation: DashboardSnapshot["recommendation"];
   forecastItems: ForecastData[];
+  calibration: CalibrationSnapshot | null;
+  dataQuality: DashboardSnapshot["data_quality"];
 }) {
   return (
     <>
@@ -324,9 +355,18 @@ function HomeTab({
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <StatusChip label="Weather" value="Live" tone="emerald" />
-        <StatusChip label="Forecast" value="Live" tone="cyan" />
-        <StatusChip label="Grid" value="Live" tone="amber" />
+        <StatusChip
+          label="Weather"
+          value={dataQuality.weather_status}
+          tone={dataQuality.is_stale || dataQuality.fallback_used ? "amber" : "emerald"}
+        />
+        <StatusChip label="Forecast" value={dataQuality.weather_status} tone="cyan" />
+        <StatusChip label="Grid" value={dataQuality.grid_status} tone="amber" />
+        <StatusChip
+          label="Scenario"
+          value={calibration?.selected_scenario_label ?? "Typical"}
+          tone="slate"
+        />
       </div>
 
       <div className="grid min-h-0 flex-1 items-stretch gap-2.5 xl:grid-cols-2">
@@ -346,7 +386,7 @@ function HomeForecastRiskCard({
   probability: DashboardSnapshot["probability"];
 }) {
   return (
-    <div className="home-forecast-card flex h-full min-h-[26rem] w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
+    <div className="home-forecast-card flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
       <div className="mb-2 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
@@ -382,7 +422,7 @@ function WeatherOverviewCard({
   const leadForecast = forecastItems[0];
 
   return (
-    <div className="home-weather-card flex h-full min-h-[26rem] w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
+    <div className="home-weather-card flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
@@ -429,11 +469,13 @@ function OperationsTab({
   probability,
   recommendation,
   lastUpdated,
+  calibration,
 }: {
   grid: DashboardSnapshot["grid"];
   probability: DashboardSnapshot["probability"];
   recommendation: DashboardSnapshot["recommendation"];
   lastUpdated: string | null;
+  calibration: CalibrationSnapshot | null;
 }) {
   return (
     <>
@@ -458,6 +500,15 @@ function OperationsTab({
         />
       </div>
 
+      <div className="flex flex-wrap gap-2">
+        <StatusChip
+          label="Scenario"
+          value={calibration?.selected_scenario_label ?? "Typical"}
+          tone="slate"
+        />
+        <StatusChip label="Last Updated" value={formatTimestamp(lastUpdated)} tone="cyan" />
+      </div>
+
       <div className="grid min-h-0 flex-1 gap-2.5 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
         <RecommendationCard recommendation={recommendation} className="h-full min-h-0 w-full min-w-0" />
 
@@ -470,13 +521,19 @@ function OperationsTab({
 function WeatherTab({
   weather,
   forecastItems,
+  qualityStatus,
 }: {
   weather: DashboardSnapshot["weather"];
   forecastItems: ForecastData[];
+  qualityStatus: string;
 }) {
   return (
     <div className="grid min-h-0 w-full min-w-0 flex-1 gap-2.5 xl:grid-cols-[minmax(0,0.35fr)_minmax(0,0.65fr)]">
-      <CurrentConditions weather={weather} className="h-full min-h-0 w-full min-w-0" />
+      <CurrentConditions
+        weather={weather}
+        qualityStatus={qualityStatus}
+        className="h-full min-h-0 w-full min-w-0"
+      />
       <PanelCard title="Next 6 Hours" className="h-full min-h-0 w-full min-w-0">
         <div className="flex h-full min-h-0 flex-col gap-2">
           <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2 border-b border-slate-800 px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-slate-400">
@@ -492,9 +549,10 @@ function WeatherTab({
             ))}
           </div>
 
-          <div className="border-t border-slate-800 px-3 py-2 text-[11px] text-slate-400">
-            Live forecast snapshot updated {formatTimestamp(weather.timestamp)}
-          </div>
+          <ForecastAttribution
+            forecastItems={forecastItems}
+            updatedAt={weather.timestamp}
+          />
         </div>
       </PanelCard>
     </div>
@@ -505,16 +563,19 @@ function DemandForecastTab({
   grid,
   probability,
   recommendation,
+  calibration,
 }: {
   grid: DashboardSnapshot["grid"];
   probability: DashboardSnapshot["probability"];
   recommendation: DashboardSnapshot["recommendation"];
+  calibration: CalibrationSnapshot | null;
 }) {
   return (
     <div className="grid h-full min-h-0 w-full min-w-0 grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)]">
       <DemandForecastChart
         gridStatus={grid}
         probability={probability}
+        calibration={calibration}
         className="h-full min-h-0 w-full min-w-0"
       />
       <PanelCard title="Demand Snapshot" className="h-full min-h-0 w-full min-w-0">
@@ -580,6 +641,7 @@ function OperationalGuidanceTab({
               <ForecastBlock key={period.forecast_timestamp} period={period} />
             ))}
           </div>
+          <ForecastAttribution forecastItems={forecastItems} />
         </div>
       </PanelCard>
     </div>
@@ -591,11 +653,13 @@ function AnalyticsTab({
   probability,
   recommendation,
   weather,
+  calibration,
 }: {
   grid: DashboardSnapshot["grid"];
   probability: DashboardSnapshot["probability"];
   recommendation: DashboardSnapshot["recommendation"];
   weather: DashboardSnapshot["weather"];
+  calibration: CalibrationSnapshot | null;
 }) {
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-2.5 overflow-hidden">
@@ -615,6 +679,37 @@ function AnalyticsTab({
             <MiniMetric label="Risk Level" value={probability.risk_level} />
             <MiniMetric label="Action" value={recommendation.recommendation} />
             <MiniMetric label="Last Updated" value={formatTimestamp(weather.timestamp)} />
+          </div>
+        </PanelCard>
+        <PanelCard title="Calibration Summary" className="h-full min-h-0 xl:col-span-2">
+          <div className="grid h-full min-h-0 gap-2 xl:grid-cols-[minmax(0,0.42fr)_minmax(0,0.58fr)]">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <MiniMetric
+                label="Selected Scenario"
+                value={calibration?.selected_scenario_label ?? "Typical Day"}
+              />
+              <MiniMetric
+                label="SCADA Temp"
+                value={
+                  calibration?.selected_temperature_c != null
+                    ? `${calibration.selected_temperature_c.toFixed(1)}°C`
+                    : `${weather.temperature_c.toFixed(1)}°C`
+                }
+              />
+              <MiniMetric
+                label="Source"
+                value={calibration?.source_archive?.split("\\").pop()?.split("/").pop() ?? "Live Snapshot"}
+              />
+              <MiniMetric
+                label="Selection"
+                value={calibration?.selection_reason ?? "Calibration data unavailable"}
+              />
+            </div>
+            <ScenarioComparisonChart
+              scenarios={calibration?.scenarios ?? []}
+              selectedScenarioKey={calibration?.selected_scenario_key}
+              className="min-h-[16rem]"
+            />
           </div>
         </PanelCard>
       </div>
@@ -641,13 +736,21 @@ function PanelCard({
 
 function ForecastBlock({ period }: { period: ForecastData }) {
   const time = formatForecastTimestamp(period.forecast_timestamp);
+  const verified = (period.source_count ?? 1) > 1;
 
   return (
     <div className="flex min-h-[7.5rem] flex-col rounded-xl border border-slate-800 bg-slate-950/60 p-2 text-center shadow-inner shadow-black/20">
       <div className="flex items-center justify-between gap-2">
         <p className="min-w-0 break-words text-[0.84rem] font-semibold leading-snug text-white">{time}</p>
-        <span className="shrink-0 rounded-full border border-slate-700 bg-slate-900/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-300">
-          {period.rain_severity}
+        <span
+          className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] ${
+            verified
+              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+              : "border-amber-500/30 bg-amber-500/10 text-amber-200"
+          }`}
+          title={period.source_names?.join(" + ") ?? period.provider_name}
+        >
+          {verified ? `${period.source_count} sources` : "single source"}
         </span>
       </div>
 
@@ -662,6 +765,34 @@ function ForecastBlock({ period }: { period: ForecastData }) {
           value={`${period.precipitation_probability_percent.toFixed(0)}%`}
         />
       </div>
+    </div>
+  );
+}
+
+function ForecastAttribution({
+  forecastItems,
+  updatedAt,
+}: {
+  forecastItems: ForecastData[];
+  updatedAt?: string | null;
+}) {
+  const names = forecastItems[0]?.source_names?.length
+    ? forecastItems[0].source_names.join(" + ")
+    : forecastItems[0]?.provider_name ?? "Weather providers";
+
+  return (
+    <div className="border-t border-slate-800 px-3 py-1.5 text-center text-[10px] leading-snug text-slate-500">
+      <span>{names}</span>
+      {updatedAt ? <span> · Updated {formatTimestamp(updatedAt)}</span> : null}
+      <span> · </span>
+      <a
+        className="hover:text-cyan-300"
+        href="https://creativecommons.org/licenses/by/4.0/"
+        target="_blank"
+        rel="noreferrer"
+      >
+        CC BY 4.0
+      </a>
     </div>
   );
 }
@@ -724,6 +855,7 @@ function formatForecastTimestamp(value: string): string {
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: "America/Port_of_Spain",
     timeZoneName: "short",
   }).format(date);
 }
@@ -734,8 +866,6 @@ function getUpcomingForecastItems(
   count = 6,
 ): ForecastData[] {
   const now = referenceTime.getTime();
-  const recentWindowStart = now - 30 * 60 * 1000;
-
   const sortedItems = [...forecastItems].sort(
     (left, right) =>
       new Date(left.forecast_timestamp).getTime() - new Date(right.forecast_timestamp).getTime(),
@@ -743,7 +873,7 @@ function getUpcomingForecastItems(
 
   const upcomingItems = sortedItems.filter((item) => {
     const timestamp = new Date(item.forecast_timestamp).getTime();
-    return !Number.isNaN(timestamp) && timestamp >= recentWindowStart;
+    return !Number.isNaN(timestamp) && timestamp > now;
   });
 
   if (upcomingItems.length >= count) {

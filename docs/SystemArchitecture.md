@@ -43,14 +43,12 @@ Return structured responses
 
 Current Endpoints:
 
-GET /health
-GET /recommendations
-
-Future Endpoints:
-
-GET /weather/current
-GET /weather/forecast
-GET /grid/status
+GET /api/dashboard/snapshot
+GET /api/v1/health
+GET /api/v1/recommendations
+GET /api/v1/weather/current
+GET /api/v1/weather/forecast
+GET /api/v1/grid/status
 
 
 Service Layer
@@ -76,6 +74,7 @@ WeatherProvider
 Implementations:
 
 OpenMeteoProvider
+MetNorwayProvider
 WeatherAPIProvider
 
 Grid Providers
@@ -134,7 +133,9 @@ Service Layer
 ↓
 Provider Layer
 ├── Open-Meteo
-├── WeatherAPI
+├── MET Norway
+├── NOAA GFS
+├── WeatherAPI (optional $0 fallback, disabled by default)
 └── SCADA
 ↓
 PostgreSQL

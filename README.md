@@ -37,11 +37,16 @@ Leaflet
 Weather Providers
 Primary:
 
-Open-Meteo
+Open-Meteo Best Match
+
+Forecast cross-checks:
+
+MET Norway Locationforecast
+NOAA GFS through Open-Meteo's model endpoint
 
 Fallback:
 
-WeatherAPI
+Open-Meteo GFS. WeatherAPI's $0 plan is available only through explicit opt-in.
 
 
 Architecture
@@ -56,23 +61,14 @@ Provider Layer
 Database Layer
 
 Current Project Status
-Completed
 
-Project Initialization
-FastAPI Foundation
-Database Models
-Provider Architecture
-Recommendation Engine
-API Layer
-Service Layer
-
-Planned
-
-Real Weather Integration
-Dashboard Development
-Leaflet Weather Map
-SCADA Integration
-Production Deployment
+The Version 1 dashboard is operational with live Open-Meteo weather, a
+three-member Open-Meteo/MET Norway/NOAA GFS hourly forecast consensus, provider fallback,
+simulated grid data, Leaflet operational layers, rule-based
+recommendations, persisted historical snapshots, and imported SCADA calibration
+profiles. See `docs/OperationsGuide.md` for startup, migration, import, testing,
+and deployment instructions. See `docs/ExternalServices.md` for the no-cost
+provider matrix, quotas, licensing boundary, and optional paid alternatives.
 
 
 Repository Structure

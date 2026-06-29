@@ -14,8 +14,8 @@ dashboard_service = DashboardService()
     response_model=RecommendationResponse,
 )
 async def get_recommendation(
-    latitude: float = Query(default=settings.DEFAULT_LATITUDE),
-    longitude: float = Query(default=settings.DEFAULT_LONGITUDE),
+    latitude: float = Query(default=settings.DEFAULT_LATITUDE, ge=-90, le=90),
+    longitude: float = Query(default=settings.DEFAULT_LONGITUDE, ge=-180, le=180),
 ) -> RecommendationResponse:
     """
     Generate a recommendation using provider and service layers.
