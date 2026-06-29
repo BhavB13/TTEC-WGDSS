@@ -4,6 +4,9 @@ interface HeaderProps {
   lastUpdated?: string | null;
   systemStatus?: string;
   gridStatus?: string;
+  weatherStatus?: string;
+  forecastStatus?: string;
+  scenarioLabel?: string;
   dataQuality?: DataQuality | null;
 }
 
@@ -27,11 +30,14 @@ export default function Header({
   lastUpdated,
   systemStatus = "Operational",
   gridStatus,
+  weatherStatus,
+  forecastStatus,
+  scenarioLabel,
   dataQuality,
 }: HeaderProps) {
   return (
     <header className="border-b border-cyan-500/10 bg-slate-950/95 px-4 py-2 text-slate-100 shadow-[0_0_32px_rgba(8,145,178,0.08)] backdrop-blur">
-      <div className="mx-auto grid w-full max-w-[1680px] gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(500px,0.9fr)] xl:items-center">
+      <div className="mx-auto grid w-full max-w-[1680px] gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] xl:items-center">
         <div className="min-w-0">
           <p className="hidden text-[11px] font-semibold uppercase tracking-[0.3em] text-cyan-300 sm:block">
             WGDSS Control Room
@@ -42,19 +48,29 @@ export default function Header({
           </h1>
         </div>
 
-        <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3">
+        <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
+          <HeaderMetric
+            label="Weather"
+            value={weatherStatus ?? dataQuality?.weather_status ?? systemStatus}
+            tone={
+              dataQuality?.is_stale || dataQuality?.fallback_used ? "amber" : "emerald"
+            }
+          />
+          <HeaderMetric
+            label="Forecast"
+            value={forecastStatus ?? dataQuality?.weather_status ?? systemStatus}
+            tone="cyan"
+          />
           <HeaderMetric
             label="Grid Status"
             value={gridStatus ?? systemStatus}
             tone="emerald"
           />
-          {dataQuality ? (
-            <HeaderMetric
-              label="Data Quality"
-              value={`${dataQuality.weather_status} / ${dataQuality.grid_status}`}
-              tone={dataQuality.overall_status === "GOOD" ? "cyan" : "amber"}
-            />
-          ) : null}
+          <HeaderMetric
+            label="Scenario"
+            value={scenarioLabel ?? "Typical Day"}
+            tone="slate"
+          />
           <HeaderMetric
             label="Last Updated"
             value={formatTimestamp(lastUpdated)}

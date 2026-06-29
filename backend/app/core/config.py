@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     WEATHER_API_BASE_URL: str = "https://api.weatherapi.com/v1"
     WEATHER_API_KEY: str = ""
     ENABLE_WEATHERAPI_FALLBACK: bool = False
+    NHC_CURRENT_STORMS_URL: str = "https://www.nhc.noaa.gov/CurrentStorms.json"
+    NHC_STORM_TRACKING_TIMEOUT_SECONDS: float = 10.0
+    NHC_STORM_TRACKING_CACHE_TTL_SECONDS: int = 900
+    NHC_USER_AGENT: str = "TTEC-WGDSS/1.0 (+https://www.ttec.co.tt/)"
 
     # Piarco is a low-elevation, operationally representative Trinidad location.
     DEFAULT_LATITUDE: float = 10.5953

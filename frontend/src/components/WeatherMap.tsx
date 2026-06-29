@@ -21,6 +21,8 @@ import {
   substations,
   transmissionLines,
 } from "../data/infrastructureLayers";
+import { getStormTracking } from "../services/api";
+import type { StormSystem, StormTrackingSnapshot } from "../types/storm";
 interface WeatherMapProps {
   className?: string;
 }
@@ -125,8 +127,10 @@ const loadIcon = pinIcon("L", "load");
 export default function WeatherMap({
   className = "",
 }: WeatherMapProps) {
-  const [cloudSystemsEnabled, setCloudSystemsEnabled] = useState(true);
   const [hurricaneEnabled, setHurricaneEnabled] = useState(false);
+  const [stormTracking, setStormTracking] = useState<StormTrackingSnapshot | null>(null);
+  const [stormTrackingLoading, setStormTrackingLoading] = useState(false);
+  const [stormTrackingError, setStormTrackingError] = useState<string | null>(null);
 
   const cloudSystemsTileUrl = useMemo(
     () => buildGeoColorUrl(CLOUDS_LATEST),
@@ -137,6 +141,50 @@ export default function WeatherMap({
     [],
   );
   const satelliteBaseUrl = useMemo(() => buildSatelliteBaseUrl(), []);
+
+  useEffect(() => {
+    if (!hurricaneEnabled) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadStormTracking = async () => {
+      setStormTrackingLoading(true);
+      setStormTrackingError(null);
+      try {
+        const payload = await getStormTracking({ forceRefresh: true });
+        if (!cancelled) {
+          setStormTracking(payload);
+        }
+      } catch (cause) {
+        if (!cancelled) {
+          setStormTracking(null);
+          setStormTrackingError(
+            cause instanceof Error
+              ? cause.message
+              : "Storm tracking feed is temporarily unavailable",
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setStormTrackingLoading(false);
+        }
+      }
+    };
+
+    void loadStormTracking();
+    const refreshInterval = window.setInterval(() => {
+      void loadStormTracking();
+    }, 15 * 60 * 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(refreshInterval);
+    };
+  }, [hurricaneEnabled]);
+
+  const activeStorms = stormTracking?.active_storms ?? [];
 
   return (
     <div className={`flex h-full w-full min-w-0 flex-col rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2 shadow-[0_0_40px_rgba(8,145,178,0.08)] ${className}`}>
@@ -156,6 +204,18 @@ export default function WeatherMap({
 
       <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
         <div className="pointer-events-none absolute inset-0 z-[400] border border-cyan-400/5 bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.12),transparent_45%)]" />
+        {hurricaneEnabled ? (
+          <div className="pointer-events-none absolute left-3 top-3 z-[650] rounded-full border border-slate-700 bg-slate-950/85 px-3 py-1 text-[11px] font-semibold text-slate-100 shadow-[0_0_24px_rgba(8,145,178,0.12)]">
+            {stormTrackingLoading
+              ? "Storm feed loading..."
+              : stormTrackingError
+                ? "Storm tracking unavailable"
+                : stormTracking?.status === "available" && activeStorms.length === 0
+                  ? "No active Atlantic storms"
+                  : `${activeStorms.length} active storm${activeStorms.length === 1 ? "" : "s"}`
+            }
+          </div>
+        ) : null}
         <MapContainer
           center={DEFAULT_CENTER}
           zoom={DEFAULT_ZOOM}
@@ -168,10 +228,7 @@ export default function WeatherMap({
           <MapResizeSync />
           <MapViewSync />
           <MapTileStabilizer />
-          <MapOverlaySync
-            onCloudSystemsChange={setCloudSystemsEnabled}
-            onHurricaneChange={setHurricaneEnabled}
-          />
+          <MapOverlaySync onHurricaneChange={setHurricaneEnabled} />
 
           <LayersControl position="topright">
             <LayersControl.BaseLayer name="OpenStreetMap">
@@ -192,7 +249,7 @@ export default function WeatherMap({
               />
             </LayersControl.BaseLayer>
 
-            <LayersControl.Overlay checked={cloudSystemsEnabled} name={CLOUD_SYSTEMS_LAYER_NAME}>
+            <LayersControl.Overlay checked name={CLOUD_SYSTEMS_LAYER_NAME}>
               <LayerGroup>
                 {cloudSystemsTileUrl ? (
                   <TileLayer
@@ -318,7 +375,84 @@ export default function WeatherMap({
             </LayersControl.Overlay>
 
             <LayersControl.Overlay checked={hurricaneEnabled} name="Hurricane / Tropical Storm Tracking">
-              <LayerGroup />
+              <LayerGroup>
+                {activeStorms.map((storm) => {
+                  const position = getStormPosition(storm);
+                  if (!position) {
+                    return null;
+                  }
+
+                  const palette = getStormPalette(storm.classification);
+                  const radius = getStormRadius(storm.intensity_knots);
+                  const title = storm.name ?? storm.classification_label ?? "Active Storm";
+
+                  return (
+                    <CircleMarker
+                      key={storm.id}
+                      center={position}
+                      radius={radius}
+                      pathOptions={{
+                        color: palette.stroke,
+                        fillColor: palette.fill,
+                        fillOpacity: 0.45,
+                        weight: 2,
+                      }}
+                    >
+                      <Tooltip sticky>{title}</Tooltip>
+                      <Popup>
+                        <div className="space-y-2 text-sm">
+                          <div>
+                            <p className="font-semibold">{title}</p>
+                            <p className="text-slate-500">
+                              {storm.classification_label ?? storm.classification ?? "Storm"}
+                              {storm.basin ? ` · ${storm.basin}` : ""}
+                            </p>
+                          </div>
+                          <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-slate-700">
+                            <dt className="font-medium">Intensity</dt>
+                            <dd>{storm.intensity_knots != null ? `${storm.intensity_knots.toFixed(0)} kt` : "--"}</dd>
+                            <dt className="font-medium">Pressure</dt>
+                            <dd>{storm.pressure_mb != null ? `${storm.pressure_mb.toFixed(0)} mb` : "--"}</dd>
+                            <dt className="font-medium">Movement</dt>
+                            <dd>
+                              {storm.movement_direction_deg != null
+                                ? `${storm.movement_direction_deg.toFixed(0)}°`
+                                : "--"}
+                              {storm.movement_speed_mph != null ? ` at ${storm.movement_speed_mph.toFixed(0)} mph` : ""}
+                            </dd>
+                            <dt className="font-medium">Position</dt>
+                            <dd>
+                              {storm.latitude ?? "--"} {storm.longitude ?? ""}
+                            </dd>
+                          </dl>
+                          <div className="flex flex-wrap gap-2">
+                            {storm.public_advisory?.url ? (
+                              <a
+                                className="rounded-full border border-cyan-600/30 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-semibold text-cyan-900 hover:bg-cyan-500/20"
+                                href={storm.public_advisory.url}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Public Advisory
+                              </a>
+                            ) : null}
+                            {storm.forecast_graphics?.url ? (
+                              <a
+                                className="rounded-full border border-slate-300 bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-900 hover:bg-slate-200"
+                                href={storm.forecast_graphics.url}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Forecast Graphics
+                              </a>
+                            ) : null}
+                          </div>
+                        </div>
+                      </Popup>
+                    </CircleMarker>
+                  );
+                })}
+              </LayerGroup>
             </LayersControl.Overlay>
           </LayersControl>
 
@@ -328,28 +462,75 @@ export default function WeatherMap({
   );
 }
 
+function getStormPalette(classification?: string | null) {
+  const normalized = (classification ?? "").trim().toUpperCase();
+  if (normalized.includes("HURRICANE") || normalized === "HU") {
+    return { stroke: "#ef4444", fill: "#f97316" };
+  }
+  if (normalized.includes("STORM") || normalized === "TS" || normalized === "STS") {
+    return { stroke: "#f59e0b", fill: "#fb7185" };
+  }
+  if (normalized.includes("DEPRESSION") || normalized === "TD") {
+    return { stroke: "#60a5fa", fill: "#38bdf8" };
+  }
+  if (normalized === "PTC") {
+    return { stroke: "#a855f7", fill: "#c084fc" };
+  }
+  return { stroke: "#22d3ee", fill: "#06b6d4" };
+}
+
+function getStormRadius(intensityKnots?: number | null) {
+  const intensity = intensityKnots ?? 0;
+  return Math.max(7, Math.min(18, 7 + intensity / 10));
+}
+
+function getStormPosition(storm: StormSystem): [number, number] | null {
+  if (storm.latitude_numeric != null && storm.longitude_numeric != null) {
+    return [storm.latitude_numeric, storm.longitude_numeric];
+  }
+
+  const latitude = parseStormCoordinate(storm.latitude);
+  const longitude = parseStormCoordinate(storm.longitude);
+  if (latitude == null || longitude == null) {
+    return null;
+  }
+
+  return [latitude, longitude];
+}
+
+function parseStormCoordinate(value?: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim().toUpperCase();
+  const match = trimmed.match(/^([0-9]+(?:\.[0-9]+)?)([NSEW])$/);
+  if (!match) {
+    const numeric = Number(trimmed);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+
+  const magnitude = Number(match[1]);
+  if (!Number.isFinite(magnitude)) {
+    return null;
+  }
+
+  const direction = match[2];
+  return direction === "S" || direction === "W" ? -magnitude : magnitude;
+}
+
 function MapOverlaySync({
-  onCloudSystemsChange,
   onHurricaneChange,
 }: {
-  onCloudSystemsChange: (enabled: boolean) => void;
   onHurricaneChange: (enabled: boolean) => void;
 }) {
   useMapEvents({
     overlayadd(event) {
-      if (event.name === CLOUD_SYSTEMS_LAYER_NAME) {
-        onCloudSystemsChange(true);
-      }
-
       if (event.name === "Hurricane / Tropical Storm Tracking") {
         onHurricaneChange(true);
       }
     },
     overlayremove(event) {
-      if (event.name === CLOUD_SYSTEMS_LAYER_NAME) {
-        onCloudSystemsChange(false);
-      }
-
       if (event.name === "Hurricane / Tropical Storm Tracking") {
         onHurricaneChange(false);
       }

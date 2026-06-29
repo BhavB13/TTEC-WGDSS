@@ -156,6 +156,9 @@ export default function Dashboard() {
       lastUpdated={weather.timestamp}
       systemStatus={systemStatus}
       gridStatus={grid.grid_status}
+      weatherStatus={dataQuality.weather_status}
+      forecastStatus={dataQuality.weather_status}
+      scenarioLabel={calibration?.selected_scenario_label ?? "Typical Day"}
       dataQuality={dataQuality}
     >
       <div className="grid h-auto min-h-0 w-full min-w-0 gap-3 xl:h-full xl:grid-cols-[clamp(300px,28vw,390px)_minmax(0,1fr)] xl:items-stretch">
@@ -179,7 +182,6 @@ export default function Dashboard() {
                     recommendation={recommendation}
                     forecastItems={upcomingForecastItems}
                     calibration={calibration}
-                    dataQuality={dataQuality}
                   />
                 </WorkspacePage>
               ) : null}
@@ -190,7 +192,6 @@ export default function Dashboard() {
                     grid={grid}
                     probability={probability}
                     recommendation={recommendation}
-                    lastUpdated={weather.timestamp}
                     calibration={calibration}
                   />
                 </WorkspacePage>
@@ -236,7 +237,6 @@ export default function Dashboard() {
                 <WorkspacePage>
                   <AnalyticsTab
                     grid={grid}
-                    weather={weather}
                     probability={probability}
                     recommendation={recommendation}
                     calibration={calibration}
@@ -256,12 +256,18 @@ function Shell({
   lastUpdated,
   systemStatus,
   gridStatus,
+  weatherStatus,
+  forecastStatus,
+  scenarioLabel,
   dataQuality,
 }: {
   children?: ReactNode;
   lastUpdated: string | null;
   systemStatus: string;
   gridStatus?: string;
+  weatherStatus?: string;
+  forecastStatus?: string;
+  scenarioLabel?: string;
   dataQuality?: DashboardSnapshot["data_quality"] | null;
 }) {
   return (
@@ -270,6 +276,9 @@ function Shell({
         lastUpdated={lastUpdated}
         systemStatus={systemStatus}
         gridStatus={gridStatus}
+        weatherStatus={weatherStatus}
+        forecastStatus={forecastStatus}
+        scenarioLabel={scenarioLabel}
         dataQuality={dataQuality}
       />
       <main className="flex w-full min-w-0 flex-1 min-h-0 overflow-visible px-4 py-2.5 lg:px-6 xl:overflow-hidden">
@@ -334,7 +343,6 @@ function HomeTab({
   recommendation,
   forecastItems,
   calibration,
-  dataQuality,
 }: {
   grid: DashboardSnapshot["grid"];
   weather: DashboardSnapshot["weather"];
@@ -342,7 +350,6 @@ function HomeTab({
   recommendation: DashboardSnapshot["recommendation"];
   forecastItems: ForecastData[];
   calibration: CalibrationSnapshot | null;
-  dataQuality: DashboardSnapshot["data_quality"];
 }) {
   return (
     <>
@@ -352,21 +359,6 @@ function HomeTab({
         <SummaryTile label="Reserve Margin" value={`${grid.reserve_margin_percent.toFixed(1)}%`} tone="amber" />
         <SummaryTile label="Probability" value={probability.probability_score.toFixed(2)} tone="rose" />
         <SummaryTile label="Action" value={recommendation.recommendation} tone="slate" compactValue />
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        <StatusChip
-          label="Weather"
-          value={dataQuality.weather_status}
-          tone={dataQuality.is_stale || dataQuality.fallback_used ? "amber" : "emerald"}
-        />
-        <StatusChip label="Forecast" value={dataQuality.weather_status} tone="cyan" />
-        <StatusChip label="Grid" value={dataQuality.grid_status} tone="amber" />
-        <StatusChip
-          label="Scenario"
-          value={calibration?.selected_scenario_label ?? "Typical"}
-          tone="slate"
-        />
       </div>
 
       <div className="grid min-h-0 flex-1 items-stretch gap-2.5 xl:grid-cols-2">
@@ -468,13 +460,11 @@ function OperationsTab({
   grid,
   probability,
   recommendation,
-  lastUpdated,
   calibration,
 }: {
   grid: DashboardSnapshot["grid"];
   probability: DashboardSnapshot["probability"];
   recommendation: DashboardSnapshot["recommendation"];
-  lastUpdated: string | null;
   calibration: CalibrationSnapshot | null;
 }) {
   return (
@@ -498,15 +488,6 @@ function OperationsTab({
           tone="slate"
           compactValue
         />
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        <StatusChip
-          label="Scenario"
-          value={calibration?.selected_scenario_label ?? "Typical"}
-          tone="slate"
-        />
-        <StatusChip label="Last Updated" value={formatTimestamp(lastUpdated)} tone="cyan" />
       </div>
 
       <div className="grid min-h-0 flex-1 gap-2.5 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
@@ -652,13 +633,11 @@ function AnalyticsTab({
   grid,
   probability,
   recommendation,
-  weather,
   calibration,
 }: {
   grid: DashboardSnapshot["grid"];
   probability: DashboardSnapshot["probability"];
   recommendation: DashboardSnapshot["recommendation"];
-  weather: DashboardSnapshot["weather"];
   calibration: CalibrationSnapshot | null;
 }) {
   return (
@@ -670,48 +649,52 @@ function AnalyticsTab({
         <MiniMetric label="Action" value={recommendation.recommendation} />
       </div>
 
-      <div className="grid min-h-0 flex-1 gap-2.5 xl:grid-cols-2">
-        <GridStatusCard gridStatus={grid} className="h-full min-h-0" />
-        <CurrentConditions weather={weather} className="h-full min-h-0 w-full min-w-0" />
-        <PanelCard title="Live Snapshot" className="h-full min-h-0 xl:col-span-2">
-          <div className="grid gap-2 text-sm text-slate-200 sm:grid-cols-2 xl:grid-cols-4">
-            <MiniMetric label="Probability" value={probability.probability_score.toFixed(2)} />
-            <MiniMetric label="Risk Level" value={probability.risk_level} />
-            <MiniMetric label="Action" value={recommendation.recommendation} />
-            <MiniMetric label="Last Updated" value={formatTimestamp(weather.timestamp)} />
-          </div>
-        </PanelCard>
-        <PanelCard title="Calibration Summary" className="h-full min-h-0 xl:col-span-2">
-          <div className="grid h-full min-h-0 gap-2 xl:grid-cols-[minmax(0,0.42fr)_minmax(0,0.58fr)]">
-            <div className="grid gap-2 sm:grid-cols-2">
-              <MiniMetric
-                label="Selected Scenario"
-                value={calibration?.selected_scenario_label ?? "Typical Day"}
-              />
-              <MiniMetric
-                label="SCADA Temp"
-                value={
-                  calibration?.selected_temperature_c != null
-                    ? `${calibration.selected_temperature_c.toFixed(1)}°C`
-                    : `${weather.temperature_c.toFixed(1)}°C`
-                }
-              />
-              <MiniMetric
-                label="Source"
-                value={calibration?.source_archive?.split("\\").pop()?.split("/").pop() ?? "Live Snapshot"}
-              />
-              <MiniMetric
-                label="Selection"
-                value={calibration?.selection_reason ?? "Calibration data unavailable"}
+      <div className="grid min-h-0 flex-1 gap-2.5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <div className="grid min-h-0 gap-2.5">
+          <GridStatusCard gridStatus={grid} className="h-full min-h-0" />
+          <PanelCard title="Live Snapshot" className="h-full min-h-0">
+            <div className="grid gap-2 text-sm text-slate-200 sm:grid-cols-2">
+              <MiniMetric label="Probability" value={probability.probability_score.toFixed(2)} />
+              <MiniMetric label="Risk Level" value={probability.risk_level} />
+              <MiniMetric label="Action" value={recommendation.recommendation} />
+              <MiniMetric label="Last Updated" value={formatTimestamp(grid.timestamp)} />
+            </div>
+          </PanelCard>
+        </div>
+
+        <div className="grid min-h-0 gap-2.5">
+          <PanelCard title="Calibration Summary" className="h-full min-h-0">
+            <div className="grid h-full min-h-0 gap-2">
+              <div className="grid gap-2 sm:grid-cols-2">
+                <MiniMetric
+                  label="Selected Scenario"
+                  value={calibration?.selected_scenario_label ?? "Typical Day"}
+                />
+                <MiniMetric
+                  label="SCADA Temp"
+                  value={
+                    calibration?.selected_temperature_c != null
+                      ? `${calibration.selected_temperature_c.toFixed(1)}°C`
+                      : "Unavailable"
+                  }
+                />
+                <MiniMetric
+                  label="Source"
+                  value={calibration?.source_archive?.split("\\").pop()?.split("/").pop() ?? "Live Snapshot"}
+                />
+                <MiniMetric
+                  label="Selection"
+                  value={calibration?.selection_reason ?? "Calibration data unavailable"}
+                />
+              </div>
+              <ScenarioComparisonChart
+                scenarios={calibration?.scenarios ?? []}
+                selectedScenarioKey={calibration?.selected_scenario_key}
+                className="min-h-[10rem]"
               />
             </div>
-            <ScenarioComparisonChart
-              scenarios={calibration?.scenarios ?? []}
-              selectedScenarioKey={calibration?.selected_scenario_key}
-              className="min-h-[16rem]"
-            />
-          </div>
-        </PanelCard>
+          </PanelCard>
+        </div>
       </div>
     </div>
   );
@@ -990,36 +973,11 @@ function SummaryTile({
       </p>
       <p
         className={`mt-2 min-w-0 break-words font-semibold leading-tight text-white ${
-          compactValue ? "truncate text-[0.88rem]" : "text-[1.15rem] xl:text-[1.25rem]"
+          compactValue ? "text-[0.82rem] leading-snug" : "text-[1.15rem] xl:text-[1.25rem]"
         }`}
       >
         {value}
       </p>
-    </div>
-  );
-}
-
-function StatusChip({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: "cyan" | "emerald" | "amber" | "rose" | "slate";
-}) {
-  const toneClasses: Record<"cyan" | "emerald" | "amber" | "rose" | "slate", string> = {
-    cyan: "border-cyan-500/20 bg-cyan-500/10 text-cyan-100",
-    emerald: "border-emerald-500/20 bg-emerald-500/10 text-emerald-100",
-    amber: "border-amber-500/20 bg-amber-500/10 text-amber-100",
-    rose: "border-rose-500/20 bg-rose-500/10 text-rose-100",
-    slate: "border-slate-700/80 bg-slate-950/55 text-slate-100",
-  };
-
-  return (
-    <div className={`inline-flex min-h-[3.25rem] flex-col items-center justify-center rounded-2xl border px-3 py-2 text-center text-[11px] font-semibold ${toneClasses[tone]}`}>
-      <span className="text-[10px] uppercase tracking-[0.18em] text-slate-300">{label}</span>
-      <span className="mt-1 break-words text-[0.84rem]">{value}</span>
     </div>
   );
 }

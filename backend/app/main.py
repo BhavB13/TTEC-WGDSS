@@ -10,6 +10,7 @@ from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.dashboard import router as dashboard_router
+from app.api.storm import router as storm_router
 from app.api.router import api_router
 from app.core.config import settings
 from app.core.logging_config import configure_logging
@@ -87,6 +88,12 @@ app.include_router(
     dashboard_router,
     prefix="/api",
     tags=["dashboard"],
+)
+
+app.include_router(
+    storm_router,
+    prefix="/api",
+    tags=["storm"],
 )
 
 

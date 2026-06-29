@@ -6,6 +6,7 @@ import type {
   RecommendationData,
   WeatherData,
 } from "../types/dashboard";
+import type { StormTrackingSnapshot } from "../types/storm";
 
 const API_BASE_URL = (
   (
@@ -15,6 +16,7 @@ const API_BASE_URL = (
   ).env?.VITE_API_BASE_URL ?? ""
 ).replace(/\/$/, "");
 const DASHBOARD_SNAPSHOT_PATH = "/api/dashboard/snapshot";
+const STORM_TRACKING_PATH = "/api/storm/tracking";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
@@ -89,4 +91,14 @@ export async function getRecommendation(): Promise<RecommendationData> {
 export async function getProbability(): Promise<ProbabilityData> {
   const snapshot = await getDashboardSnapshot();
   return snapshot.probability;
+}
+
+export async function getStormTracking(options?: {
+  forceRefresh?: boolean;
+}): Promise<StormTrackingSnapshot> {
+  const forceRefresh = options?.forceRefresh ?? true;
+  const path = forceRefresh
+    ? `${STORM_TRACKING_PATH}?force_refresh=true`
+    : STORM_TRACKING_PATH;
+  return requestJson<StormTrackingSnapshot>(path);
 }
