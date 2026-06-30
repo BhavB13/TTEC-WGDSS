@@ -5,6 +5,7 @@ import {
   LayersControl,
   MapContainer,
   Marker,
+  Pane,
   Popup,
   Polyline,
   TileLayer,
@@ -21,6 +22,7 @@ import {
   substations,
   transmissionLines,
 } from "../data/infrastructureLayers";
+import { trinidadAndTobagoBoundary } from "../data/trinidadAndTobagoBoundary";
 import { getStormTracking } from "../services/api";
 import type { StormSystem, StormTrackingSnapshot } from "../types/storm";
 interface WeatherMapProps {
@@ -431,6 +433,37 @@ export default function WeatherMap({
             </LayersControl.Overlay>
           </LayersControl>
 
+          <Pane
+            name="country-boundary"
+            style={{ zIndex: 550, pointerEvents: "none" }}
+          >
+            {trinidadAndTobagoBoundary.map((ring, index) => (
+              <LayerGroup key={`country-boundary-${index}`}>
+                <Polyline
+                  positions={ring}
+                  interactive={false}
+                  pathOptions={{
+                    color: "#020617",
+                    weight: 6,
+                    opacity: 0.88,
+                    lineCap: "round",
+                    lineJoin: "round",
+                  }}
+                />
+                <Polyline
+                  positions={ring}
+                  interactive={false}
+                  pathOptions={{
+                    color: "#67e8f9",
+                    weight: 2.5,
+                    opacity: 1,
+                    lineCap: "round",
+                    lineJoin: "round",
+                  }}
+                />
+              </LayerGroup>
+            ))}
+          </Pane>
         </MapContainer>
       </div>
     </div>
