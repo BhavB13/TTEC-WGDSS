@@ -129,8 +129,6 @@ export default function WeatherMap({
 }: WeatherMapProps) {
   const [hurricaneEnabled, setHurricaneEnabled] = useState(false);
   const [stormTracking, setStormTracking] = useState<StormTrackingSnapshot | null>(null);
-  const [stormTrackingLoading, setStormTrackingLoading] = useState(false);
-  const [stormTrackingError, setStormTrackingError] = useState<string | null>(null);
 
   const cloudSystemsTileUrl = useMemo(
     () => buildGeoColorUrl(CLOUDS_LATEST),
@@ -150,8 +148,6 @@ export default function WeatherMap({
     let cancelled = false;
 
     const loadStormTracking = async () => {
-      setStormTrackingLoading(true);
-      setStormTrackingError(null);
       try {
         const payload = await getStormTracking({ forceRefresh: true });
         if (!cancelled) {
@@ -160,15 +156,6 @@ export default function WeatherMap({
       } catch (cause) {
         if (!cancelled) {
           setStormTracking(null);
-          setStormTrackingError(
-            cause instanceof Error
-              ? cause.message
-              : "Storm tracking feed is temporarily unavailable",
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setStormTrackingLoading(false);
         }
       }
     };
@@ -204,18 +191,6 @@ export default function WeatherMap({
 
       <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
         <div className="pointer-events-none absolute inset-0 z-[400] border border-cyan-400/5 bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.12),transparent_45%)]" />
-        {hurricaneEnabled ? (
-          <div className="pointer-events-none absolute left-3 top-3 z-[650] rounded-full border border-slate-700 bg-slate-950/85 px-3 py-1 text-[11px] font-semibold text-slate-100 shadow-[0_0_24px_rgba(8,145,178,0.12)]">
-            {stormTrackingLoading
-              ? "Storm feed loading..."
-              : stormTrackingError
-                ? "Storm tracking unavailable"
-                : stormTracking?.status === "available" && activeStorms.length === 0
-                  ? "No active Atlantic storms"
-                  : `${activeStorms.length} active storm${activeStorms.length === 1 ? "" : "s"}`
-            }
-          </div>
-        ) : null}
         <MapContainer
           center={DEFAULT_CENTER}
           zoom={DEFAULT_ZOOM}

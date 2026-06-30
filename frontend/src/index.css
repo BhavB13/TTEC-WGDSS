@@ -47,11 +47,13 @@ body {
   overflow: hidden;
   box-sizing: border-box;
   gap: 0.625rem;
+  animation: dashboard-rise 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .workspace-page > * {
   width: 100%;
   min-width: 0;
+  animation: dashboard-rise 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 /* Home decision bubbles need to wrap cleanly on narrower laptop widths. */
 .home-weather-card > *,
@@ -79,4 +81,60 @@ body {
 .leaflet-container .leaflet-overlay-pane img {
   image-rendering: auto;
   backface-visibility: hidden;
+}
+
+.workspace-page .rounded-2xl,
+.workspace-page .rounded-xl,
+.workspace-page button,
+header .rounded-xl,
+header .rounded-full {
+  animation: dashboard-rise 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    border-color 180ms ease,
+    background-color 180ms ease,
+    color 180ms ease,
+    opacity 180ms ease;
+}
+
+.workspace-page .rounded-2xl:hover,
+.workspace-page .rounded-xl:hover,
+header .rounded-xl:hover,
+header .rounded-full:hover {
+  transform: translateY(-1px);
+}
+
+@keyframes dashboard-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+    filter: saturate(0.94);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: saturate(1);
+  }
+}
+
+.dashboard-enter {
+  animation: dashboard-rise 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.dashboard-enter-slow {
+  animation: dashboard-rise 560ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.dashboard-hover-lift {
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    border-color 180ms ease,
+    background-color 180ms ease;
+}
+
+.dashboard-hover-lift:hover {
+  transform: translateY(-1px);
 }
