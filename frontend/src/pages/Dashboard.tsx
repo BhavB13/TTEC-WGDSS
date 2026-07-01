@@ -2,10 +2,8 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 
 import CurrentConditions from "../components/CurrentConditions";
 import DemandForecastChart from "../components/DemandForecastChart";
-import GridStatusCard from "../components/GridStatusCard";
 import Header from "../components/Header";
 import ProbabilityGauge from "../components/ProbabilityGauge";
-import RecommendationCard from "../components/RecommendationCard";
 import ScenarioComparisonChart from "../components/ScenarioComparisonChart";
 import WeatherMap from "../components/WeatherMap";
 import { getDashboardSnapshot } from "../services/api";
@@ -190,9 +188,6 @@ export default function Dashboard() {
                 <WorkspacePage>
                   <OperationsTab
                     grid={grid}
-                    probability={probability}
-                    recommendation={recommendation}
-                    calibration={calibration}
                   />
                 </WorkspacePage>
               ) : null}
@@ -212,7 +207,6 @@ export default function Dashboard() {
                   <DemandForecastTab
                     grid={grid}
                     probability={probability}
-                    recommendation={recommendation}
                     calibration={calibration}
                   />
                 </WorkspacePage>
@@ -220,15 +214,15 @@ export default function Dashboard() {
 
               {activeTab === "riskGauge" ? (
                 <WorkspacePage>
-                  <RiskGaugeTab grid={grid} probability={probability} />
+                  <RiskGaugeTab probability={probability} />
                 </WorkspacePage>
               ) : null}
 
               {activeTab === "operationalGuidance" ? (
                 <WorkspacePage>
                   <OperationalGuidanceTab
+                    grid={grid}
                     recommendation={recommendation}
-                    forecastItems={upcomingForecastItems}
                   />
                 </WorkspacePage>
               ) : null}
@@ -236,9 +230,6 @@ export default function Dashboard() {
               {activeTab === "analytics" ? (
                 <WorkspacePage>
                   <AnalyticsTab
-                    grid={grid}
-                    probability={probability}
-                    recommendation={recommendation}
                     calibration={calibration}
                   />
                 </WorkspacePage>
@@ -458,15 +449,48 @@ function WeatherOverviewCard({
 
 function OperationsTab({
   grid,
-  probability,
-  recommendation,
-  calibration,
 }: {
   grid: DashboardSnapshot["grid"];
-  probability: DashboardSnapshot["probability"];
-  recommendation: DashboardSnapshot["recommendation"];
-  calibration: CalibrationSnapshot | null;
 }) {
+  const generationBalance =
+    grid.current_generation_mw - grid.current_demand_mw;
+  const capacityHeadroom =
+    grid.total_available_capacity_mw - grid.current_demand_mw;
+  const generationUnits = Array.isArray(grid.generation_units)
+    ? grid.generation_units
+    : [];
+  const stationDispatch = Array.from(
+    generationUnits.reduce(
+      (stations, unit) => {
+        const existing = stations.get(unit.station_name) ?? {
+          stationName: unit.station_name,
+          outputMw: 0,
+          availableMw: 0,
+          onlineUnits: 0,
+          totalUnits: 0,
+        };
+        existing.outputMw += unit.current_output_mw;
+        existing.availableMw += unit.available_capacity_mw;
+        existing.totalUnits += 1;
+        if (unit.status.toUpperCase() === "ONLINE") {
+          existing.onlineUnits += 1;
+        }
+        stations.set(unit.station_name, existing);
+        return stations;
+      },
+      new Map<
+        string,
+        {
+          stationName: string;
+          outputMw: number;
+          availableMw: number;
+          onlineUnits: number;
+          totalUnits: number;
+        }
+      >(),
+    ).values(),
+  );
+
   return (
     <>
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
@@ -477,23 +501,154 @@ function OperationsTab({
           tone="emerald"
         />
         <SummaryTile
+          label="Available Capacity"
+          value={`${grid.total_available_capacity_mw.toFixed(0)} MW`}
+          tone="cyan"
+        />
+        <SummaryTile
           label="Reserve Margin"
           value={`${grid.reserve_margin_percent.toFixed(1)}%`}
           tone="amber"
         />
-        <SummaryTile label="Probability Score" value={probability.probability_score.toFixed(2)} tone="rose" />
         <SummaryTile
-          label="Recommended Action"
-          value={recommendation.recommendation}
-          tone="slate"
+          label="Grid Status"
+          value={grid.grid_status}
+          tone={grid.grid_status === "NORMAL" ? "emerald" : "rose"}
           compactValue
         />
       </div>
 
-      <div className="grid min-h-0 flex-1 gap-2.5 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-        <RecommendationCard recommendation={recommendation} className="h-full min-h-0 w-full min-w-0" />
+      <div className="grid min-h-0 flex-1 gap-2.5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <PanelCard
+          title="Station Dispatch"
+          className="h-full min-h-0 w-full min-w-0"
+        >
+          <div className="grid h-full min-h-0 auto-rows-fr gap-2 overflow-auto">
+            {stationDispatch.length > 0 ? (
+              stationDispatch.map((station) => {
+                const utilization =
+                  station.availableMw > 0
+                    ? (station.outputMw / station.availableMw) * 100
+                    : 0;
+                const stationHeadroom =
+                  station.availableMw - station.outputMw;
+                return (
+                  <div
+                    key={station.stationName}
+                    className="grid min-h-[6.5rem] min-w-0 grid-rows-[auto_auto_auto] content-center gap-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3 shadow-inner shadow-black/20"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="min-w-0 break-words text-sm font-semibold text-white">
+                        {station.stationName}
+                      </p>
+                      <span className="shrink-0 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[9px] font-semibold text-emerald-200">
+                        {station.onlineUnits}/{station.totalUnits} online
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-4 gap-2 text-center">
+                      <StationDatum label="Output" value={`${station.outputMw.toFixed(0)} MW`} />
+                      <StationDatum label="Available" value={`${station.availableMw.toFixed(0)} MW`} />
+                      <StationDatum label="Headroom" value={`${stationHeadroom.toFixed(0)} MW`} />
+                      <StationDatum label="Utilization" value={`${utilization.toFixed(0)}%`} />
+                    </div>
+                    <UtilizationBar value={utilization} />
+                  </div>
+                );
+              })
+            ) : (
+              <div className="flex min-h-[8rem] items-center justify-center rounded-xl border border-dashed border-slate-700 px-4 text-center text-sm text-slate-400 sm:col-span-2">
+                Station dispatch data is unavailable.
+              </div>
+            )}
+          </div>
+        </PanelCard>
 
-        <GridStatusCard gridStatus={grid} className="h-full min-h-0" />
+        <PanelCard
+          title="Unit Readiness"
+          className="h-full min-h-0 w-full min-w-0"
+        >
+          <div className="flex h-full min-h-0 flex-col gap-2">
+            <div className="grid grid-cols-3 gap-2">
+              <MiniMetric
+                label="Capacity Headroom"
+                value={formatSignedMegawatts(capacityHeadroom)}
+              />
+              <MiniMetric
+                label="Generation Balance"
+                value={formatSignedMegawatts(generationBalance)}
+              />
+              <MiniMetric label="Demand Period" value={grid.demand_period} />
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-slate-800 bg-slate-950/45">
+              {generationUnits.length > 0 ? (
+                <div className="grid h-full min-h-0 auto-rows-fr divide-y divide-slate-800">
+                  {generationUnits.map((unit) => {
+                    const utilization =
+                      unit.available_capacity_mw > 0
+                        ? (unit.current_output_mw / unit.available_capacity_mw) * 100
+                        : 0;
+                    const headroom =
+                      unit.available_capacity_mw - unit.current_output_mw;
+
+                    return (
+                      <div
+                        key={`${unit.station_name}-${unit.unit_name}`}
+                        className="grid min-h-[5rem] min-w-0 grid-cols-[minmax(0,1fr)_minmax(14rem,0.8fr)] items-center gap-4 px-3 py-2"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="truncate text-[0.78rem] font-semibold text-white">
+                              {unit.station_name} · {unit.unit_name}
+                            </p>
+                            <span
+                              className={`shrink-0 rounded-full border px-2 py-0.5 text-[8px] font-semibold uppercase tracking-[0.08em] ${
+                                unit.is_dispatchable
+                                  ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200"
+                                  : "border-slate-700 bg-slate-900 text-slate-400"
+                              }`}
+                            >
+                              {unit.is_dispatchable ? "Dispatchable" : "Fixed"}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-[9px] uppercase tracking-[0.1em] text-slate-500">
+                            {unit.fuel_type} · {unit.status}
+                          </p>
+                          <div className="mt-2">
+                            <UtilizationBar value={utilization} />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2 text-center">
+                          <StationDatum
+                            label="Output"
+                            value={`${unit.current_output_mw.toFixed(0)} MW`}
+                          />
+                          <StationDatum
+                            label="Headroom"
+                            value={`${headroom.toFixed(0)} MW`}
+                          />
+                          <StationDatum
+                            label="Loading"
+                            value={`${utilization.toFixed(0)}%`}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="flex h-full min-h-[5rem] items-center justify-center px-4 text-center text-sm text-slate-400">
+                  Unit-level dispatch data is unavailable.
+                </div>
+              )}
+            </div>
+
+            <p className="truncate px-1 text-center text-[10px] text-slate-500">
+              Source: {grid.source_provider}
+            </p>
+          </div>
+        </PanelCard>
       </div>
     </>
   );
@@ -517,18 +672,20 @@ function WeatherTab({
       />
       <PanelCard title="Next 6 Hours" className="h-full min-h-0 w-full min-w-0">
         <div className="flex h-full min-h-0 flex-col gap-2">
-          <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2 border-b border-slate-800 px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-slate-400">
-            <span>Time</span>
-            <span className="text-right">Temp</span>
-            <span className="text-right">Rain</span>
-            <span className="text-right">Cloud</span>
-          </div>
-
-          <div className="grid min-h-0 flex-1 auto-rows-fr gap-2 overflow-auto sm:grid-cols-2 xl:grid-cols-3">
-            {forecastItems.map((period) => (
-              <ForecastBlock key={period.forecast_timestamp} period={period} />
-            ))}
-          </div>
+          {forecastItems.length > 0 ? (
+            <div className="grid min-h-0 flex-1 auto-rows-fr gap-1.5 overflow-auto">
+              {forecastItems.map((period) => (
+                <GuidanceForecastRow
+                  key={period.forecast_timestamp}
+                  period={period}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-slate-700 bg-slate-950/40 px-4 text-center text-sm text-slate-400">
+              Six-hour weather guidance is temporarily unavailable.
+            </div>
+          )}
 
           <ForecastAttribution
             forecastItems={forecastItems}
@@ -543,14 +700,15 @@ function WeatherTab({
 function DemandForecastTab({
   grid,
   probability,
-  recommendation,
   calibration,
 }: {
   grid: DashboardSnapshot["grid"];
   probability: DashboardSnapshot["probability"];
-  recommendation: DashboardSnapshot["recommendation"];
   calibration: CalibrationSnapshot | null;
 }) {
+  const demandDelta30 = probability.forecast_demand_30m - grid.current_demand_mw;
+  const demandDelta60 = probability.forecast_demand_60m - grid.current_demand_mw;
+
   return (
     <div className="grid h-full min-h-0 w-full min-w-0 grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)]">
       <DemandForecastChart
@@ -562,13 +720,30 @@ function DemandForecastTab({
       <PanelCard title="Demand Snapshot" className="h-full min-h-0 w-full min-w-0">
         <div className="grid h-full grid-cols-2 gap-1.5 text-sm text-slate-200">
           <MiniMetric label="Current Demand" value={`${grid.current_demand_mw.toFixed(0)} MW`} />
-          <MiniMetric label="Current Generation" value={`${grid.current_generation_mw.toFixed(0)} MW`} />
-          <MiniMetric label="Available Capacity" value={`${grid.total_available_capacity_mw.toFixed(0)} MW`} />
-          <MiniMetric label="Reserve Margin" value={`${grid.reserve_margin_percent.toFixed(1)}%`} />
           <MiniMetric label="30m Forecast" value={`${probability.forecast_demand_30m.toFixed(0)} MW`} />
+          <MiniMetric label="30m Change" value={formatSignedMegawatts(demandDelta30)} />
           <MiniMetric label="60m Forecast" value={`${probability.forecast_demand_60m.toFixed(0)} MW`} />
-          <MiniMetric label="Risk Level" value={probability.risk_level} />
-          <MiniMetric label="Action" value={recommendation.recommendation} />
+          <MiniMetric label="60m Change" value={formatSignedMegawatts(demandDelta60)} />
+          <MiniMetric
+            label="Profile Scenario"
+            value={calibration?.selected_scenario_label ?? "Typical Day"}
+          />
+          <MiniMetric
+            label="Profile Demand"
+            value={
+              calibration?.selected_demand_mw != null
+                ? `${calibration.selected_demand_mw.toFixed(0)} MW`
+                : "Unavailable"
+            }
+          />
+          <MiniMetric
+            label="Next Profile Hour"
+            value={
+              calibration?.selected_next_demand_mw != null
+                ? `${calibration.selected_next_demand_mw.toFixed(0)} MW`
+                : "Unavailable"
+            }
+          />
         </div>
       </PanelCard>
     </div>
@@ -576,96 +751,294 @@ function DemandForecastTab({
 }
 
 function RiskGaugeTab({
-  grid,
   probability,
 }: {
-  grid: DashboardSnapshot["grid"];
   probability: DashboardSnapshot["probability"];
 }) {
+  const factors =
+    Array.isArray(probability.factors) && probability.factors.length > 0
+      ? probability.factors
+      : [probability.reason];
+  const driverDirections = factors.map(getRiskDriverDirection);
+  const upwardDrivers = driverDirections.filter(
+    (direction) => direction === "upward",
+  ).length;
+  const downwardDrivers = driverDirections.filter(
+    (direction) => direction === "downward",
+  ).length;
+  const highRiskGap = Math.max(0, 0.7 - probability.probability_score);
+
   return (
-    <div className="grid h-full min-h-0 w-full min-w-0 grid-cols-1 gap-2.5 xl:grid-cols-2">
+    <div className="grid h-full min-h-0 w-full min-w-0 grid-cols-1 gap-2.5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
       <ProbabilityGauge probability={probability} className="h-full min-h-0 w-full min-w-0" />
-      <PanelCard title="Risk Context" className="h-full min-h-0 w-full min-w-0">
-        <div className="grid h-full gap-2 text-sm text-slate-200">
-          <StatusLine label="Risk Level" value={probability.risk_level} />
-          <StatusLine label="Score" value={probability.probability_score.toFixed(2)} />
-          <StatusLine label="30m Demand" value={`${probability.forecast_demand_30m.toFixed(0)} MW`} />
-          <StatusLine label="60m Demand" value={`${probability.forecast_demand_60m.toFixed(0)} MW`} />
-          <StatusLine label="Reason" value={probability.reason} />
-          <StatusLine label="Sensitivity" value={`${grid.reserve_margin_percent.toFixed(1)}% reserve`} />
+      <PanelCard title="Risk Factors" className="h-full min-h-0 w-full min-w-0">
+        <div className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-2">
+          <ol className="grid min-h-0 auto-rows-fr gap-2 overflow-auto sm:grid-cols-2">
+            {factors.map((factor, index) => {
+              const direction = driverDirections[index];
+              return (
+                <li
+                  key={`${factor}-${index}`}
+                  className="flex min-h-[6rem] flex-col justify-between rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-sm leading-snug text-slate-200"
+                >
+                  <div className="flex items-start gap-3">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-amber-500/30 bg-amber-500/10 text-xs font-semibold text-amber-200">
+                      {index + 1}
+                    </span>
+                    <span className="min-w-0 break-words">{factor}</span>
+                  </div>
+                  <span
+                    className={`mt-3 self-end rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] ${
+                      direction === "downward"
+                        ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200"
+                        : direction === "upward"
+                          ? "border-rose-500/25 bg-rose-500/10 text-rose-200"
+                          : "border-slate-700 bg-slate-900 text-slate-300"
+                    }`}
+                  >
+                    {direction === "downward"
+                      ? "Reduces risk"
+                      : direction === "upward"
+                        ? "Raises risk"
+                        : "Context"}
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+
+          <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
+            <MiniMetric label="Drivers Evaluated" value={`${factors.length}`} />
+            <MiniMetric label="Upward Drivers" value={`${upwardDrivers}`} />
+            <MiniMetric label="Downward Drivers" value={`${downwardDrivers}`} />
+            <MiniMetric
+              label="Gap to High Risk"
+              value={probability.probability_score >= 0.7 ? "At high risk" : highRiskGap.toFixed(2)}
+            />
+          </div>
         </div>
       </PanelCard>
     </div>
   );
+}
+
+function getRiskDriverDirection(
+  factor: string,
+): "upward" | "downward" | "neutral" {
+  const normalized = factor.toLowerCase();
+  if (
+    normalized.includes("decrease") ||
+    normalized.includes("reduced") ||
+    normalized.includes("lower expected")
+  ) {
+    return "downward";
+  }
+  if (
+    normalized.includes("increase") ||
+    normalized.includes("higher") ||
+    normalized.includes("below") ||
+    normalized.includes("high ")
+  ) {
+    return "upward";
+  }
+  return "neutral";
 }
 
 function OperationalGuidanceTab({
+  grid,
   recommendation,
-  forecastItems,
 }: {
+  grid: DashboardSnapshot["grid"];
   recommendation: DashboardSnapshot["recommendation"];
-  forecastItems: ForecastData[];
 }) {
+  const headroom30 =
+    grid.total_available_capacity_mw - recommendation.forecast_demand_30m;
+  const headroom60 =
+    grid.total_available_capacity_mw - recommendation.forecast_demand_60m;
+  const operatorActions = getOperatorActions(recommendation.recommendation);
+
   return (
-    <div className="grid h-full min-h-0 w-full min-w-0 grid-cols-1 gap-2.5 xl:grid-cols-[minmax(0,0.35fr)_minmax(0,0.65fr)]">
-      <RecommendationCard recommendation={recommendation} className="h-full min-h-0 w-full min-w-0" />
-      <PanelCard title="Forecast Context" className="h-full min-h-0 w-full min-w-0">
-        <div className="flex h-full min-h-0 flex-col gap-2">
-          <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2 border-b border-slate-800 px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-slate-400">
-            <span>Time</span>
-            <span className="text-right">Temp</span>
-            <span className="text-right">Rain</span>
-            <span className="text-right">Cloud</span>
-          </div>
-          <div className="grid min-h-0 flex-1 auto-rows-fr gap-2 overflow-auto sm:grid-cols-2 xl:grid-cols-3">
-            {forecastItems.map((period) => (
-              <ForecastBlock key={period.forecast_timestamp} period={period} />
+    <div className="grid h-full min-h-0 w-full min-w-0 gap-2.5 overflow-hidden xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      <div className="grid min-h-0 auto-rows-fr gap-2 overflow-auto rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)] sm:grid-cols-2">
+            {operatorActions.map((action, index) => (
+              <div
+                key={action}
+                className="flex min-h-[4rem] items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2.5 shadow-inner shadow-black/20"
+              >
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-emerald-500/25 bg-emerald-500/10 text-xs font-semibold text-emerald-200">
+                  {index + 1}
+                </span>
+                <p className="min-w-0 break-words text-[0.8rem] font-medium leading-snug text-slate-100">
+                  {action}
+                </p>
+              </div>
             ))}
-          </div>
-          <ForecastAttribution forecastItems={forecastItems} />
-        </div>
-      </PanelCard>
+      </div>
+
+      <div className="grid min-h-0 grid-cols-2 auto-rows-fr gap-2 rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
+            <GuidanceThreshold
+              label="Probability"
+              value={recommendation.probability_score.toFixed(2)}
+              context="High-risk trigger 0.70"
+              healthy={recommendation.probability_score < 0.7}
+            />
+            <GuidanceThreshold
+              label="Reserve"
+              value={`${grid.reserve_margin_percent.toFixed(1)}%`}
+              context="Planning floor 15%"
+              healthy={grid.reserve_margin_percent >= 15}
+            />
+            <GuidanceThreshold
+              label="30m Headroom"
+              value={formatSignedMegawatts(headroom30)}
+              context="Available capacity less forecast"
+              healthy={headroom30 >= 0}
+            />
+            <GuidanceThreshold
+              label="60m Headroom"
+              value={formatSignedMegawatts(headroom60)}
+              context="Available capacity less forecast"
+              healthy={headroom60 >= 0}
+            />
+      </div>
     </div>
   );
 }
 
-function AnalyticsTab({
-  grid,
-  probability,
-  recommendation,
-  calibration,
+function GuidanceThreshold({
+  label,
+  value,
+  context,
+  healthy,
 }: {
-  grid: DashboardSnapshot["grid"];
-  probability: DashboardSnapshot["probability"];
-  recommendation: DashboardSnapshot["recommendation"];
-  calibration: CalibrationSnapshot | null;
+  label: string;
+  value: string;
+  context: string;
+  healthy: boolean;
 }) {
   return (
-    <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-2.5 overflow-hidden">
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        <MiniMetric label="Demand" value={`${grid.current_demand_mw.toFixed(0)} MW`} />
-        <MiniMetric label="Generation" value={`${grid.current_generation_mw.toFixed(0)} MW`} />
-        <MiniMetric label="Probability" value={probability.probability_score.toFixed(2)} />
-        <MiniMetric label="Action" value={recommendation.recommendation} />
+    <div
+      className={`flex min-w-0 flex-col items-center justify-center rounded-xl border px-2 py-2 text-center ${
+        healthy
+          ? "border-emerald-500/20 bg-emerald-500/10"
+          : "border-rose-500/25 bg-rose-500/10"
+      }`}
+    >
+      <p className="text-[9px] uppercase tracking-[0.1em] text-slate-400">{label}</p>
+      <p className={`mt-1 text-sm font-semibold ${healthy ? "text-emerald-100" : "text-rose-100"}`}>
+        {value}
+      </p>
+      <p className="mt-1 break-words text-[9px] leading-tight text-slate-500">
+        {context}
+      </p>
+    </div>
+  );
+}
+
+function getOperatorActions(recommendation: string): string[] {
+  if (recommendation === "START ADDITIONAL TURBINE") {
+    return [
+      "Initiate the approved turbine start sequence.",
+      "Confirm synchronization and expected unit output.",
+      "Recalculate reserve margin after the unit is online.",
+      "Notify the control-room supervisor of dispatch completion.",
+    ];
+  }
+
+  if (recommendation === "MONITOR CONDITIONS") {
+    return [
+      "Maintain current dispatch while monitoring demand movement.",
+      "Confirm an additional dispatchable unit remains start-ready.",
+      "Review reserve and forecast headroom at the next update.",
+      "Escalate if probability reaches 0.70 or reserve falls below 15%.",
+    ];
+  }
+
+  return [
+    "Maintain the current generation commitment.",
+    "Continue routine demand and reserve surveillance.",
+    "Verify dispatchable units remain available.",
+    "Reassess when the next dashboard snapshot arrives.",
+  ];
+}
+
+function GuidanceForecastRow({ period }: { period: ForecastData }) {
+  const verified = (period.source_count ?? 1) > 1;
+
+  return (
+    <div className="grid min-h-[3.75rem] min-w-0 grid-cols-[minmax(7.5rem,1.35fr)_repeat(6,minmax(0,1fr))] items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-950/60 px-2.5 py-1.5 shadow-inner shadow-black/20">
+      <div className="min-w-0">
+        <p className="truncate text-[0.8rem] font-semibold text-white">
+          {formatGuidanceForecastTimestamp(period.forecast_timestamp)}
+        </p>
+        <p
+          className={`mt-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] ${
+            verified ? "text-emerald-300" : "text-amber-300"
+          }`}
+          title={period.source_names?.join(" + ") ?? period.provider_name}
+        >
+          {verified ? `${period.source_count} sources` : "single source"}
+        </p>
       </div>
+      <GuidanceDatum label="Temp" value={`${period.temperature_c.toFixed(0)}°C`} />
+      <GuidanceDatum label="Humidity" value={`${period.humidity_percent.toFixed(0)}%`} />
+      <GuidanceDatum label="Rain" value={`${period.rainfall_mm_hr.toFixed(1)} mm/h`} />
+      <GuidanceDatum label="Cloud" value={`${period.cloud_cover_percent.toFixed(0)}%`} />
+      <GuidanceDatum label="Wind" value={`${period.wind_speed_kmh.toFixed(0)} km/h`} />
+      <GuidanceDatum
+        label="Chance"
+        value={`${period.precipitation_probability_percent.toFixed(0)}%`}
+      />
+    </div>
+  );
+}
 
-      <div className="grid min-h-0 flex-1 gap-2.5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-        <div className="grid min-h-0 gap-2.5">
-          <GridStatusCard gridStatus={grid} className="h-full min-h-0" />
-          <PanelCard title="Live Snapshot" className="h-full min-h-0">
-            <div className="grid gap-2 text-sm text-slate-200 sm:grid-cols-2">
-              <MiniMetric label="Probability" value={probability.probability_score.toFixed(2)} />
-              <MiniMetric label="Risk Level" value={probability.risk_level} />
-              <MiniMetric label="Action" value={recommendation.recommendation} />
-              <MiniMetric label="Last Updated" value={formatTimestamp(grid.timestamp)} />
-            </div>
-          </PanelCard>
-        </div>
+function GuidanceDatum({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 border-l border-slate-800 px-1 text-center">
+      <p className="text-[8px] uppercase tracking-[0.1em] text-slate-500">{label}</p>
+      <p className="mt-0.5 break-words text-[0.72rem] font-semibold leading-tight text-slate-100">
+        {value}
+      </p>
+    </div>
+  );
+}
 
-        <div className="grid min-h-0 gap-2.5">
-          <PanelCard title="Calibration Summary" className="h-full min-h-0">
-            <div className="grid h-full min-h-0 gap-2">
-              <div className="grid gap-2 sm:grid-cols-2">
+function StationDatum({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[8px] uppercase tracking-[0.1em] text-slate-500">{label}</p>
+      <p className="mt-1 break-words text-[0.72rem] font-semibold leading-tight text-slate-100">
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function UtilizationBar({ value }: { value: number }) {
+  const boundedValue = Math.max(0, Math.min(100, value));
+  const tone =
+    boundedValue >= 90
+      ? "bg-amber-400"
+      : boundedValue >= 70
+        ? "bg-cyan-400"
+        : "bg-emerald-400";
+
+  return (
+    <div className="h-1.5 overflow-hidden rounded-full bg-slate-800">
+      <div
+        className={`h-full rounded-full transition-[width] duration-300 ${tone}`}
+        style={{ width: `${boundedValue}%` }}
+      />
+    </div>
+  );
+}
+
+function AnalyticsTab({ calibration }: { calibration: CalibrationSnapshot | null }) {
+  return (
+    <div className="grid h-full min-h-0 w-full min-w-0 gap-2.5 xl:grid-cols-[minmax(260px,0.36fr)_minmax(0,0.64fr)]">
+      <PanelCard title="Calibration Summary" className="h-full min-h-0">
+        <div className="grid h-full min-h-0 auto-rows-fr grid-cols-2 gap-2">
                 <MiniMetric
                   label="Selected Scenario"
                   value={calibration?.selected_scenario_label ?? "Typical Day"}
@@ -679,23 +1052,47 @@ function AnalyticsTab({
                   }
                 />
                 <MiniMetric
-                  label="Source"
-                  value={calibration?.source_archive?.split("\\").pop()?.split("/").pop() ?? "Live Snapshot"}
+            label="Profile Demand"
+            value={
+              calibration?.selected_demand_mw != null
+                ? `${calibration.selected_demand_mw.toFixed(0)} MW`
+                : "Unavailable"
+            }
+          />
+          <MiniMetric
+            label="Spinning Reserve"
+            value={
+              calibration?.selected_spin_mw != null
+                ? `${calibration.selected_spin_mw.toFixed(0)} MW`
+                : "Unavailable"
+            }
+          />
+          <MiniMetric
+            label="Selection Confidence"
+            value={
+              calibration?.selection_confidence != null
+                ? `${(calibration.selection_confidence * 100).toFixed(0)}%`
+                : "Unavailable"
+            }
+          />
+          <MiniMetric
+            label="Source"
+            value={calibration?.source_archive?.split("\\").pop()?.split("/").pop() ?? "Unavailable"}
                 />
-                <MiniMetric
-                  label="Selection"
-                  value={calibration?.selection_reason ?? "Calibration data unavailable"}
-                />
-              </div>
-              <ScenarioComparisonChart
-                scenarios={calibration?.scenarios ?? []}
-                selectedScenarioKey={calibration?.selected_scenario_key}
-                className="min-h-[10rem]"
-              />
-            </div>
-          </PanelCard>
+          <div className="col-span-2 min-h-0">
+            <MiniMetric
+              label="Selection"
+              value={calibration?.selection_reason ?? "Calibration data unavailable"}
+            />
+          </div>
         </div>
-      </div>
+      </PanelCard>
+
+      <ScenarioComparisonChart
+        scenarios={calibration?.scenarios ?? []}
+        selectedScenarioKey={calibration?.selected_scenario_key}
+        className="h-full min-h-0 w-full min-w-0"
+      />
     </div>
   );
 }
@@ -711,43 +1108,12 @@ function PanelCard({
 }) {
   return (
     <div className={`flex h-full min-h-0 w-full min-w-0 flex-col rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)] ${className}`}>
-      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">{title}</p>
-      <div className="mt-1.5 min-h-0 flex-1">{children}</div>
-    </div>
-  );
-}
-
-function ForecastBlock({ period }: { period: ForecastData }) {
-  const time = formatForecastTimestamp(period.forecast_timestamp);
-  const verified = (period.source_count ?? 1) > 1;
-
-  return (
-    <div className="flex min-h-[7.5rem] flex-col rounded-xl border border-slate-800 bg-slate-950/60 p-2 text-center shadow-inner shadow-black/20">
-      <div className="flex items-center justify-between gap-2">
-        <p className="min-w-0 break-words text-[0.84rem] font-semibold leading-snug text-white">{time}</p>
-        <span
-          className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] ${
-            verified
-              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-              : "border-amber-500/30 bg-amber-500/10 text-amber-200"
-          }`}
-          title={period.source_names?.join(" + ") ?? period.provider_name}
-        >
-          {verified ? `${period.source_count} sources` : "single source"}
-        </span>
-      </div>
-
-      <div className="mt-2 grid flex-1 grid-cols-3 gap-1.5 text-[0.88rem]">
-        <ForecastDatum label="Temp" value={`${period.temperature_c.toFixed(0)}°C`} />
-        <ForecastDatum label="Humidity" value={`${period.humidity_percent.toFixed(0)}%`} />
-        <ForecastDatum label="Rain" value={`${period.rainfall_mm_hr.toFixed(1)} mm/hr`} />
-        <ForecastDatum label="Cloud" value={`${period.cloud_cover_percent.toFixed(0)}%`} />
-        <ForecastDatum label="Wind" value={`${period.wind_speed_kmh.toFixed(0)} km/h`} />
-        <ForecastDatum
-          label="Chance"
-          value={`${period.precipitation_probability_percent.toFixed(0)}%`}
-        />
-      </div>
+      {title ? (
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
+          {title}
+        </p>
+      ) : null}
+      <div className={`${title ? "mt-1.5" : ""} min-h-0 flex-1`}>{children}</div>
     </div>
   );
 }
@@ -780,28 +1146,6 @@ function ForecastAttribution({
   );
 }
 
-function ForecastDatum({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0 rounded-lg border border-slate-800 bg-slate-900/70 px-2 py-1 text-center">
-      <p className="text-[9px] uppercase leading-none tracking-[0.12em] text-slate-400">
-        {label}
-      </p>
-      <p className="mt-1 min-w-0 break-words text-[0.75rem] font-semibold leading-snug text-white">
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function StatusLine({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="grid gap-1 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-center sm:grid-cols-[minmax(0,0.45fr)_minmax(0,0.55fr)] sm:text-left sm:items-start">
-      <span className="text-[10px] uppercase tracking-[0.12em] text-slate-400">{label}</span>
-      <span className="min-w-0 break-words text-[0.88rem] font-semibold leading-snug text-white">{value}</span>
-    </div>
-  );
-}
-
 function MiniMetric({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex h-full min-h-[3.5rem] flex-col items-center justify-center rounded-xl border border-slate-800 bg-slate-950/60 px-2.5 py-1.5 text-center">
@@ -827,7 +1171,11 @@ function formatTimestamp(value?: string | null): string {
   }).format(date);
 }
 
-function formatForecastTimestamp(value: string): string {
+function formatSignedMegawatts(value: number): string {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(0)} MW`;
+}
+
+function formatGuidanceForecastTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return value;
@@ -966,13 +1314,13 @@ function SummaryTile({
   return (
     <div
       title={value}
-      className={`flex min-h-[6.25rem] flex-col items-center justify-center rounded-2xl border px-4 py-3 text-center shadow-[0_0_24px_rgba(8,145,178,0.06)] ${toneClasses[tone]}`}
+      className={`flex min-h-[4.75rem] flex-col items-center justify-center rounded-2xl border px-3 py-2 text-center shadow-[0_0_24px_rgba(8,145,178,0.06)] ${toneClasses[tone]}`}
     >
       <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-300">
         {label}
       </p>
       <p
-        className={`mt-2 min-w-0 break-words font-semibold leading-tight text-white ${
+        className={`mt-1.5 min-w-0 break-words font-semibold leading-tight text-white ${
           compactValue ? "text-[0.82rem] leading-snug" : "text-[1.15rem] xl:text-[1.25rem]"
         }`}
       >

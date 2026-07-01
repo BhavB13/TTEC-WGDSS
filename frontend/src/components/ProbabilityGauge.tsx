@@ -52,8 +52,8 @@ export default function ProbabilityGauge({
         </span>
       </div>
 
-      <div className="flex flex-1 flex-col items-center justify-start gap-2">
-        <div className="relative flex h-[clamp(8.5rem,18vw,11rem)] w-[clamp(8.5rem,18vw,11rem)] items-center justify-center">
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-evenly gap-4">
+        <div className="relative flex h-[clamp(11rem,22vw,15rem)] w-[clamp(11rem,22vw,15rem)] items-center justify-center">
           <svg viewBox="0 0 140 140" className="h-full w-full -rotate-90">
             <circle
               cx="70"
@@ -83,28 +83,48 @@ export default function ProbabilityGauge({
           </div>
         </div>
 
-        <div className="grid w-full gap-2 text-sm text-slate-300">
-          <Stat label="Risk Score" value={score.toFixed(2)} />
-          <Stat label="30m Demand" value={`${probability.forecast_demand_30m.toFixed(0)} MW`} />
-          <Stat label="60m Demand" value={`${probability.forecast_demand_60m.toFixed(0)} MW`} />
-          <Stat label="Short Explanation" value={probability.reason} />
+        <div className="grid w-full grid-cols-3 gap-2 text-sm text-slate-300">
+          <RiskBand label="Low" range="0.00–0.44" tone="emerald" />
+          <RiskBand label="Medium" range="0.45–0.69" tone="amber" />
+          <RiskBand label="High" range="0.70–1.00" tone="rose" />
+        </div>
+
+        <div className="w-full rounded-xl border border-slate-800 bg-slate-950/55 px-3 py-3">
+          <div className="relative h-2 overflow-hidden rounded-full bg-gradient-to-r from-emerald-400 via-amber-400 to-rose-400">
+            <span
+              className="absolute top-1/2 h-5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white bg-slate-950 shadow-[0_0_10px_rgba(255,255,255,0.5)]"
+              style={{ left: `${score * 100}%` }}
+            />
+          </div>
+          <div className="mt-2 flex justify-between text-[9px] uppercase tracking-[0.1em] text-slate-500">
+            <span>Low pressure</span>
+            <span>Generation action pressure</span>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-function Stat({
+function RiskBand({
   label,
-  value,
+  range,
+  tone,
 }: {
   label: string;
-  value: string;
+  range: string;
+  tone: "emerald" | "amber" | "rose";
 }) {
+  const toneClasses = {
+    emerald: "border-emerald-500/25 bg-emerald-500/10 text-emerald-100",
+    amber: "border-amber-500/25 bg-amber-500/10 text-amber-100",
+    rose: "border-rose-500/25 bg-rose-500/10 text-rose-100",
+  };
+
   return (
-    <div className="flex min-h-[3.75rem] flex-col items-center justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 text-center shadow-inner shadow-black/20">
-      <p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">{label}</p>
-      <p className="mt-1 break-words text-[0.85rem] font-semibold leading-tight text-white">{value}</p>
+    <div className={`flex min-h-[3.75rem] flex-col items-center justify-center rounded-lg border px-2 py-2 text-center ${toneClasses[tone]}`}>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.12em]">{label}</p>
+      <p className="mt-1 text-[0.72rem] leading-tight text-slate-300">{range}</p>
     </div>
   );
 }

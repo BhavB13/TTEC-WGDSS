@@ -31,6 +31,7 @@ interface WeatherMapProps {
 
 const DEFAULT_CENTER: [number, number] = [10.6918, -61.2225];
 const DEFAULT_ZOOM = 8;
+const ATLANTIC_OVERVIEW_MIN_ZOOM = 3;
 const GIBS_GEO_COLOR_LAYER = "GOES-East_ABI_GeoColor";
 const GIBS_GEO_COLOR_TILESET = "GoogleMapsCompatible_Level7";
 const GIBS_PRECIP_LAYER = "IMERG_Precipitation_Rate_30min";
@@ -131,6 +132,7 @@ export default function WeatherMap({
 }: WeatherMapProps) {
   const [hurricaneEnabled, setHurricaneEnabled] = useState(false);
   const [stormTracking, setStormTracking] = useState<StormTrackingSnapshot | null>(null);
+  const [stormTrackingFailed, setStormTrackingFailed] = useState(false);
 
   const cloudSystemsTileUrl = useMemo(
     () => buildGeoColorUrl(CLOUDS_LATEST),
@@ -150,14 +152,17 @@ export default function WeatherMap({
     let cancelled = false;
 
     const loadStormTracking = async () => {
+      setStormTrackingFailed(false);
       try {
         const payload = await getStormTracking({ forceRefresh: true });
         if (!cancelled) {
           setStormTracking(payload);
+          setStormTrackingFailed(payload.status === "unavailable");
         }
-      } catch (cause) {
+      } catch {
         if (!cancelled) {
           setStormTracking(null);
+          setStormTrackingFailed(true);
         }
       }
     };
@@ -187,7 +192,15 @@ export default function WeatherMap({
           </h2>
         </div>
         <span className="rounded-full border border-slate-700 px-3 py-1 text-xs font-medium text-slate-300">
-          Leaflet
+          {!hurricaneEnabled
+            ? "Storm tracking off"
+            : stormTrackingFailed
+              ? "Storm feed unavailable"
+              : stormTracking === null
+                ? "Checking NHC storms"
+                : activeStorms.length === 0
+                  ? "No active NHC storms"
+                  : `${activeStorms.length} active storm${activeStorms.length === 1 ? "" : "s"}`}
         </span>
       </div>
 
@@ -196,7 +209,7 @@ export default function WeatherMap({
         <MapContainer
           center={DEFAULT_CENTER}
           zoom={DEFAULT_ZOOM}
-          minZoom={6}
+          minZoom={ATLANTIC_OVERVIEW_MIN_ZOOM}
           maxZoom={11}
           scrollWheelZoom={false}
           fadeAnimation={false}
@@ -260,7 +273,7 @@ export default function WeatherMap({
               </LayerGroup>
             </LayersControl.Overlay>
 
-            <LayersControl.Overlay checked name="Generation Stations">
+            <LayersControl.Overlay name="Generation Stations">
               <LayerGroup>
                 {generationStations.map((station) => (
                   <Marker
@@ -317,7 +330,7 @@ export default function WeatherMap({
               </LayerGroup>
             </LayersControl.Overlay>
 
-            <LayersControl.Overlay checked name="Load Centers">
+            <LayersControl.Overlay name="Load Centers">
               <LayerGroup>
                 {loadCenters.map((center) => (
                   <Marker key={center.id} position={[center.lat, center.lon]} icon={loadIcon}>
@@ -332,7 +345,7 @@ export default function WeatherMap({
               </LayerGroup>
             </LayersControl.Overlay>
 
-            <LayersControl.Overlay checked name="Operations Center">
+            <LayersControl.Overlay name="Operations Center">
               <CircleMarker
                 center={DEFAULT_CENTER}
                 radius={11}
