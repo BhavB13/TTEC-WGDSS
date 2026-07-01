@@ -24,12 +24,16 @@ import {
 } from "../data/infrastructureLayers";
 import { trinidadAndTobagoBoundary } from "../data/trinidadAndTobagoBoundary";
 import { getStormTracking } from "../services/api";
+import type { DashboardSnapshot } from "../types/dashboard";
 import type { StormSystem, StormTrackingSnapshot } from "../types/storm";
+import WindFlowLayer from "./WindFlowLayer";
 interface WeatherMapProps {
   className?: string;
+  weather: DashboardSnapshot["weather"];
 }
 
 const DEFAULT_CENTER: [number, number] = [10.6918, -61.2225];
+const WIND_DIRECTION_MARKER_POSITION: [number, number] = [11.28, -61.28];
 const DEFAULT_ZOOM = 8;
 const ATLANTIC_OVERVIEW_MIN_ZOOM = 3;
 const GIBS_GEO_COLOR_LAYER = "GOES-East_ABI_GeoColor";
@@ -127,10 +131,83 @@ const generationIcon = pinIcon("G", "generation");
 const substationIcon = pinIcon("S", "substation");
 const loadIcon = pinIcon("L", "load");
 
+function getCompassDirection(directionDegrees: number): string {
+  const directions = [
+    "N",
+    "NNE",
+    "NE",
+    "ENE",
+    "E",
+    "ESE",
+    "SE",
+    "SSE",
+    "S",
+    "SSW",
+    "SW",
+    "WSW",
+    "W",
+    "WNW",
+    "NW",
+    "NNW",
+  ];
+  const normalizedDirection = ((directionDegrees % 360) + 360) % 360;
+  return directions[Math.round(normalizedDirection / 22.5) % directions.length];
+}
+
+function windDirectionIcon(directionDegrees: number) {
+  const flowDirection = (directionDegrees + 180) % 360;
+
+  return divIcon({
+    className: "",
+    html: `
+      <div style="
+        width: 52px;
+        height: 52px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 2px solid rgba(165, 243, 252, 0.95);
+        border-radius: 9999px;
+        background: rgba(8, 47, 73, 0.88);
+        box-shadow: 0 0 18px rgba(34, 211, 238, 0.45);
+      ">
+        <div style="
+          width: 4px;
+          height: 30px;
+          position: relative;
+          border-radius: 9999px;
+          background: #ecfeff;
+          transform: rotate(${flowDirection}deg);
+          transform-origin: center;
+        ">
+          <div style="
+            position: absolute;
+            top: -2px;
+            left: 50%;
+            width: 12px;
+            height: 12px;
+            border-top: 4px solid #ecfeff;
+            border-left: 4px solid #ecfeff;
+            transform: translateX(-50%) rotate(45deg);
+          "></div>
+        </div>
+      </div>
+    `,
+    iconSize: [52, 52],
+    iconAnchor: [26, 26],
+    popupAnchor: [0, -28],
+  });
+}
+
 export default function WeatherMap({
   className = "",
+  weather,
 }: WeatherMapProps) {
   const [hurricaneEnabled, setHurricaneEnabled] = useState(false);
+  const [windFlowEnabled, setWindFlowEnabled] = useState(false);
+  const [windFlowStatus, setWindFlowStatus] = useState<
+    "loading" | "active" | "error"
+  >("loading");
   const [stormTracking, setStormTracking] = useState<StormTrackingSnapshot | null>(null);
   const [stormTrackingFailed, setStormTrackingFailed] = useState(false);
 
@@ -143,6 +220,18 @@ export default function WeatherMap({
     [],
   );
   const satelliteBaseUrl = useMemo(() => buildSatelliteBaseUrl(), []);
+  const windDirection =
+    weather.wind_direction_deg != null &&
+    Number.isFinite(weather.wind_direction_deg)
+      ? weather.wind_direction_deg
+      : null;
+  const currentWindIcon = useMemo(
+    () =>
+      windDirection == null
+        ? null
+        : windDirectionIcon(windDirection),
+    [windDirection],
+  );
 
   useEffect(() => {
     if (!hurricaneEnabled) {
@@ -218,7 +307,13 @@ export default function WeatherMap({
           <MapResizeSync />
           <MapViewSync />
           <MapTileStabilizer />
-          <MapOverlaySync onHurricaneChange={setHurricaneEnabled} />
+          <MapOverlaySync
+            onHurricaneChange={setHurricaneEnabled}
+            onWindFlowChange={setWindFlowEnabled}
+          />
+          {windFlowEnabled ? (
+            <WindFlowLayer onStatusChange={setWindFlowStatus} />
+          ) : null}
 
           <LayersControl position="topright">
             <LayersControl.BaseLayer name="OpenStreetMap">
@@ -271,6 +366,38 @@ export default function WeatherMap({
                   />
                 ) : null}
               </LayerGroup>
+            </LayersControl.Overlay>
+
+            <LayersControl.Overlay checked name="Wind Direction">
+              <LayerGroup>
+                {windDirection != null && currentWindIcon ? (
+                  <Marker
+                    position={WIND_DIRECTION_MARKER_POSITION}
+                    icon={currentWindIcon}
+                  >
+                    <Tooltip permanent direction="bottom" offset={[0, 28]}>
+                      Wind from {getCompassDirection(windDirection)}
+                    </Tooltip>
+                    <Popup>
+                      <div className="space-y-1 text-sm">
+                        <p className="font-semibold">Current Wind Direction</p>
+                        <p>
+                          From {getCompassDirection(windDirection)} at{" "}
+                          {windDirection.toFixed(0)} degrees
+                        </p>
+                        <p>{weather.wind_speed_kmh.toFixed(1)} km/h</p>
+                        <p className="text-slate-500">
+                          Live source: {weather.provider_name}
+                        </p>
+                      </div>
+                    </Popup>
+                  </Marker>
+                ) : null}
+              </LayerGroup>
+            </LayersControl.Overlay>
+
+            <LayersControl.Overlay name="Wind Flow">
+              <LayerGroup />
             </LayersControl.Overlay>
 
             <LayersControl.Overlay name="Generation Stations">
@@ -478,6 +605,15 @@ export default function WeatherMap({
             ))}
           </Pane>
         </MapContainer>
+        {windFlowEnabled ? (
+          <div className="pointer-events-none absolute bottom-2 right-2 z-[1000] rounded-md border border-cyan-400/30 bg-slate-950/85 px-2.5 py-1.5 text-[11px] font-semibold text-cyan-100 shadow-lg backdrop-blur">
+            {windFlowStatus === "active"
+              ? "Live wind flow · Open-Meteo"
+              : windFlowStatus === "loading"
+                ? "Loading wind flow..."
+                : "Wind flow temporarily unavailable"}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -542,18 +678,26 @@ function parseStormCoordinate(value?: string | null): number | null {
 
 function MapOverlaySync({
   onHurricaneChange,
+  onWindFlowChange,
 }: {
   onHurricaneChange: (enabled: boolean) => void;
+  onWindFlowChange: (enabled: boolean) => void;
 }) {
   useMapEvents({
     overlayadd(event) {
       if (event.name === "Hurricane / Tropical Storm Tracking") {
         onHurricaneChange(true);
       }
+      if (event.name === "Wind Flow") {
+        onWindFlowChange(true);
+      }
     },
     overlayremove(event) {
       if (event.name === "Hurricane / Tropical Storm Tracking") {
         onHurricaneChange(false);
+      }
+      if (event.name === "Wind Flow") {
+        onWindFlowChange(false);
       }
     },
   });

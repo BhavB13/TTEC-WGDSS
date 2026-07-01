@@ -163,6 +163,7 @@ export default function Dashboard() {
         <section className="h-[28rem] min-h-0 min-w-0 xl:sticky xl:top-3 xl:self-start xl:h-[calc(100vh-5.25rem)]">
           <WeatherMap
             className="h-full min-h-0"
+            weather={weather}
           />
         </section>
 

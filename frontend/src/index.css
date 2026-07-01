@@ -2,6 +2,13 @@
 @tailwind components;
 @tailwind utilities;
 
+.wgdss-wind-flow-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 525;
+  pointer-events: none;
+}
+
 html,
 body,
 #root {
