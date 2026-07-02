@@ -1,4 +1,6 @@
-from pydantic import BaseModel
+from uuid import uuid4
+
+from pydantic import BaseModel, Field
 
 from app.schemas.calibration import CalibrationSnapshotResponse
 from app.schemas.data_quality import DataQualityResponse
@@ -14,6 +16,7 @@ class ForecastBundleResponse(BaseModel):
 
 
 class DashboardSnapshotResponse(BaseModel):
+    snapshot_id: str = Field(default_factory=lambda: str(uuid4()))
     weather: CurrentWeatherResponse
     grid: GridStatusResponse
     forecast: ForecastBundleResponse

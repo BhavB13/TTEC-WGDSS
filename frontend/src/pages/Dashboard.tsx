@@ -64,6 +64,7 @@ export default function Dashboard() {
   const [state, setState] = useState<LoadState>("loading");
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [error, setError] = useState<string>("");
+  const [refreshError, setRefreshError] = useState<string>("");
   const [activeTab, setActiveTab] = useState<DashboardTab>("home");
 
   const loadSnapshot = useCallback(
@@ -84,12 +85,19 @@ export default function Dashboard() {
       try {
         const data = await getDashboardSnapshot({ forceRefresh });
         setSnapshot(data);
+        setRefreshError("");
         setState("ready");
       } catch (cause) {
         if (showLoading) {
           setSnapshot(null);
           setError(cause instanceof Error ? cause.message : "Failed to load dashboard snapshot");
           setState("error");
+        } else {
+          setRefreshError(
+            cause instanceof Error
+              ? cause.message
+              : "Background dashboard refresh failed",
+          );
         }
       }
     },
@@ -99,7 +107,7 @@ export default function Dashboard() {
   useEffect(() => {
     void loadSnapshot({ forceRefresh: true, showLoading: true });
     const refreshInterval = window.setInterval(() => {
-      void loadSnapshot({ forceRefresh: true, showLoading: false });
+      void loadSnapshot({ forceRefresh: false, showLoading: false });
     }, 5 * 60 * 1000);
 
     return () => window.clearInterval(refreshInterval);
@@ -158,6 +166,7 @@ export default function Dashboard() {
       forecastStatus={dataQuality.weather_status}
       scenarioLabel={calibration?.selected_scenario_label ?? "Typical Day"}
       dataQuality={dataQuality}
+      refreshError={refreshError}
     >
       <div className="grid h-auto min-h-0 w-full min-w-0 gap-3 xl:h-full xl:grid-cols-[clamp(300px,28vw,390px)_minmax(0,1fr)] xl:items-stretch">
         <section className="h-[28rem] min-h-0 min-w-0 xl:sticky xl:top-3 xl:self-start xl:h-[calc(100vh-5.25rem)]">
@@ -252,6 +261,7 @@ function Shell({
   forecastStatus,
   scenarioLabel,
   dataQuality,
+  refreshError,
 }: {
   children?: ReactNode;
   lastUpdated: string | null;
@@ -261,6 +271,7 @@ function Shell({
   forecastStatus?: string;
   scenarioLabel?: string;
   dataQuality?: DashboardSnapshot["data_quality"] | null;
+  refreshError?: string;
 }) {
   return (
     <div className="flex min-h-dvh flex-col overflow-visible bg-[radial-gradient(circle_at_top,_rgba(14,116,144,0.18),_transparent_36%),linear-gradient(180deg,#020617_0%,#020617_100%)] text-slate-100 xl:h-dvh xl:overflow-hidden">
@@ -272,6 +283,7 @@ function Shell({
         forecastStatus={forecastStatus}
         scenarioLabel={scenarioLabel}
         dataQuality={dataQuality}
+        refreshError={refreshError}
       />
       <main className="flex w-full min-w-0 flex-1 min-h-0 overflow-visible px-4 py-2.5 lg:px-6 xl:overflow-hidden">
         {children}
@@ -349,7 +361,7 @@ function HomeTab({
         <SummaryTile label="Demand" value={`${grid.current_demand_mw.toFixed(0)} MW`} tone="cyan" />
         <SummaryTile label="Generation" value={`${grid.current_generation_mw.toFixed(0)} MW`} tone="emerald" />
         <SummaryTile label="Reserve Margin" value={`${grid.reserve_margin_percent.toFixed(1)}%`} tone="amber" />
-        <SummaryTile label="Probability" value={probability.probability_score.toFixed(2)} tone="rose" />
+        <SummaryTile label="Probability" value={formatProbability(probability)} tone="rose" />
         <SummaryTile label="Action" value={recommendation.recommendation} tone="slate" compactValue />
       </div>
 
@@ -857,6 +869,7 @@ function OperationalGuidanceTab({
   const headroom60 =
     grid.total_available_capacity_mw - recommendation.forecast_demand_60m;
   const operatorActions = getOperatorActions(recommendation.recommendation);
+  const decisionAvailable = recommendation.risk_level !== "UNAVAILABLE";
 
   return (
     <div className="grid h-full min-h-0 w-full min-w-0 gap-2.5 overflow-hidden xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -879,9 +892,9 @@ function OperationalGuidanceTab({
       <div className="grid min-h-0 grid-cols-2 auto-rows-fr gap-2 rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
             <GuidanceThreshold
               label="Probability"
-              value={recommendation.probability_score.toFixed(2)}
+              value={formatProbability(recommendation)}
               context="High-risk trigger 0.70"
-              healthy={recommendation.probability_score < 0.7}
+              healthy={decisionAvailable && recommendation.probability_score < 0.7}
             />
             <GuidanceThreshold
               label="Reserve"
@@ -937,6 +950,15 @@ function GuidanceThreshold({
 }
 
 function getOperatorActions(recommendation: string): string[] {
+  if (recommendation === "DATA UNAVAILABLE") {
+    return [
+      "Verify weather and grid telemetry health before acting on WGDSS guidance.",
+      "Use the last approved dispatch plan and established control-room procedures.",
+      "Notify the control-room supervisor that automated guidance is inhibited.",
+      "Reassess only after telemetry quality returns to GOOD.",
+    ];
+  }
+
   if (recommendation === "START ADDITIONAL TURBINE") {
     return [
       "Initiate the approved turbine start sequence.",
@@ -1174,6 +1196,14 @@ function formatTimestamp(value?: string | null): string {
 
 function formatSignedMegawatts(value: number): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(0)} MW`;
+}
+
+function formatProbability(
+  probability: DashboardSnapshot["probability"],
+): string {
+  return probability.risk_level === "UNAVAILABLE"
+    ? "--"
+    : probability.probability_score.toFixed(2);
 }
 
 function formatGuidanceForecastTimestamp(value: string): string {

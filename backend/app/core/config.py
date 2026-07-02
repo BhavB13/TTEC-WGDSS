@@ -12,6 +12,9 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = "sqlite:///./wgdss.db"
     DB_ECHO: bool = False
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_RECYCLE_SECONDS: int = 1800
 
     OPEN_METEO_BASE_URL: str = "https://api.open-meteo.com/v1/forecast"
     MET_NORWAY_BASE_URL: str = (
@@ -43,6 +46,8 @@ class Settings(BaseSettings):
     CALIBRATION_AUTO_IMPORT: bool = False
     SNAPSHOT_PERSISTENCE_ENABLED: bool = True
     DATA_STALE_AFTER_SECONDS: int = 5400
+    GRID_PROVIDER: str = "mock"
+    GRID_STALE_AFTER_SECONDS: int = 30
 
     model_config = SettingsConfigDict(
         env_file=".env",

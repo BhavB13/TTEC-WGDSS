@@ -87,6 +87,19 @@ class FallbackWeatherService(FakeWeatherService):
     last_forecast_fallback_used = False
 
 
+class StaleWeatherService(FakeWeatherService):
+    async def get_current_weather(self, latitude, longitude, force_refresh=False):
+        weather = await super().get_current_weather(
+            latitude,
+            longitude,
+            force_refresh=force_refresh,
+        )
+        weather["timestamp"] = (
+            datetime.now(timezone.utc) - timedelta(hours=2)
+        ).isoformat()
+        return weather
+
+
 class RecordingPersistenceService:
     def __init__(self):
         self.snapshots = []
@@ -94,6 +107,33 @@ class RecordingPersistenceService:
     def persist(self, snapshot):
         self.snapshots.append(snapshot)
         return True
+
+
+class FlakyGridService(FakeGridService):
+    def __init__(self):
+        self.calls = 0
+
+    async def get_grid_status(self):
+        self.calls += 1
+        if self.calls > 1:
+            raise RuntimeError("SCADA connection lost")
+        return await super().get_grid_status()
+
+
+class StaleGridService(FakeGridService):
+    async def get_grid_status(self):
+        status = await super().get_grid_status()
+        status["timestamp"] = (
+            datetime.now(timezone.utc) - timedelta(minutes=2)
+        ).isoformat()
+        return status
+
+
+class UncertainGridService(FakeGridService):
+    async def get_grid_status(self):
+        status = await super().get_grid_status()
+        status["quality_status"] = "UNCERTAIN"
+        return status
 
 
 @pytest.mark.asyncio
@@ -115,6 +155,7 @@ async def test_dashboard_snapshot_aggregates_live_data_and_persists():
     assert snapshot.data_quality.weather_status == "LIVE"
     assert snapshot.data_quality.grid_status == "SIMULATED"
     assert snapshot.data_quality.calibration_status == "UNAVAILABLE"
+    assert snapshot.data_quality.overall_status == "GOOD"
     assert len(persistence.snapshots) == 1
 
 
@@ -206,3 +247,76 @@ async def test_historical_scada_calibration_does_not_replace_live_temperature():
     assert snapshot.weather.provider_name == "Test Weather"
     assert snapshot.calibration is not None
     assert snapshot.calibration.selected_temperature_c == 35
+
+
+@pytest.mark.asyncio
+async def test_dashboard_reuses_last_good_grid_snapshot_and_marks_fallback():
+    grid_service = FlakyGridService()
+    service = DashboardService(
+        weather_service=FakeWeatherService(),
+        grid_service=grid_service,
+        recommendation_engine=RecommendationEngine(),
+        calibration_service=NoCalibrationService(),
+        persistence_service=RecordingPersistenceService(),
+    )
+
+    first = await service.get_snapshot(days=1)
+    second = await service.get_snapshot(days=1)
+
+    assert first.grid.current_demand_mw == 950
+    assert second.grid.current_demand_mw == 950
+    assert second.data_quality.grid_fallback_used is True
+    assert second.data_quality.grid_status == "FALLBACK"
+    assert second.data_quality.overall_status == "DEGRADED"
+
+
+@pytest.mark.asyncio
+async def test_stale_grid_telemetry_inhibits_recommendation():
+    service = DashboardService(
+        weather_service=FakeWeatherService(),
+        grid_service=StaleGridService(),
+        recommendation_engine=RecommendationEngine(),
+        calibration_service=NoCalibrationService(),
+        persistence_service=RecordingPersistenceService(),
+    )
+
+    snapshot = await service.get_snapshot(days=1)
+
+    assert snapshot.data_quality.grid_is_stale is True
+    assert snapshot.data_quality.decision_status == "INHIBITED"
+    assert snapshot.probability.risk_level == "UNAVAILABLE"
+    assert snapshot.recommendation.recommendation == "DATA UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_uncertain_grid_quality_inhibits_recommendation():
+    service = DashboardService(
+        weather_service=FakeWeatherService(),
+        grid_service=UncertainGridService(),
+        recommendation_engine=RecommendationEngine(),
+        calibration_service=NoCalibrationService(),
+        persistence_service=RecordingPersistenceService(),
+    )
+
+    snapshot = await service.get_snapshot(days=1)
+
+    assert snapshot.data_quality.grid_status == "UNCERTAIN"
+    assert snapshot.data_quality.decision_status == "INHIBITED"
+    assert snapshot.recommendation.recommendation == "DATA UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_stale_weather_inhibits_weather_based_recommendation():
+    service = DashboardService(
+        weather_service=StaleWeatherService(),
+        grid_service=FakeGridService(),
+        recommendation_engine=RecommendationEngine(),
+        calibration_service=NoCalibrationService(),
+        persistence_service=RecordingPersistenceService(),
+    )
+
+    snapshot = await service.get_snapshot(days=1)
+
+    assert snapshot.data_quality.is_stale is True
+    assert snapshot.data_quality.decision_status == "INHIBITED"
+    assert snapshot.recommendation.recommendation == "DATA UNAVAILABLE"

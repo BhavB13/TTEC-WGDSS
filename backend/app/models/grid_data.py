@@ -10,6 +10,11 @@ class GridData(Base):
     __tablename__ = "grid_data"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_id: Mapped[str | None] = mapped_column(
+        String(36),
+        nullable=True,
+        index=True,
+    )
 
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -25,6 +30,15 @@ class GridData(Base):
     grid_status: Mapped[str] = mapped_column(String(25), nullable=False)
     demand_period: Mapped[str] = mapped_column(String(25), nullable=False)
     source_provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    received_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    quality_status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="GOOD",
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

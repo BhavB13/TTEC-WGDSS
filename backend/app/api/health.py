@@ -30,6 +30,7 @@ class HealthResponse(BaseModel):
     weatherapi_usage: ComponentHealth
     api_cost_mode: ComponentHealth
     calibration: ComponentHealth
+    grid_provider: ComponentHealth
 
 
 router = APIRouter()
@@ -67,6 +68,7 @@ async def health_check() -> HealthResponse:
     fallback_state = get_provider_state("weather_fallback")
     consensus_state = get_provider_state("weather_consensus")
     secondary_consensus_state = get_provider_state("weather_consensus_2")
+    grid_provider_state = get_provider_state("grid_provider")
     primary_health = ComponentHealth(
         status=primary_state["status"] if primary_state else "configured",
         detail=(
@@ -158,6 +160,29 @@ async def health_check() -> HealthResponse:
     )
     if cost_health.status != "zero_cost":
         overall = "degraded"
+    grid_provider_health = ComponentHealth(
+        status=(
+            grid_provider_state["status"]
+            if grid_provider_state
+            else "configured"
+        ),
+        detail=(
+            f"{grid_provider_state['provider']} last succeeded at "
+            f"{grid_provider_state['last_success']}"
+            if grid_provider_state
+            and grid_provider_state["status"] == "operational"
+            else (
+                f"Configured grid provider: {settings.GRID_PROVIDER}"
+                if not grid_provider_state
+                else (
+                    f"{grid_provider_state['provider']} failure: "
+                    f"{grid_provider_state['last_error']}"
+                )
+            )
+        ),
+    )
+    if grid_provider_health.status == "degraded":
+        overall = "degraded"
 
     return HealthResponse(
         status=overall,
@@ -171,4 +196,5 @@ async def health_check() -> HealthResponse:
         weatherapi_usage=weatherapi_usage_health,
         api_cost_mode=cost_health,
         calibration=calibration,
+        grid_provider=grid_provider_health,
     )

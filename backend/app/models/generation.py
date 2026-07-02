@@ -23,6 +23,12 @@ class Generation(Base):
         autoincrement=True,
     )
 
+    snapshot_id: Mapped[str | None] = mapped_column(
+        String(36),
+        nullable=True,
+        index=True,
+    )
+
     station_name: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
@@ -57,6 +63,22 @@ class Generation(Base):
         Boolean,
         nullable=False,
         default=True,
+    )
+
+    observed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    quality_status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="GOOD",
+    )
+
+    source_tag: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
     )
 
     last_updated: Mapped[datetime] = mapped_column(

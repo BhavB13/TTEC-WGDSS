@@ -43,7 +43,14 @@ export default function RecommendationCard({
       </div>
 
       <div className="mt-2.5 grid gap-2 text-sm sm:grid-cols-2">
-        <Metric label="Probability" value={recommendation.probability_score.toFixed(2)} />
+        <Metric
+          label="Probability"
+          value={
+            recommendation.risk_level === "UNAVAILABLE"
+              ? "--"
+              : recommendation.probability_score.toFixed(2)
+          }
+        />
         <Metric label="30m Demand" value={`${recommendation.forecast_demand_30m.toFixed(0)} MW`} />
         <Metric label="60m Demand" value={`${recommendation.forecast_demand_60m.toFixed(0)} MW`} />
       </div>

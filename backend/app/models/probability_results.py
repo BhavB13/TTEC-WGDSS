@@ -10,6 +10,11 @@ class ProbabilityResult(Base):
     __tablename__ = "probability_results"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_id: Mapped[str | None] = mapped_column(
+        String(36),
+        nullable=True,
+        index=True,
+    )
 
     probability_score: Mapped[float] = mapped_column(Float, nullable=False)
     risk_level: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -17,6 +22,30 @@ class ProbabilityResult(Base):
     forecast_demand_60m: Mapped[float] = mapped_column(Float, nullable=False)
     recommendation: Mapped[str] = mapped_column(String(64), nullable=False)
     factors: Mapped[str] = mapped_column(Text, nullable=False)
+    engine_version: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="unknown",
+    )
+    weather_observed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    grid_observed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    weather_source: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    grid_source: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    input_quality_status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="UNKNOWN",
+    )
+    calibration_scenario: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

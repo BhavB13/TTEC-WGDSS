@@ -10,6 +10,11 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
 function riskPalette(riskLevel: ProbabilityData["risk_level"]) {
   switch (riskLevel) {
+    case "UNAVAILABLE":
+      return {
+        ring: "stroke-slate-500",
+        badge: "border-slate-500/40 bg-slate-500/10 text-slate-200",
+      };
     case "HIGH":
       return {
         ring: "stroke-rose-400",
@@ -33,6 +38,7 @@ export default function ProbabilityGauge({
   className = "",
 }: ProbabilityGaugeProps) {
   const score = Math.max(0, Math.min(1, probability.probability_score));
+  const available = probability.risk_level !== "UNAVAILABLE";
   const progress = CIRCUMFERENCE - score * CIRCUMFERENCE;
   const palette = riskPalette(probability.risk_level);
 
@@ -75,7 +81,7 @@ export default function ProbabilityGauge({
           </svg>
           <div className="absolute text-center">
             <p className="text-3xl font-semibold text-white">
-              {score.toFixed(2)}
+              {available ? score.toFixed(2) : "--"}
             </p>
             <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
               0.0 - 1.0
@@ -91,10 +97,12 @@ export default function ProbabilityGauge({
 
         <div className="w-full rounded-xl border border-slate-800 bg-slate-950/55 px-3 py-3">
           <div className="relative h-2 overflow-hidden rounded-full bg-gradient-to-r from-emerald-400 via-amber-400 to-rose-400">
-            <span
-              className="absolute top-1/2 h-5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white bg-slate-950 shadow-[0_0_10px_rgba(255,255,255,0.5)]"
-              style={{ left: `${score * 100}%` }}
-            />
+            {available ? (
+              <span
+                className="absolute top-1/2 h-5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white bg-slate-950 shadow-[0_0_10px_rgba(255,255,255,0.5)]"
+                style={{ left: `${score * 100}%` }}
+              />
+            ) : null}
           </div>
           <div className="mt-2 flex justify-between text-[9px] uppercase tracking-[0.1em] text-slate-500">
             <span>Low pressure</span>

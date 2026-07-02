@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Any
+
+from app.schemas.grid import GenerationUnitResponse, GridStatusResponse
 
 
 class GridProvider(ABC):
@@ -11,14 +12,14 @@ class GridProvider(ABC):
     """
 
     @abstractmethod
-    async def get_generation_status(self) -> list[dict[str, Any]]:
+    async def get_generation_status(self) -> list[GenerationUnitResponse]:
         """
         Retrieve generation unit status information.
         """
         pass
 
     @abstractmethod
-    async def get_grid_status(self) -> dict[str, Any]:
+    async def get_grid_status(self) -> GridStatusResponse:
         """
         Retrieve overall grid status information.
         """

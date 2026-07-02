@@ -5,11 +5,12 @@ from sqlalchemy.orm import sessionmaker
 
 from app.models.base import Base
 from app.models.grid_data import GridData
+from app.models.generation import Generation
 from app.models.probability_results import ProbabilityResult
 from app.models.weather import Weather
 from app.schemas.dashboard import DashboardSnapshotResponse, ForecastBundleResponse
 from app.schemas.data_quality import DataQualityResponse
-from app.schemas.grid import GridStatusResponse
+from app.schemas.grid import GenerationUnitResponse, GridStatusResponse
 from app.schemas.probability import ProbabilityResponse
 from app.schemas.recommendation import RecommendationResponse
 from app.schemas.weather import CurrentWeatherResponse
@@ -51,6 +52,19 @@ def test_snapshot_persistence_writes_weather_grid_and_probability(tmp_path):
             grid_status="NORMAL",
             demand_period="AFTERNOON",
             source_provider="MockGridProvider",
+            generation_units=[
+                GenerationUnitResponse(
+                    station_name="Point Lisas",
+                    unit_name="GT-1",
+                    fuel_type="Natural Gas",
+                    available_capacity_mw=120,
+                    current_output_mw=110,
+                    status="ONLINE",
+                    is_dispatchable=True,
+                    observed_at=timestamp,
+                    source_tag="test.point_lisas.gt1",
+                )
+            ],
         ),
         forecast=ForecastBundleResponse(items=[]),
         probability=probability,
@@ -74,3 +88,8 @@ def test_snapshot_persistence_writes_weather_grid_and_probability(tmp_path):
         assert session.scalar(select(func.count(Weather.id))) == 1
         assert session.scalar(select(func.count(GridData.id))) == 1
         assert session.scalar(select(func.count(ProbabilityResult.id))) == 1
+        assert session.scalar(select(func.count(Generation.id))) == 1
+        probability_row = session.scalar(select(ProbabilityResult))
+        assert probability_row is not None
+        assert probability_row.snapshot_id == snapshot.snapshot_id
+        assert probability_row.engine_version == "unknown"

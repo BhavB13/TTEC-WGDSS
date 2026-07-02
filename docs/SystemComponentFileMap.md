@@ -74,14 +74,15 @@ point is `frontend/src/main.tsx`.
 | Endpoint | Purpose | Route file | Main service/schema files |
 |---|---|---|---|
 | `GET /` | Application status | `backend/app/main.py` | `backend/app/core/config.py` |
-| `GET /api/dashboard/snapshot` | Primary frontend aggregate payload | `backend/app/api/dashboard.py` | `backend/app/services/dashboard_service.py`, `backend/app/schemas/dashboard.py` |
-| `GET /api/storm/tracking` | NHC active-storm data | `backend/app/api/storm.py` | `backend/app/services/storm_tracking_service.py`, `backend/app/schemas/storm.py` |
+| `GET /api/v1/dashboard/snapshot` | Primary frontend aggregate payload | `backend/app/api/dashboard.py` | `backend/app/services/dashboard_service.py`, `backend/app/schemas/dashboard.py` |
+| `GET /api/v1/storm/tracking` | NHC active-storm data | `backend/app/api/storm.py` | `backend/app/services/storm_tracking_service.py`, `backend/app/schemas/storm.py` |
 | `GET /api/v1/health` | Database, providers, quotas, calibration health | `backend/app/api/health.py` | provider health and database files |
 | `GET /api/v1/weather/current` | Current normalized weather | `backend/app/api/weather.py` | `backend/app/services/weather_service.py`, `backend/app/schemas/weather.py` |
 | `GET /api/v1/weather/forecast` | Normalized hourly forecast | `backend/app/api/weather.py` | `backend/app/services/weather_service.py`, `backend/app/schemas/forecast.py` |
 | `GET /api/v1/grid/status` | Normalized Version 1 grid status | `backend/app/api/generation.py` | `backend/app/services/grid_service.py`, `backend/app/schemas/grid.py` |
 | `GET /api/v1/recommendations` | Recommendation-only response | `backend/app/api/recommendations.py` | `backend/app/services/dashboard_service.py`, `backend/app/schemas/recommendation.py` |
-| `GET /api/v1/dashboard/snapshot` | Versioned aggregate alias | `backend/app/api/router.py`, `backend/app/api/dashboard.py` | dashboard service and schema |
+| `GET /api/dashboard/snapshot` | Hidden compatibility alias | `backend/app/main.py`, `backend/app/api/dashboard.py` | dashboard service and schema |
+| `GET /api/storm/tracking` | Hidden compatibility alias | `backend/app/main.py`, `backend/app/api/storm.py` | storm tracking service and schema |
 
 Router composition is defined in:
 
@@ -505,4 +506,3 @@ Use this map when modifying the system:
 | Add a map overlay | `WeatherMap.tsx`, optional service/data file, `index.css` if canvas/pane styling is required |
 | Change database schema | model, Alembic revision, persistence/service, tests |
 | Change startup behavior | `main.py`, `core/config.py`, `.env.example`, operations documentation |
-

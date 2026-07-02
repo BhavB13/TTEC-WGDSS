@@ -3,10 +3,9 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from typing import Any
-
 from app.data.mock_generation_data import MOCK_GENERATION_UNITS
 from app.providers.grid_provider import GridProvider
+from app.schemas.grid import GenerationUnitResponse, GridStatusResponse, TelemetryQuality
 
 logger = logging.getLogger(__name__)
 
@@ -26,17 +25,26 @@ class MockGridProvider(GridProvider):
             return "EVENING_PEAK", 1000.0
         return "LATE_NIGHT", 750.0
 
-    async def get_generation_status(self) -> list[dict[str, Any]]:
+    async def get_generation_status(self) -> list[GenerationUnitResponse]:
         logger.debug("Returning mock generation status")
-        return MOCK_GENERATION_UNITS
+        observed_at = datetime.now(ZoneInfo("America/Port_of_Spain"))
+        return [
+            GenerationUnitResponse(
+                **unit,
+                observed_at=observed_at,
+                quality_status=TelemetryQuality.GOOD,
+                source_tag=f"mock.{unit['station_name']}.{unit['unit_name']}",
+            )
+            for unit in MOCK_GENERATION_UNITS
+        ]
 
-    async def get_grid_status(self) -> dict[str, Any]:
+    async def get_grid_status(self) -> GridStatusResponse:
         generation_units = await self.get_generation_status()
         total_available_capacity_mw = sum(
-            unit["available_capacity_mw"] for unit in generation_units
+            unit.available_capacity_mw for unit in generation_units
         )
         current_generation_mw = sum(
-            unit["current_output_mw"] for unit in generation_units
+            unit.current_output_mw for unit in generation_units
         )
 
         demand_period, current_demand_mw = self._demand_period(self._current_local_hour())
@@ -53,14 +61,17 @@ class MockGridProvider(GridProvider):
         else:
             grid_status = "NORMAL"
 
-        return {
-            "timestamp": datetime.now(ZoneInfo("America/Port_of_Spain")).isoformat(),
-            "current_demand_mw": current_demand_mw,
-            "current_generation_mw": round(current_generation_mw, 2),
-            "total_available_capacity_mw": round(total_available_capacity_mw, 2),
-            "reserve_margin_percent": reserve_margin_percent,
-            "grid_status": grid_status,
-            "demand_period": demand_period,
-            "source_provider": "MockGridProvider",
-            "generation_units": generation_units,
-        }
+        observed_at = datetime.now(ZoneInfo("America/Port_of_Spain"))
+        return GridStatusResponse(
+            timestamp=observed_at,
+            received_at=observed_at,
+            current_demand_mw=current_demand_mw,
+            current_generation_mw=round(current_generation_mw, 2),
+            total_available_capacity_mw=round(total_available_capacity_mw, 2),
+            reserve_margin_percent=reserve_margin_percent,
+            grid_status=grid_status,
+            demand_period=demand_period,
+            source_provider="MockGridProvider",
+            generation_units=generation_units,
+            quality_status=TelemetryQuality.GOOD,
+        )

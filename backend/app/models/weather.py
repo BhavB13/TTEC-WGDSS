@@ -22,6 +22,12 @@ class Weather(Base):
         autoincrement=True
     )
 
+    snapshot_id: Mapped[str | None] = mapped_column(
+        String(36),
+        nullable=True,
+        index=True,
+    )
+
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

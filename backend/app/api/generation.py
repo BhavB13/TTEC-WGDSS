@@ -1,12 +1,11 @@
 from fastapi import APIRouter
 
-from app.providers.mock_grid_provider import MockGridProvider
 from app.schemas.generation import GridStatusResponse
 from app.services.grid_service import GridService
 
 router = APIRouter()
 
-grid_service = GridService(MockGridProvider())
+grid_service = GridService()
 
 
 @router.get(

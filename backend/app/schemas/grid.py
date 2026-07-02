@@ -1,6 +1,14 @@
 from datetime import datetime
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
+
+
+class TelemetryQuality(StrEnum):
+    GOOD = "GOOD"
+    UNCERTAIN = "UNCERTAIN"
+    BAD = "BAD"
+    STALE = "STALE"
 
 
 class GenerationUnitResponse(BaseModel):
@@ -11,6 +19,9 @@ class GenerationUnitResponse(BaseModel):
     current_output_mw: float
     status: str
     is_dispatchable: bool
+    observed_at: datetime | None = None
+    quality_status: TelemetryQuality = TelemetryQuality.GOOD
+    source_tag: str | None = None
 
 
 class GridStatusResponse(BaseModel):
@@ -23,3 +34,6 @@ class GridStatusResponse(BaseModel):
     demand_period: str
     source_provider: str
     generation_units: list[GenerationUnitResponse] = Field(default_factory=list)
+    received_at: datetime | None = None
+    quality_status: TelemetryQuality = TelemetryQuality.GOOD
+    missing_fields: list[str] = Field(default_factory=list)

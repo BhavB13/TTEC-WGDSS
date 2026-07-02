@@ -1,11 +1,11 @@
 # API Contract
 
-All Version 1 service routes use the `/api/v1` prefix. The dashboard aggregation
-route is also exposed at `/api/dashboard/snapshot` for frontend compatibility.
+All Version 1 service routes use the `/api/v1` prefix. The dashboard and storm
+routes remain exposed under `/api` as hidden backward-compatible aliases.
 
 ## Dashboard snapshot
 
-`GET /api/dashboard/snapshot`
+`GET /api/v1/dashboard/snapshot`
 
 Query parameters:
 

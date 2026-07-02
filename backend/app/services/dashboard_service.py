@@ -32,6 +32,10 @@ class DashboardService:
         self.recommendation_engine = recommendation_engine or RecommendationEngine()
         self.calibration_service = calibration_service or CalibrationService()
         self.persistence_service = persistence_service or SnapshotPersistenceService()
+        self._last_weather: dict[str, Any] | None = None
+        self._last_forecast: list[dict[str, Any]] | None = None
+        self._last_grid_status: dict[str, Any] | None = None
+        self._last_generation_units: list[dict[str, Any]] | None = None
 
     async def get_snapshot(
         self,
@@ -54,25 +58,88 @@ class DashboardService:
         grid_task = self.grid_service.get_grid_status()
         generation_task = self.grid_service.get_generation_status()
 
-        weather, forecast, grid_status, generation_units = await asyncio.gather(
+        results = await asyncio.gather(
             weather_task,
             forecast_task,
             grid_task,
             generation_task,
+            return_exceptions=True,
         )
+        degradation_notes: list[str] = []
+        weather, weather_fallback = self._resolve_result(
+            "current weather",
+            results[0],
+            self._last_weather,
+            degradation_notes,
+        )
+        forecast, _ = self._resolve_result(
+            "hourly forecast",
+            results[1],
+            self._last_forecast,
+            degradation_notes,
+            default=[],
+        )
+        grid_status, grid_fallback = self._resolve_result(
+            "grid telemetry",
+            results[2],
+            self._last_grid_status,
+            degradation_notes,
+        )
+        generation_units, _ = self._resolve_result(
+            "generation-unit telemetry",
+            results[3],
+            self._last_generation_units,
+            degradation_notes,
+            default=grid_status.get("generation_units", []),
+        )
+
+        if not weather_fallback:
+            self._last_weather = weather
+        if not isinstance(results[1], BaseException):
+            self._last_forecast = forecast
+        if not grid_fallback:
+            self._last_grid_status = grid_status
+        if not isinstance(results[3], BaseException):
+            self._last_generation_units = generation_units
 
         grid_status = {**grid_status, "generation_units": generation_units}
         calibration = self.calibration_service.get_snapshot(weather)
 
         calibration_payload = calibration.model_dump() if calibration is not None else None
-        probability_payload = self.recommendation_engine.evaluate(
-            weather,
-            grid_status,
-            calibration=calibration_payload,
+        weather_age_seconds = self._age_seconds(weather.get("timestamp"))
+        grid_age_seconds = self._age_seconds(grid_status.get("timestamp"))
+        grid_quality = str(grid_status.get("quality_status", "GOOD")).upper()
+        grid_missing_fields = grid_status.get("missing_fields", [])
+        grid_is_stale = (
+            grid_age_seconds is not None
+            and grid_age_seconds > settings.GRID_STALE_AFTER_SECONDS
         )
+        weather_is_stale = (
+            weather_age_seconds is not None
+            and weather_age_seconds > settings.DATA_STALE_AFTER_SECONDS
+        )
+        decision_inhibited = (
+            weather_is_stale
+            or grid_is_stale
+            or grid_quality != "GOOD"
+            or bool(grid_missing_fields)
+        )
+        if decision_inhibited:
+            probability_payload = self.recommendation_engine.unavailable(
+                float(grid_status["current_demand_mw"]),
+                "Required weather or grid telemetry is stale, incomplete, or bad; "
+                "recommendation inhibited",
+            )
+        else:
+            probability_payload = self.recommendation_engine.evaluate(
+                weather,
+                grid_status,
+                calibration=calibration_payload,
+            )
         weather_response = CurrentWeatherResponse.model_validate(weather)
         grid_response = GridStatusResponse.model_validate(grid_status)
         probability = ProbabilityResponse(
+            engine_version=probability_payload["engine_version"],
             probability_score=probability_payload["probability_score"],
             risk_level=probability_payload["risk_level"],
             forecast_demand_30m=probability_payload["forecast_demand_30m"],
@@ -81,6 +148,7 @@ class DashboardService:
             reason=probability_payload["reason"],
         )
         recommendation = RecommendationResponse(
+            engine_version=probability_payload["engine_version"],
             probability_score=probability_payload["probability_score"],
             risk_level=probability_payload["risk_level"],
             forecast_demand_30m=probability_payload["forecast_demand_30m"],
@@ -101,6 +169,9 @@ class DashboardService:
                 weather_response,
                 grid_response,
                 calibration is not None,
+                degradation_notes=degradation_notes,
+                grid_fallback_used=grid_fallback,
+                weather_cache_fallback=weather_fallback,
             ),
         )
         if settings.SNAPSHOT_PERSISTENCE_ENABLED:
@@ -138,18 +209,22 @@ class DashboardService:
         weather: CurrentWeatherResponse,
         grid: GridStatusResponse,
         calibration_available: bool,
+        degradation_notes: list[str] | None = None,
+        grid_fallback_used: bool = False,
+        weather_cache_fallback: bool = False,
     ) -> DataQualityResponse:
-        age_seconds: int | None = None
-        if weather.timestamp is not None:
-            observed = weather.timestamp
-            if observed.tzinfo is None:
-                observed = observed.replace(tzinfo=timezone.utc)
-            age_seconds = max(0, int((datetime.now(timezone.utc) - observed).total_seconds()))
+        age_seconds = self._age_seconds(weather.timestamp)
+        grid_age_seconds = self._age_seconds(grid.timestamp)
 
         stale = age_seconds is not None and age_seconds > settings.DATA_STALE_AFTER_SECONDS
+        grid_stale = (
+            grid_age_seconds is not None
+            and grid_age_seconds > settings.GRID_STALE_AFTER_SECONDS
+        )
         fallback_used = (
             self.weather_service.last_current_fallback_used
             or self.weather_service.last_forecast_fallback_used
+            or weather_cache_fallback
         )
         consensus_degraded = getattr(
             self.weather_service,
@@ -171,7 +246,7 @@ class DashboardService:
         if calibrated:
             weather_status = "CALIBRATED"
 
-        notes: list[str] = []
+        notes: list[str] = list(degradation_notes or [])
         if stale:
             notes.append("Weather observation exceeds the freshness threshold")
         if fallback_used:
@@ -187,15 +262,45 @@ class DashboardService:
             )
         if not calibration_available:
             notes.append("SCADA calibration profiles are not loaded")
+        grid_quality = str(grid.quality_status).upper()
+        if grid_stale:
+            notes.append("Grid telemetry exceeds the freshness threshold")
+        if grid_quality in {"BAD", "STALE"}:
+            notes.append(f"Grid telemetry quality is {grid_quality}")
+        if grid.missing_fields:
+            notes.append(
+                "Grid telemetry is missing: " + ", ".join(grid.missing_fields)
+            )
+        decision_status = (
+            "INHIBITED"
+            if stale or grid_stale or grid_quality != "GOOD" or grid.missing_fields
+            else "AVAILABLE"
+        )
+        if grid_fallback_used:
+            grid_status = "FALLBACK"
+        elif grid_stale:
+            grid_status = "STALE"
+        elif grid_quality in {"BAD", "UNCERTAIN"}:
+            grid_status = grid_quality
+        else:
+            grid_status = "SIMULATED" if "Mock" in grid.source_provider else "LIVE"
 
         return DataQualityResponse(
             overall_status=(
                 "DEGRADED"
-                if stale or fallback_used or consensus_degraded
+                if (
+                    stale
+                    or fallback_used
+                    or consensus_degraded
+                    or grid_stale
+                    or grid_fallback_used
+                    or grid_quality != "GOOD"
+                    or bool(degradation_notes)
+                )
                 else "GOOD"
             ),
             weather_status=weather_status,
-            grid_status="SIMULATED" if "Mock" in grid.source_provider else "LIVE",
+            grid_status=grid_status,
             calibration_status="CALIBRATED" if calibration_available else "UNAVAILABLE",
             weather_source=weather.provider_name,
             grid_source=grid.source_provider,
@@ -203,5 +308,45 @@ class DashboardService:
             age_seconds=age_seconds,
             is_stale=stale,
             fallback_used=fallback_used,
+            grid_observed_at=grid.timestamp,
+            grid_age_seconds=grid_age_seconds,
+            grid_is_stale=grid_stale,
+            grid_fallback_used=grid_fallback_used,
+            decision_status=decision_status,
             notes=notes,
         )
+
+    @staticmethod
+    def _resolve_result(
+        name: str,
+        result: Any,
+        previous: Any,
+        notes: list[str],
+        default: Any = None,
+    ) -> tuple[Any, bool]:
+        if not isinstance(result, BaseException):
+            return result, False
+        if previous is not None:
+            notes.append(
+                f"{name.capitalize()} unavailable; using last known good value"
+            )
+            return previous, True
+        if default is not None:
+            notes.append(f"{name.capitalize()} unavailable; no cached value exists")
+            return default, True
+        raise RuntimeError(f"{name.capitalize()} is unavailable") from result
+
+    @staticmethod
+    def _age_seconds(value: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            observed = value
+        else:
+            try:
+                observed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        if observed.tzinfo is None:
+            observed = observed.replace(tzinfo=timezone.utc)
+        return max(0, int((datetime.now(timezone.utc) - observed).total_seconds()))

@@ -8,13 +8,28 @@ class RecommendationEngine:
     Rule-based probability engine for the WGDSS MVP.
     """
 
+    ENGINE_VERSION = "rules-v1.1"
+
+    def unavailable(self, current_demand_mw: float, reason: str) -> dict[str, Any]:
+        return {
+            "engine_version": self.ENGINE_VERSION,
+            "probability_score": 0.0,
+            "risk_level": "UNAVAILABLE",
+            "forecast_demand_30m": current_demand_mw,
+            "forecast_demand_60m": current_demand_mw,
+            "recommendation": "DATA UNAVAILABLE",
+            "factors": [reason],
+            "reason": reason,
+        }
+
     def evaluate(
         self,
         weather: dict[str, Any],
         grid_status: dict[str, Any],
         calibration: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        temperature_c = float(weather.get("temperature_c", 0.0))
+        live_temperature_c = self._safe_float(weather.get("temperature_c"))
+        temperature_c = live_temperature_c or 0.0
         humidity_percent = float(weather.get("humidity_percent", 0.0))
         rainfall_mm_hr = float(weather.get("rainfall_mm_hr", 0.0))
         cloud_cover_percent = float(weather.get("cloud_cover_percent", 0.0))
@@ -24,13 +39,20 @@ class RecommendationEngine:
         selected_next_demand_mw = None
         selected_spin_mw = None
         selected_temperature_c = None
+        selection_confidence = None
         if calibration:
             selected_scenario_label = calibration.get("selected_scenario_label")
             selected_demand_mw = self._safe_float(calibration.get("selected_demand_mw"))
             selected_next_demand_mw = self._safe_float(calibration.get("selected_next_demand_mw"))
             selected_spin_mw = self._safe_float(calibration.get("selected_spin_mw"))
             selected_temperature_c = self._safe_float(calibration.get("selected_temperature_c"))
-            if selected_temperature_c is not None:
+            selection_confidence = self._safe_float(
+                calibration.get("selection_confidence")
+            )
+            if (
+                (live_temperature_c is None or live_temperature_c <= 0)
+                and selected_temperature_c is not None
+            ):
                 temperature_c = selected_temperature_c
 
         current_demand_mw = float(grid_status.get("current_demand_mw", 0.0))
@@ -40,6 +62,13 @@ class RecommendationEngine:
 
         factors: list[str] = []
         score = 0.25
+        if (
+            (live_temperature_c is None or live_temperature_c <= 0)
+            and selected_temperature_c is not None
+        ):
+            factors.append(
+                "Historical SCADA calibration supplied missing ambient temperature"
+            )
 
         if temperature_c >= 30:
             temp_boost = min((temperature_c - 29.0) * 0.05, 0.22)
@@ -92,12 +121,12 @@ class RecommendationEngine:
                 )
 
         if selected_spin_mw is not None and selected_spin_mw > 0:
-            spin_pressure = min(
-                max(0.0, 0.15 - selected_spin_mw / max(selected_demand_mw or current_demand_mw, 1.0))
-                / 0.15
-                * 0.12,
-                0.12,
+            spin_ratio = selected_spin_mw / max(
+                selected_demand_mw or current_demand_mw,
+                1.0,
             )
+            spin_shortfall = max(0.0, 0.15 - spin_ratio)
+            spin_pressure = min((spin_shortfall / 0.15) * 0.12, 0.12)
             if spin_pressure > 0:
                 score += spin_pressure
                 factors.append("Imported spinning reserve is below the 15% planning threshold")
@@ -114,6 +143,7 @@ class RecommendationEngine:
                 horizon_minutes=30,
                 scenario_base_demand=selected_demand_mw,
                 scenario_followup_demand=selected_next_demand_mw,
+                scenario_confidence=selection_confidence,
             ),
             2,
         )
@@ -127,6 +157,7 @@ class RecommendationEngine:
                 horizon_minutes=60,
                 scenario_base_demand=selected_demand_mw,
                 scenario_followup_demand=selected_next_demand_mw,
+                scenario_confidence=selection_confidence,
             ),
             2,
         )
@@ -134,6 +165,7 @@ class RecommendationEngine:
 
         reason = "; ".join(factors) if factors else "Conditions remain within normal bounds"
         return {
+            "engine_version": self.ENGINE_VERSION,
             "probability_score": probability_score,
             "risk_level": risk_level,
             "forecast_demand_30m": forecast_demand_30m,
@@ -155,7 +187,7 @@ class RecommendationEngine:
     def _recommendation(probability_score: float, reserve_margin_percent: float) -> str:
         if probability_score >= 0.75 or reserve_margin_percent < 15:
             return "START ADDITIONAL TURBINE"
-        if probability_score >= 0.45:
+        if probability_score >= 0.45 or reserve_margin_percent < 25:
             return "MONITOR CONDITIONS"
         return "NO ACTION REQUIRED"
 
@@ -169,6 +201,7 @@ class RecommendationEngine:
         horizon_minutes: int,
         scenario_base_demand: float | None = None,
         scenario_followup_demand: float | None = None,
+        scenario_confidence: float | None = None,
     ) -> float:
         weather_pressure = 0.0
         if temperature_c > 29:
@@ -186,7 +219,12 @@ class RecommendationEngine:
             scenario_anchor = scenario_base_demand
             if horizon_minutes > 30 and scenario_followup_demand is not None:
                 scenario_anchor = (scenario_base_demand + scenario_followup_demand) / 2.0
-            projected = (projected + scenario_anchor) / 2.0
+            confidence = 1.0 if scenario_confidence is None else max(
+                0.0,
+                min(1.0, scenario_confidence),
+            )
+            scenario_weight = 0.5 * confidence
+            projected = projected * (1.0 - scenario_weight) + scenario_anchor * scenario_weight
         floor = current_demand_mw * 0.92
         return max(floor, projected)
 

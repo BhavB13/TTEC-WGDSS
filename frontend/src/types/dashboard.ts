@@ -92,6 +92,11 @@ export interface DataQuality {
   age_seconds?: number | null;
   is_stale: boolean;
   fallback_used: boolean;
+  grid_observed_at?: string | null;
+  grid_age_seconds?: number | null;
+  grid_is_stale?: boolean;
+  grid_fallback_used?: boolean;
+  decision_status?: string;
   notes: string[];
 }
 
@@ -108,8 +113,9 @@ export interface GridStatus {
 }
 
 export interface ProbabilityData {
+  engine_version?: string;
   probability_score: number;
-  risk_level: "LOW" | "MEDIUM" | "HIGH";
+  risk_level: "LOW" | "MEDIUM" | "HIGH" | "UNAVAILABLE";
   forecast_demand_30m: number;
   forecast_demand_60m: number;
   factors: string[];
@@ -121,6 +127,7 @@ export interface RecommendationData extends ProbabilityData {
 }
 
 export interface DashboardSnapshot {
+  snapshot_id?: string;
   weather: WeatherData;
   grid: GridStatus;
   forecast: ForecastBundle;

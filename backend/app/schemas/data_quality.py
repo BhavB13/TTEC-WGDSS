@@ -14,4 +14,9 @@ class DataQualityResponse(BaseModel):
     age_seconds: int | None = None
     is_stale: bool = False
     fallback_used: bool = False
+    grid_observed_at: datetime | None = None
+    grid_age_seconds: int | None = None
+    grid_is_stale: bool = False
+    grid_fallback_used: bool = False
+    decision_status: str = "AVAILABLE"
     notes: list[str] = Field(default_factory=list)

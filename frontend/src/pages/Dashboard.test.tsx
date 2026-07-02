@@ -57,8 +57,8 @@ describe("Dashboard", () => {
     expect(screen.getByRole("heading", { name: "700 to 1500 MW Window" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Operations" }));
-    expect(screen.getByRole("heading", { name: "Operational Guidance" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Supply and Demand" })).toBeInTheDocument();
+    expect(screen.getByText("Station Dispatch")).toBeInTheDocument();
+    expect(screen.getByText("Unit Readiness")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Weather" }));
     expect(screen.getByText("Current Weather Conditions")).toBeInTheDocument();
@@ -72,7 +72,7 @@ describe("Dashboard", () => {
     expect(screen.getByTestId("probability-gauge")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Operational Guidance" }));
-    expect(screen.getByText("Forecast Context")).toBeInTheDocument();
+    expect(screen.getByText("30m Headroom")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Analytics" }));
     expect(screen.getByText("Calibration Summary")).toBeInTheDocument();

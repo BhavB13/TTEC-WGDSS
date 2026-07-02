@@ -1,0 +1,63 @@
+from datetime import datetime, timezone
+
+import pytest
+
+from app.providers.grid_provider_factory import create_grid_provider
+from app.schemas.grid import GridStatusResponse
+from app.services.grid_service import GridDataValidationError, GridService
+
+
+def test_reserve_margin_uses_available_capacity_and_demand():
+    assert GridService._calculate_reserve_margin(1200, 800) == 50.0
+
+
+def test_grid_normalization_rejects_missing_and_negative_critical_values():
+    service = GridService(provider=create_grid_provider("mock"))
+
+    with pytest.raises(GridDataValidationError, match="omitted critical telemetry"):
+        service._normalize_grid_status(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "current_demand_mw": 800,
+                "current_generation_mw": 900,
+            }
+        )
+
+    with pytest.raises(GridDataValidationError, match="cannot be negative"):
+        service._normalize_grid_status(
+            {
+                "current_demand_mw": -1,
+                "current_generation_mw": 900,
+                "total_available_capacity_mw": 1200,
+            }
+        )
+
+
+def test_grid_normalization_keeps_provider_quality_metadata():
+    service = GridService(provider=create_grid_provider("mock"))
+    timestamp = datetime.now(timezone.utc)
+    normalized = service._normalize_grid_status(
+        GridStatusResponse(
+            timestamp=timestamp,
+            current_demand_mw=800,
+            current_generation_mw=900,
+            total_available_capacity_mw=1200,
+            reserve_margin_percent=50,
+            grid_status="NORMAL",
+            demand_period="MORNING",
+            source_provider="TestScadaProvider",
+            quality_status="UNCERTAIN",
+            missing_fields=[],
+        )
+    )
+
+    assert normalized["quality_status"] == "UNCERTAIN"
+    normalized_timestamp = datetime.fromisoformat(
+        normalized["timestamp"].replace("Z", "+00:00")
+    )
+    assert normalized_timestamp == timestamp
+
+
+def test_unconfigured_live_provider_fails_closed():
+    with pytest.raises(RuntimeError, match="no live connector is configured"):
+        create_grid_provider("scada")

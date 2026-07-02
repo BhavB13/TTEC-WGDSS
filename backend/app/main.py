@@ -67,6 +67,11 @@ async def request_logging_middleware(request: Request, call_next):
         raise
     duration_ms = round((perf_counter() - started) * 1000, 2)
     response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    if request.url.path.startswith("/api"):
+        response.headers["Cache-Control"] = "no-store"
     logger.info(
         "Request completed",
         extra={
@@ -84,16 +89,20 @@ app.include_router(
     prefix=settings.API_V1_PREFIX,
 )
 
+# Backward-compatible aliases used by the current frontend. New integrations
+# should use the versioned routes under API_V1_PREFIX.
 app.include_router(
     dashboard_router,
     prefix="/api",
     tags=["dashboard"],
+    include_in_schema=False,
 )
 
 app.include_router(
     storm_router,
     prefix="/api",
     tags=["storm"],
+    include_in_schema=False,
 )
 
 

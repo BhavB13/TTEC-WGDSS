@@ -51,6 +51,7 @@ async def test_health_endpoint_reports_database_weather_and_calibration(monkeypa
     assert response.weatherapi_usage.status in {"disabled", "healthy", "limit_reached"}
     assert response.api_cost_mode.status == "zero_cost"
     assert response.calibration.status == "healthy"
+    assert response.grid_provider.status in {"configured", "operational", "degraded"}
     assert "scenario rows" in response.calibration.detail
     assert response.timestamp.tzinfo is not None
 

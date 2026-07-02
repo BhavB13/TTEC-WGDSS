@@ -15,8 +15,8 @@ const API_BASE_URL = (
     }
   ).env?.VITE_API_BASE_URL ?? ""
 ).replace(/\/$/, "");
-const DASHBOARD_SNAPSHOT_PATH = "/api/dashboard/snapshot";
-const STORM_TRACKING_PATH = "/api/storm/tracking";
+const DASHBOARD_SNAPSHOT_PATH = "/api/v1/dashboard/snapshot";
+const STORM_TRACKING_PATH = "/api/v1/storm/tracking";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
@@ -61,7 +61,7 @@ async function readErrorMessage(response: Response): Promise<string> {
 export async function getDashboardSnapshot(options?: {
   forceRefresh?: boolean;
 }): Promise<DashboardSnapshot> {
-  const forceRefresh = options?.forceRefresh ?? true;
+  const forceRefresh = options?.forceRefresh ?? false;
   const path = forceRefresh
     ? `${DASHBOARD_SNAPSHOT_PATH}?force_refresh=true`
     : DASHBOARD_SNAPSHOT_PATH;

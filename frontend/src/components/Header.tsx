@@ -8,6 +8,7 @@ interface HeaderProps {
   forecastStatus?: string;
   scenarioLabel?: string;
   dataQuality?: DataQuality | null;
+  refreshError?: string;
 }
 
 function formatTimestamp(value?: string | null): string {
@@ -34,6 +35,7 @@ export default function Header({
   forecastStatus,
   scenarioLabel,
   dataQuality,
+  refreshError,
 }: HeaderProps) {
   return (
     <header className="border-b border-cyan-500/10 bg-slate-950/95 px-4 py-2 text-slate-100 shadow-[0_0_32px_rgba(8,145,178,0.08)] backdrop-blur">
@@ -46,6 +48,14 @@ export default function Header({
             <span className="block sm:inline">T&amp;TEC Weather Grid</span>{" "}
             <span className="block sm:inline">Decision Support System</span>
           </h1>
+          {refreshError ? (
+            <p
+              className="mt-1 truncate text-[11px] font-medium text-amber-300"
+              title={refreshError}
+            >
+              Background refresh failed; displaying the last successful snapshot.
+            </p>
+          ) : null}
         </div>
 
         <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
@@ -64,7 +74,13 @@ export default function Header({
           <HeaderMetric
             label="Grid Status"
             value={gridStatus ?? systemStatus}
-            tone="emerald"
+            tone={
+              dataQuality?.grid_is_stale ||
+              dataQuality?.grid_fallback_used ||
+              dataQuality?.decision_status === "INHIBITED"
+                ? "amber"
+                : "emerald"
+            }
           />
           <HeaderMetric
             label="Scenario"
