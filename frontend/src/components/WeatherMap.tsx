@@ -154,49 +154,126 @@ function getCompassDirection(directionDegrees: number): string {
   return directions[Math.round(normalizedDirection / 22.5) % directions.length];
 }
 
-function windDirectionIcon(directionDegrees: number) {
+function windDirectionIcon(
+  directionDegrees: number,
+  directionLabel: string,
+  zoom: number,
+) {
   const flowDirection = (directionDegrees + 180) % 360;
+  const normalizedZoom = Math.max(3, Math.min(11, zoom));
+  const zoomScale = 0.82 + (normalizedZoom - 3) * 0.07;
+  const markerSize = Math.round(52 * zoomScale);
+  const iconSize = Math.max(36, markerSize);
+  const arrowHeight = Math.max(22, Math.round(iconSize * 0.58));
+  const arrowWidth = Math.max(4, Math.round(iconSize * 0.08));
+  const labelFontSize = Math.max(10, Math.round(11 * zoomScale));
+  const labelOffset = Math.max(34, Math.round(iconSize * 0.78));
+  const chipPaddingX = Math.max(10, Math.round(12 * zoomScale));
+  const chipPaddingY = Math.max(4, Math.round(5 * zoomScale));
 
   return divIcon({
     className: "",
     html: `
       <div style="
-        width: 52px;
-        height: 52px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border: 2px solid rgba(165, 243, 252, 0.95);
-        border-radius: 9999px;
-        background: rgba(8, 47, 73, 0.88);
-        box-shadow: 0 0 18px rgba(34, 211, 238, 0.45);
+        position: relative;
+        width: ${iconSize}px;
+        height: ${iconSize}px;
       ">
         <div style="
-          width: 4px;
-          height: 30px;
-          position: relative;
+          position: absolute;
+          left: 50%;
+          bottom: ${labelOffset}px;
+          transform: translateX(-50%);
+          padding: ${chipPaddingY}px ${chipPaddingX}px;
+          border: 1px solid rgba(165, 243, 252, 0.72);
           border-radius: 9999px;
-          background: #ecfeff;
-          transform: rotate(${flowDirection}deg);
-          transform-origin: center;
+          background: rgba(2, 12, 27, 0.92);
+          box-shadow: 0 0 18px rgba(34, 211, 238, 0.2);
+          color: #ecfeff;
+          font-size: ${labelFontSize}px;
+          font-weight: 700;
+          line-height: 1;
+          letter-spacing: 0.08em;
+          white-space: nowrap;
+          text-transform: uppercase;
+        ">${directionLabel}</div>
+        <div style="
+          width: ${iconSize}px;
+          height: ${iconSize}px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border: 2px solid rgba(165, 243, 252, 0.95);
+          border-radius: 9999px;
+          background: rgba(8, 47, 73, 0.88);
+          box-shadow: 0 0 18px rgba(34, 211, 238, 0.45);
         ">
+          <div style="
+            width: ${arrowWidth}px;
+            height: ${arrowHeight}px;
+            position: relative;
+            border-radius: 9999px;
+            background: #ecfeff;
+            transform: rotate(${flowDirection}deg);
+            transform-origin: center;
+          ">
           <div style="
             position: absolute;
             top: -2px;
             left: 50%;
-            width: 12px;
-            height: 12px;
-            border-top: 4px solid #ecfeff;
-            border-left: 4px solid #ecfeff;
+            width: ${Math.max(10, Math.round(iconSize * 0.22))}px;
+            height: ${Math.max(10, Math.round(iconSize * 0.22))}px;
+            border-top: ${Math.max(3, Math.round(iconSize * 0.07))}px solid #ecfeff;
+            border-left: ${Math.max(3, Math.round(iconSize * 0.07))}px solid #ecfeff;
             transform: translateX(-50%) rotate(45deg);
           "></div>
         </div>
       </div>
     `,
-    iconSize: [52, 52],
-    iconAnchor: [26, 26],
-    popupAnchor: [0, -28],
+    iconSize: [iconSize, iconSize + labelOffset],
+    iconAnchor: [iconSize / 2, iconSize / 2],
+    popupAnchor: [0, -Math.round(iconSize * 0.6)],
   });
+}
+
+function WindDirectionMarker({
+  windDirection,
+  windSpeedKmh,
+  providerName,
+}: {
+  windDirection: number;
+  windSpeedKmh: number;
+  providerName: string;
+}) {
+  const map = useMap();
+  const [zoom, setZoom] = useState(() => map.getZoom());
+  const directionLabel = `Wind ${getCompassDirection(windDirection)}`;
+  const icon = useMemo(
+    () => windDirectionIcon(windDirection, directionLabel, zoom),
+    [directionLabel, windDirection, zoom],
+  );
+
+  useMapEvents({
+    zoomend() {
+      setZoom(map.getZoom());
+    },
+  });
+
+  return (
+    <Marker position={WIND_DIRECTION_MARKER_POSITION} icon={icon}>
+      <Popup>
+        <div className="space-y-1 text-sm">
+          <p className="font-semibold">Current Wind Direction</p>
+          <p>
+            From {getCompassDirection(windDirection)} at {windDirection.toFixed(0)}{" "}
+            degrees
+          </p>
+          <p>{windSpeedKmh.toFixed(1)} km/h</p>
+          <p className="text-slate-500">Live source: {providerName}</p>
+        </div>
+      </Popup>
+    </Marker>
+  );
 }
 
 export default function WeatherMap({
@@ -225,14 +302,6 @@ export default function WeatherMap({
     Number.isFinite(weather.wind_direction_deg)
       ? weather.wind_direction_deg
       : null;
-  const currentWindIcon = useMemo(
-    () =>
-      windDirection == null
-        ? null
-        : windDirectionIcon(windDirection),
-    [windDirection],
-  );
-
   useEffect(() => {
     if (!hurricaneEnabled) {
       return;
@@ -370,28 +439,12 @@ export default function WeatherMap({
 
             <LayersControl.Overlay checked name="Wind Direction">
               <LayerGroup>
-                {windDirection != null && currentWindIcon ? (
-                  <Marker
-                    position={WIND_DIRECTION_MARKER_POSITION}
-                    icon={currentWindIcon}
-                  >
-                    <Tooltip permanent direction="bottom" offset={[0, 28]}>
-                      Wind from {getCompassDirection(windDirection)}
-                    </Tooltip>
-                    <Popup>
-                      <div className="space-y-1 text-sm">
-                        <p className="font-semibold">Current Wind Direction</p>
-                        <p>
-                          From {getCompassDirection(windDirection)} at{" "}
-                          {windDirection.toFixed(0)} degrees
-                        </p>
-                        <p>{weather.wind_speed_kmh.toFixed(1)} km/h</p>
-                        <p className="text-slate-500">
-                          Live source: {weather.provider_name}
-                        </p>
-                      </div>
-                    </Popup>
-                  </Marker>
+                {windDirection != null ? (
+                  <WindDirectionMarker
+                    windDirection={windDirection}
+                    windSpeedKmh={weather.wind_speed_kmh}
+                    providerName={weather.provider_name}
+                  />
                 ) : null}
               </LayerGroup>
             </LayersControl.Overlay>
