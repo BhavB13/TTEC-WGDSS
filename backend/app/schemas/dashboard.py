@@ -6,6 +6,11 @@ from app.schemas.calibration import CalibrationSnapshotResponse
 from app.schemas.data_quality import DataQualityResponse
 from app.schemas.forecast import ForecastResponse
 from app.schemas.grid import GridStatusResponse
+from app.schemas.model_status import (
+    DemandForecastBundleResponse,
+    ModelStatusResponse,
+    ScadaStatusResponse,
+)
 from app.schemas.probability import ProbabilityResponse
 from app.schemas.recommendation import RecommendationResponse
 from app.schemas.weather import CurrentWeatherResponse
@@ -24,3 +29,6 @@ class DashboardSnapshotResponse(BaseModel):
     recommendation: RecommendationResponse
     calibration: CalibrationSnapshotResponse | None = None
     data_quality: DataQualityResponse
+    demand_forecast: DemandForecastBundleResponse | None = None
+    model_status: ModelStatusResponse | None = None
+    scada_status: ScadaStatusResponse | None = None

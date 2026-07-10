@@ -26,7 +26,11 @@ def test_probability_thresholds_produce_low_medium_and_high_actions():
             "rainfall_mm_hr": 0,
             "cloud_cover_percent": 20,
         },
-        {**grid, "reserve_margin_percent": 24},
+        {
+            **grid,
+            "total_available_capacity_mw": 1040,
+            "reserve_margin_percent": 15.6,
+        },
     )
     high = engine.evaluate(
         {
@@ -35,7 +39,11 @@ def test_probability_thresholds_produce_low_medium_and_high_actions():
             "rainfall_mm_hr": 0,
             "cloud_cover_percent": 10,
         },
-        {**grid, "reserve_margin_percent": 10},
+        {
+            **grid,
+            "total_available_capacity_mw": 950,
+            "reserve_margin_percent": 5.6,
+        },
     )
 
     assert low["risk_level"] == "LOW"
@@ -46,7 +54,7 @@ def test_probability_thresholds_produce_low_medium_and_high_actions():
     assert high["recommendation"] == "START ADDITIONAL TURBINE"
 
 
-def test_low_spin_profile_only_adds_pressure_below_planning_threshold():
+def test_historical_spin_profile_does_not_masquerade_as_live_grid_telemetry():
     engine = RecommendationEngine()
     weather = {
         "temperature_c": 28,
@@ -72,11 +80,11 @@ def test_low_spin_profile_only_adds_pressure_below_planning_threshold():
         calibration={"selected_demand_mw": 900, "selected_spin_mw": 50},
     )
 
-    assert low["probability_score"] > adequate["probability_score"]
-    assert any("spinning reserve" in factor for factor in low["factors"])
+    assert low["probability_score"] == adequate["probability_score"]
+    assert not any("spinning reserve" in factor for factor in low["factors"])
 
 
-def test_spin_threshold_is_inclusive_and_has_no_pressure_at_fifteen_percent():
+def test_scenario_profile_needs_a_followup_point_to_change_demand():
     engine = RecommendationEngine()
     weather = {
         "temperature_c": 28,
@@ -91,19 +99,26 @@ def test_spin_threshold_is_inclusive_and_has_no_pressure_at_fifteen_percent():
         "reserve_margin_percent": 30,
     }
 
-    at_threshold = engine.evaluate(
+    no_followup = engine.evaluate(
         weather,
         grid,
-        calibration={"selected_demand_mw": 1000, "selected_spin_mw": 150},
+        calibration={
+            "selected_demand_mw": 1000,
+            "selection_confidence": 1.0,
+        },
     )
-    below_threshold = engine.evaluate(
+    rising_profile = engine.evaluate(
         weather,
         grid,
-        calibration={"selected_demand_mw": 1000, "selected_spin_mw": 149},
+        calibration={
+            "selected_demand_mw": 1000,
+            "selected_next_demand_mw": 1100,
+            "selection_confidence": 1.0,
+        },
     )
 
-    assert not any("spinning reserve" in factor for factor in at_threshold["factors"])
-    assert any("spinning reserve" in factor for factor in below_threshold["factors"])
+    assert no_followup["forecast_demand_60m"] == 1000
+    assert rising_profile["forecast_demand_60m"] == 1100
 
 
 def test_live_temperature_takes_priority_over_historical_calibration():
@@ -148,6 +163,7 @@ def test_scenario_confidence_controls_forecast_blend():
         grid,
         calibration={
             "selected_demand_mw": 1200,
+            "selected_next_demand_mw": 1320,
             "selection_confidence": 0.0,
         },
     )
@@ -156,12 +172,13 @@ def test_scenario_confidence_controls_forecast_blend():
         grid,
         calibration={
             "selected_demand_mw": 1200,
+            "selected_next_demand_mw": 1320,
             "selection_confidence": 1.0,
         },
     )
 
     assert low_confidence["forecast_demand_30m"] == 800
-    assert high_confidence["forecast_demand_30m"] == 1000
+    assert high_confidence["forecast_demand_30m"] == 840
 
 
 def test_low_score_with_reduced_reserve_still_requires_monitoring():
@@ -176,10 +193,53 @@ def test_low_score_with_reduced_reserve_still_requires_monitoring():
         {
             "current_demand_mw": 800,
             "current_generation_mw": 900,
-            "total_available_capacity_mw": 1000,
-            "reserve_margin_percent": 24,
+            "total_available_capacity_mw": 925,
+            "reserve_margin_percent": 15.6,
         },
     )
 
     assert result["risk_level"] == "MEDIUM"
     assert result["recommendation"] == "MONITOR CONDITIONS"
+
+
+def test_target_hour_weather_changes_fallback_demand_direction():
+    engine = RecommendationEngine()
+    weather = {
+        "temperature_c": 29,
+        "humidity_percent": 70,
+        "rainfall_mm_hr": 0,
+        "cloud_cover_percent": 30,
+    }
+    grid = {
+        "current_demand_mw": 900,
+        "current_generation_mw": 950,
+        "total_available_capacity_mw": 1300,
+        "reserve_margin_percent": 44.4,
+    }
+
+    warming = engine.evaluate(
+        weather,
+        grid,
+        forecast_weather={
+            "temperature_c": 32,
+            "humidity_percent": 75,
+            "rainfall_mm_hr": 0,
+            "cloud_cover_percent": 25,
+            "confidence_score": 0.9,
+        },
+    )
+    cooling = engine.evaluate(
+        weather,
+        grid,
+        forecast_weather={
+            "temperature_c": 27,
+            "humidity_percent": 65,
+            "rainfall_mm_hr": 3,
+            "cloud_cover_percent": 70,
+            "confidence_score": 0.9,
+        },
+    )
+
+    assert warming["forecast_demand_60m"] > cooling["forecast_demand_60m"]
+    assert "Forecast warming increases short-term cooling demand" in warming["factors"]
+    assert "Forecast cooling reduces short-term cooling demand" in cooling["factors"]

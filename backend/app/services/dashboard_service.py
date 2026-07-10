@@ -13,6 +13,7 @@ from app.schemas.recommendation import RecommendationResponse
 from app.schemas.weather import CurrentWeatherResponse
 from app.services.calibration_service import CalibrationService
 from app.services.grid_service import GridService
+from app.services.model_status_service import ModelStatusService
 from app.services.recommendation_engine import RecommendationEngine
 from app.services.snapshot_persistence_service import SnapshotPersistenceService
 from app.services.weather_service import WeatherService
@@ -25,12 +26,14 @@ class DashboardService:
         grid_service: GridService | None = None,
         recommendation_engine: RecommendationEngine | None = None,
         calibration_service: CalibrationService | None = None,
+        model_status_service: ModelStatusService | None = None,
         persistence_service: SnapshotPersistenceService | None = None,
     ) -> None:
         self.weather_service = weather_service or WeatherService()
         self.grid_service = grid_service or GridService()
         self.recommendation_engine = recommendation_engine or RecommendationEngine()
         self.calibration_service = calibration_service or CalibrationService()
+        self.model_status_service = model_status_service or ModelStatusService()
         self.persistence_service = persistence_service or SnapshotPersistenceService()
         self._last_weather: dict[str, Any] | None = None
         self._last_forecast: list[dict[str, Any]] | None = None
@@ -131,10 +134,18 @@ class DashboardService:
                 "recommendation inhibited",
             )
         else:
-            probability_payload = self.recommendation_engine.evaluate(
-                weather,
-                grid_status,
-                calibration=calibration_payload,
+            probability_payload = (
+                self.model_status_service.get_operating_risk_payload()
+                or self.recommendation_engine.evaluate(
+                    weather,
+                    grid_status,
+                    calibration=calibration_payload,
+                    forecast_weather=self._forecast_for_horizon(
+                        forecast,
+                        reference_time=weather.get("timestamp"),
+                        horizon_minutes=60,
+                    ),
+                )
             )
         weather_response = CurrentWeatherResponse.model_validate(weather)
         grid_response = GridStatusResponse.model_validate(grid_status)
@@ -157,6 +168,9 @@ class DashboardService:
             reason=probability_payload["reason"],
             recommendation=probability_payload["recommendation"],
         )
+        demand_forecast = self.model_status_service.get_demand_forecast_bundle()
+        model_status = self.model_status_service.get_model_status()
+        scada_status = self.model_status_service.get_scada_status()
 
         snapshot = DashboardSnapshotResponse(
             weather=weather_response,
@@ -173,6 +187,9 @@ class DashboardService:
                 grid_fallback_used=grid_fallback,
                 weather_cache_fallback=weather_fallback,
             ),
+            demand_forecast=demand_forecast,
+            model_status=model_status,
+            scada_status=scada_status,
         )
         if settings.SNAPSHOT_PERSISTENCE_ENABLED:
             persisted = await asyncio.to_thread(self.persistence_service.persist, snapshot)
@@ -203,6 +220,28 @@ class DashboardService:
             return temperature_c
         humidity_factor = max(0.0, humidity_percent)
         return round(temperature_c + 0.033 * humidity_factor - 0.70, 2)
+
+    @classmethod
+    def _forecast_for_horizon(
+        cls,
+        forecast: list[dict[str, Any]],
+        reference_time: Any,
+        horizon_minutes: int,
+    ) -> dict[str, Any] | None:
+        if not forecast:
+            return None
+        reference = cls._parse_datetime(reference_time)
+        if reference is None:
+            return forecast[0]
+        target = reference.timestamp() + horizon_minutes * 60
+        timestamped = [
+            (item, cls._parse_datetime(item.get("forecast_timestamp")))
+            for item in forecast
+        ]
+        valid = [(item, timestamp) for item, timestamp in timestamped if timestamp]
+        if not valid:
+            return forecast[0]
+        return min(valid, key=lambda pair: abs(pair[1].timestamp() - target))[0]
 
     def _build_data_quality(
         self,
@@ -350,3 +389,16 @@ class DashboardService:
         if observed.tzinfo is None:
             observed = observed.replace(tzinfo=timezone.utc)
         return max(0, int((datetime.now(timezone.utc) - observed).total_seconds()))
+
+    @staticmethod
+    def _parse_datetime(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            parsed = value
+        else:
+            try:
+                parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)

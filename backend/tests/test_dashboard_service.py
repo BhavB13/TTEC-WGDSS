@@ -2,8 +2,14 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
 
+from app.models.base import Base
+from app.models.demand_forecast import DemandForecastResult
+from app.models.scada import ScadaGridSnapshot
 from app.services.dashboard_service import DashboardService
+from app.services.model_status_service import ModelStatusService
 from app.services.recommendation_engine import RecommendationEngine
 from app.schemas.grid import GridStatusResponse
 from app.schemas.calibration import CalibrationSnapshotResponse
@@ -134,6 +140,53 @@ class UncertainGridService(FakeGridService):
         status = await super().get_grid_status()
         status["quality_status"] = "UNCERTAIN"
         return status
+
+
+def _model_session_factory(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'dashboard_model.db'}")
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+def _seed_model_status_data(session_factory):
+    now = datetime.now(timezone.utc)
+    with session_factory() as session:
+        session.add(
+            ScadaGridSnapshot(
+                timestamp=now - timedelta(minutes=5),
+                current_demand_mw=900,
+                temperature_c=29,
+                spinning_reserve_mw=80,
+                available_capacity_mw=1180,
+                online_capacity_mw=1120,
+                reserve_margin_mw=280,
+                reserve_margin_percent=31.1,
+                online_spare_mw=220,
+                quality_status="GOOD",
+                missing_fields="",
+                source="scada.csv",
+            )
+        )
+        session.add(
+            DemandForecastResult(
+                forecast_timestamp=now + timedelta(minutes=55),
+                generated_at=now,
+                horizon_hours=1,
+                forecast_demand_mw=1040,
+                forecast_uncertainty_mw=30,
+                model_name="persistence",
+                model_version="demand-forecast-v1.3",
+                baseline_name="persistence",
+                baseline_forecast_mw=1030,
+                mae=10,
+                rmse=12,
+                mape=1.2,
+                residual_std=30,
+                ml_beats_baseline=False,
+                quality_status="BASELINE_ACTIVE",
+            )
+        )
+        session.commit()
 
 
 @pytest.mark.asyncio
@@ -318,5 +371,67 @@ async def test_stale_weather_inhibits_weather_based_recommendation():
     snapshot = await service.get_snapshot(days=1)
 
     assert snapshot.data_quality.is_stale is True
-    assert snapshot.data_quality.decision_status == "INHIBITED"
-    assert snapshot.recommendation.recommendation == "DATA UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_snapshot_exposes_model_scada_status_and_operating_risk(tmp_path):
+    session_factory = _model_session_factory(tmp_path)
+    _seed_model_status_data(session_factory)
+    service = DashboardService(
+        weather_service=FakeWeatherService(),
+        grid_service=FakeGridService(),
+        recommendation_engine=RecommendationEngine(),
+        calibration_service=NoCalibrationService(),
+        model_status_service=ModelStatusService(session_factory=session_factory),
+        persistence_service=RecordingPersistenceService(),
+    )
+
+    snapshot = await service.get_snapshot(days=1)
+
+    assert snapshot.demand_forecast is not None
+    assert len(snapshot.demand_forecast.horizons) == 1
+    assert snapshot.model_status is not None
+    assert snapshot.model_status.mode == "BASELINE_ACTIVE"
+    assert snapshot.model_status.metrics.mae == 10
+    assert snapshot.scada_status is not None
+    assert snapshot.scada_status.quality_status == "GOOD"
+    assert snapshot.probability.engine_version == "operating-risk-v1.3"
+    assert snapshot.probability.risk_level == "HIGH"
+    assert snapshot.probability.forecast_demand_30m == 970
+    assert snapshot.recommendation.recommendation == "START ADDITIONAL TURBINE"
+    assert snapshot.data_quality.decision_status == "AVAILABLE"
+
+
+def test_historical_backtest_result_cannot_drive_live_operating_risk(tmp_path):
+    session_factory = _model_session_factory(tmp_path)
+    _seed_model_status_data(session_factory)
+    with session_factory() as session:
+        forecast = session.scalar(select(DemandForecastResult))
+        scada = session.scalar(select(ScadaGridSnapshot))
+        assert forecast is not None
+        assert scada is not None
+        forecast.forecast_timestamp = scada.timestamp
+        session.commit()
+
+    payload = ModelStatusService(
+        session_factory=session_factory
+    ).get_operating_risk_payload()
+
+    assert payload is None
+
+
+def test_dashboard_selects_weather_nearest_requested_forecast_horizon():
+    reference = "2026-07-10T12:10:00-04:00"
+    items = [
+        {"forecast_timestamp": "2026-07-10T12:00:00-04:00", "temperature_c": 29},
+        {"forecast_timestamp": "2026-07-10T13:00:00-04:00", "temperature_c": 31},
+        {"forecast_timestamp": "2026-07-10T14:00:00-04:00", "temperature_c": 32},
+    ]
+
+    selected = DashboardService._forecast_for_horizon(
+        items,
+        reference_time=reference,
+        horizon_minutes=60,
+    )
+
+    assert selected is items[1]

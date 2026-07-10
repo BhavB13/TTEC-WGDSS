@@ -48,7 +48,7 @@ const calibration: CalibrationSnapshot = {
 };
 
 describe("DemandForecastChart", () => {
-  it("renders the selected calibration profile in a responsive chart container", () => {
+  it("renders a live-adjusted total-day estimate and near-term numeric values", () => {
     render(
       <DemandForecastChart
         gridStatus={grid}
@@ -57,8 +57,12 @@ describe("DemandForecastChart", () => {
       />,
     );
 
-    expect(screen.getByText("Hot Day Profile")).toBeInTheDocument();
-    expect(screen.getByText("SCADA + Scenario")).toBeInTheDocument();
+    expect(screen.getByText("Estimated Total Day Demand")).toBeInTheDocument();
+    expect(screen.getByText("Live-adjusted profile")).toBeInTheDocument();
+    expect(screen.getByText("30m Estimate")).toBeInTheDocument();
+    expect(screen.getByText("60m Estimate")).toBeInTheDocument();
+    expect(screen.getByText("970 MW")).toBeInTheDocument();
+    expect(screen.getByText("985 MW")).toBeInTheDocument();
     expect(screen.getByTestId("line-chart").parentElement).toHaveClass("w-full");
   });
 });

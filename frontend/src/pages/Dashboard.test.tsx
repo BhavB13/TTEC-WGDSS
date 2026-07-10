@@ -41,7 +41,7 @@ describe("Dashboard", () => {
     expect(container.querySelector(".animate-pulse")).toBeInTheDocument();
 
     resolveSnapshot(dashboardFixture);
-    expect(await screen.findByText("950 MW")).toBeInTheDocument();
+    expect((await screen.findAllByText("950 MW")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("LIVE").length).toBeGreaterThan(0);
     expect(screen.getByTestId("weather-map")).toBeInTheDocument();
   });
@@ -50,11 +50,11 @@ describe("Dashboard", () => {
     getDashboardSnapshot.mockResolvedValue(dashboardFixture);
     const user = userEvent.setup();
     render(<Dashboard />);
-    await screen.findByText("950 MW");
+    await screen.findAllByText("950 MW");
 
     await user.click(screen.getByRole("button", { name: "Home" }));
     expect(screen.getByText("Weather Drivers")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "700 to 1500 MW Window" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Next 60 Minutes" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Operations" }));
     expect(screen.getByText("Station Dispatch")).toBeInTheDocument();
@@ -76,6 +76,8 @@ describe("Dashboard", () => {
 
     await user.click(screen.getByRole("button", { name: "Analytics" }));
     expect(screen.getByText("Calibration Summary")).toBeInTheDocument();
+    expect(screen.getByText("Model Status")).toBeInTheDocument();
+    expect(screen.getByText("Baseline Active")).toBeInTheDocument();
   });
 
   it("shows the API error state and retries", async () => {
@@ -87,7 +89,7 @@ describe("Dashboard", () => {
 
     expect(await screen.findByText("Backend unavailable")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(screen.getByText("950 MW")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText("950 MW").length).toBeGreaterThan(0));
     expect(getDashboardSnapshot).toHaveBeenCalledTimes(2);
   });
 });

@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     DATA_STALE_AFTER_SECONDS: int = 5400
     GRID_PROVIDER: str = "mock"
     GRID_STALE_AFTER_SECONDS: int = 30
+    MODEL_FORECAST_STALE_AFTER_SECONDS: int = 7200
 
     model_config = SettingsConfigDict(
         env_file=".env",

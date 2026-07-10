@@ -4,10 +4,18 @@ import CurrentConditions from "../components/CurrentConditions";
 import DemandForecastChart from "../components/DemandForecastChart";
 import Header from "../components/Header";
 import ProbabilityGauge from "../components/ProbabilityGauge";
+import { formatRiskProbability } from "../utils/probability";
 import ScenarioComparisonChart from "../components/ScenarioComparisonChart";
 import WeatherMap from "../components/WeatherMap";
 import { getDashboardSnapshot } from "../services/api";
-import type { CalibrationSnapshot, DashboardSnapshot, ForecastData } from "../types/dashboard";
+import type {
+  CalibrationSnapshot,
+  DashboardSnapshot,
+  DemandForecastBundle,
+  ForecastData,
+  ModelStatus,
+  ScadaStatus,
+} from "../types/dashboard";
 
 type LoadState = "loading" | "ready" | "error";
 type DashboardTab =
@@ -141,6 +149,9 @@ export default function Dashboard() {
   const probability = snapshot.probability ?? FALLBACK_PROBABILITY;
   const recommendation = snapshot.recommendation ?? FALLBACK_RECOMMENDATION;
   const calibration = snapshot.calibration ?? null;
+  const demandForecast = snapshot.demand_forecast ?? null;
+  const modelStatus = snapshot.model_status ?? null;
+  const scadaStatus = snapshot.scada_status ?? null;
   const dataQuality = snapshot.data_quality ?? {
     overall_status: "DEGRADED",
     weather_status: "UNKNOWN",
@@ -241,6 +252,9 @@ export default function Dashboard() {
                 <WorkspacePage>
                   <AnalyticsTab
                     calibration={calibration}
+                    demandForecast={demandForecast}
+                    modelStatus={modelStatus}
+                    scadaStatus={scadaStatus}
                   />
                 </WorkspacePage>
               ) : null}
@@ -381,15 +395,20 @@ function HomeForecastRiskCard({
   grid: DashboardSnapshot["grid"];
   probability: DashboardSnapshot["probability"];
 }) {
+  const demandChange60 =
+    probability.forecast_demand_60m - grid.current_demand_mw;
+  const headroom60 =
+    grid.total_available_capacity_mw - probability.forecast_demand_60m;
+
   return (
     <div className="home-forecast-card flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
       <div className="mb-2 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
-            Demand Forecast
+            Demand Outlook
           </p>
           <h2 className="mt-1 text-[0.94rem] font-semibold leading-tight text-white">
-            700 to 1500 MW Window
+            Next 60 Minutes
           </h2>
         </div>
         <span className="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-1 text-[11px] font-semibold text-slate-200">
@@ -397,13 +416,36 @@ function HomeForecastRiskCard({
         </span>
       </div>
 
-      <DemandForecastChart
-        gridStatus={grid}
-        probability={probability}
-        showHeader={false}
-        showSummary={false}
-        className="h-full min-h-[22rem] w-full min-w-0"
-      />
+      <div className="min-h-[10.5rem] flex-1">
+        <DemandForecastChart
+          gridStatus={grid}
+          probability={probability}
+          view="nearTerm"
+          showHeader={false}
+          showSummary={false}
+          className="h-full min-h-[10.5rem] w-full min-w-0 p-1.5"
+        />
+      </div>
+
+      <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+        <MiniMetric label="Now" value={`${grid.current_demand_mw.toFixed(0)} MW`} />
+        <MiniMetric
+          label="30 Minute"
+          value={`${probability.forecast_demand_30m.toFixed(0)} MW`}
+        />
+        <MiniMetric
+          label="60 Minute"
+          value={`${probability.forecast_demand_60m.toFixed(0)} MW`}
+        />
+        <MiniMetric label="60m Headroom" value={formatSignedMegawatts(headroom60)} />
+      </div>
+
+      <div className="mt-1.5 flex items-center justify-between gap-2 px-1 text-[10px] text-slate-400">
+        <span>{grid.demand_period} demand period</span>
+        <span className={demandChange60 > 0 ? "text-amber-200" : "text-emerald-200"}>
+          {formatSignedMegawatts(demandChange60)} by 60m
+        </span>
+      </div>
     </div>
   );
 }
@@ -1057,11 +1099,22 @@ function UtilizationBar({ value }: { value: number }) {
   );
 }
 
-function AnalyticsTab({ calibration }: { calibration: CalibrationSnapshot | null }) {
+function AnalyticsTab({
+  calibration,
+  demandForecast,
+  modelStatus,
+  scadaStatus,
+}: {
+  calibration: CalibrationSnapshot | null;
+  demandForecast: DemandForecastBundle | null;
+  modelStatus: ModelStatus | null;
+  scadaStatus: ScadaStatus | null;
+}) {
   return (
     <div className="grid h-full min-h-0 w-full min-w-0 gap-2.5 xl:grid-cols-[minmax(260px,0.36fr)_minmax(0,0.64fr)]">
-      <PanelCard title="Calibration Summary" className="h-full min-h-0">
-        <div className="grid h-full min-h-0 auto-rows-fr grid-cols-2 gap-2">
+      <div className="grid h-full min-h-0 gap-2.5">
+        <PanelCard title="Calibration Summary" className="min-h-0">
+          <div className="grid h-full min-h-0 auto-rows-fr grid-cols-2 gap-2">
                 <MiniMetric
                   label="Selected Scenario"
                   value={calibration?.selected_scenario_label ?? "Typical Day"}
@@ -1108,8 +1161,15 @@ function AnalyticsTab({ calibration }: { calibration: CalibrationSnapshot | null
               value={calibration?.selection_reason ?? "Calibration data unavailable"}
             />
           </div>
-        </div>
-      </PanelCard>
+          </div>
+        </PanelCard>
+
+        <ModelStatusPanel
+          demandForecast={demandForecast}
+          modelStatus={modelStatus}
+          scadaStatus={scadaStatus}
+        />
+      </div>
 
       <ScenarioComparisonChart
         scenarios={calibration?.scenarios ?? []}
@@ -1117,6 +1177,61 @@ function AnalyticsTab({ calibration }: { calibration: CalibrationSnapshot | null
         className="h-full min-h-0 w-full min-w-0"
       />
     </div>
+  );
+}
+
+function ModelStatusPanel({
+  demandForecast,
+  modelStatus,
+  scadaStatus,
+}: {
+  demandForecast: DemandForecastBundle | null;
+  modelStatus: ModelStatus | null;
+  scadaStatus: ScadaStatus | null;
+}) {
+  const primaryHorizon = demandForecast?.horizons?.[0] ?? null;
+
+  return (
+    <PanelCard title="Model Status" className="min-h-0">
+      <div className="grid h-full min-h-0 auto-rows-fr grid-cols-2 gap-2">
+        <MiniMetric
+          label="Mode"
+          value={modelStatus?.mode ? formatStatusLabel(modelStatus.mode) : "Unavailable"}
+        />
+        <MiniMetric
+          label="Active Model"
+          value={modelStatus?.active_model ?? "Unavailable"}
+        />
+        <MiniMetric
+          label="1h Forecast"
+          value={
+            primaryHorizon
+              ? `${primaryHorizon.forecast_demand_mw.toFixed(0)} MW`
+              : "Unavailable"
+          }
+        />
+        <MiniMetric
+          label="Uncertainty"
+          value={
+            primaryHorizon
+              ? `±${primaryHorizon.forecast_uncertainty_mw.toFixed(0)} MW`
+              : "Unavailable"
+          }
+        />
+        <MiniMetric
+          label="SCADA Snapshot"
+          value={
+            scadaStatus?.latest_snapshot
+              ? formatShortDateTime(scadaStatus.latest_snapshot)
+              : "Unavailable"
+          }
+        />
+        <MiniMetric
+          label="SCADA Quality"
+          value={scadaStatus?.quality_status ?? "Unavailable"}
+        />
+      </div>
+    </PanelCard>
   );
 }
 
@@ -1194,6 +1309,31 @@ function formatTimestamp(value?: string | null): string {
   }).format(date);
 }
 
+function formatShortDateTime(value?: string | null): string {
+  if (!value) {
+    return "--";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatStatusLabel(value: string): string {
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
 function formatSignedMegawatts(value: number): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(0)} MW`;
 }
@@ -1203,7 +1343,7 @@ function formatProbability(
 ): string {
   return probability.risk_level === "UNAVAILABLE"
     ? "--"
-    : probability.probability_score.toFixed(2);
+    : formatRiskProbability(probability.probability_score);
 }
 
 function formatGuidanceForecastTimestamp(value: string): string {

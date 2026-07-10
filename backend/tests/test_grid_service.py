@@ -58,6 +58,21 @@ def test_grid_normalization_keeps_provider_quality_metadata():
     assert normalized_timestamp == timestamp
 
 
+def test_grid_normalization_recalculates_inconsistent_derived_reserve_margin():
+    service = GridService(provider=create_grid_provider("mock"))
+
+    normalized = service._normalize_grid_status(
+        {
+            "current_demand_mw": 800,
+            "current_generation_mw": 900,
+            "total_available_capacity_mw": 1200,
+            "reserve_margin_percent": 1,
+        }
+    )
+
+    assert normalized["reserve_margin_percent"] == 50
+
+
 def test_unconfigured_live_provider_fails_closed():
     with pytest.raises(RuntimeError, match="no live connector is configured"):
         create_grid_provider("scada")

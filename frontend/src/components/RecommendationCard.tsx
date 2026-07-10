@@ -1,4 +1,5 @@
 import type { RecommendationData } from "../types/dashboard";
+import { formatRiskProbability } from "../utils/probability";
 
 interface RecommendationCardProps {
   recommendation: RecommendationData;
@@ -48,7 +49,7 @@ export default function RecommendationCard({
           value={
             recommendation.risk_level === "UNAVAILABLE"
               ? "--"
-              : recommendation.probability_score.toFixed(2)
+              : formatRiskProbability(recommendation.probability_score)
           }
         />
         <Metric label="30m Demand" value={`${recommendation.forecast_demand_30m.toFixed(0)} MW`} />

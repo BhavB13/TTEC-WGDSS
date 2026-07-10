@@ -90,14 +90,9 @@ class GridService:
                 "Current generation exceeds available capacity"
             )
 
-        reserve_value = payload.get("reserve_margin_percent")
-        reserve_margin_percent = (
-            float(reserve_value)
-            if reserve_value is not None
-            else self._calculate_reserve_margin(
-                total_available_capacity_mw,
-                current_demand_mw,
-            )
+        reserve_margin_percent = self._calculate_reserve_margin(
+            total_available_capacity_mw,
+            current_demand_mw,
         )
         quality_status = str(payload.get("quality_status", TelemetryQuality.GOOD))
         timestamp = payload.get("timestamp")

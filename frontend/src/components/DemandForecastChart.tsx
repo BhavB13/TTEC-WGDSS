@@ -18,6 +18,7 @@ interface DemandForecastChartProps {
   gridStatus: GridStatus;
   probability: ProbabilityData;
   calibration?: CalibrationSnapshot | null;
+  view?: "day" | "nearTerm";
   className?: string;
   showHeader?: boolean;
   showSummary?: boolean;
@@ -27,6 +28,7 @@ export default function DemandForecastChart({
   gridStatus,
   probability,
   calibration = null,
+  view = "day",
   className = "",
   showHeader = true,
   showSummary = true,
@@ -41,14 +43,49 @@ export default function DemandForecastChart({
     );
   }, [calibration]);
 
+  const dayEstimate = useMemo(() => {
+    if (!activeScenario?.demand_curve?.length) {
+      return null;
+    }
+
+    const points = [...activeScenario.demand_curve]
+      .filter((point) => point.demand_mw != null && point.demand_mw > 0)
+      .sort((left, right) => left.hour - right.hour);
+    if (!points.length) {
+      return null;
+    }
+
+    const selectedHour = calibration?.selected_hour ?? getTrinidadHour();
+    const referencePoint = points.reduce((closest, point) =>
+      circularHourDistance(point.hour, selectedHour) < circularHourDistance(closest.hour, selectedHour)
+        ? point
+        : closest,
+    );
+    const profileDemand = referencePoint.demand_mw ?? gridStatus.current_demand_mw;
+    const scale = profileDemand > 0 ? gridStatus.current_demand_mw / profileDemand : 1;
+    const currentIndex = points.findIndex((point) => point === referencePoint);
+    const nextIndex = (currentIndex + 1) % points.length;
+
+    return {
+      labels: points.map((point) => formatHour(point.hour)),
+      estimatedDemand: points.map((point) =>
+        Math.round((point.demand_mw ?? 0) * scale),
+      ),
+      currentIndex,
+      nextIndex,
+    };
+  }, [activeScenario, calibration?.selected_hour, gridStatus.current_demand_mw]);
+
+  const displayedDayEstimate = view === "day" ? dayEstimate : null;
+
   const chartConfig = useMemo(() => {
-    if (activeScenario?.demand_curve?.length) {
+    if (displayedDayEstimate && activeScenario) {
       return {
-        labels: activeScenario.demand_curve.map((point) => `H${point.hour}`),
+        labels: displayedDayEstimate.labels,
         datasets: [
           {
-            label: `${activeScenario.scenario_label} Demand (MW)`,
-            data: activeScenario.demand_curve.map((point) => point.demand_mw ?? null),
+            label: "Estimated Total Day Demand (MW)",
+            data: displayedDayEstimate.estimatedDemand,
             borderColor: "rgba(34, 211, 238, 1)",
             backgroundColor: "rgba(34, 211, 238, 0.18)",
             borderWidth: 2,
@@ -57,14 +94,34 @@ export default function DemandForecastChart({
             yAxisID: "demand",
           },
           {
-            label: "SCADA Temperature (°C)",
-            data: activeScenario.scada_temperature_trace.map((point) => point.temperature_c ?? null),
-            borderColor: "rgba(244, 114, 182, 1)",
-            backgroundColor: "rgba(244, 114, 182, 0.12)",
-            borderWidth: 2,
-            tension: 0.35,
-            pointRadius: 2,
-            yAxisID: "temperature",
+            label: "Measured Current Demand",
+            data: displayedDayEstimate.estimatedDemand.map((_, index) =>
+              index === displayedDayEstimate.currentIndex ? gridStatus.current_demand_mw : null,
+            ),
+            borderColor: "rgba(255, 255, 255, 0)",
+            backgroundColor: "rgba(255, 255, 255, 1)",
+            pointBackgroundColor: "rgba(255, 255, 255, 1)",
+            pointBorderColor: "rgba(8, 47, 73, 1)",
+            pointBorderWidth: 2,
+            pointRadius: 5,
+            pointHoverRadius: 6,
+            showLine: false,
+            yAxisID: "demand",
+          },
+          {
+            label: "60m Forecast",
+            data: displayedDayEstimate.estimatedDemand.map((_, index) =>
+              index === displayedDayEstimate.nextIndex ? probability.forecast_demand_60m : null,
+            ),
+            borderColor: "rgba(244, 114, 182, 0)",
+            backgroundColor: "rgba(244, 114, 182, 1)",
+            pointBackgroundColor: "rgba(244, 114, 182, 1)",
+            pointBorderColor: "rgba(80, 7, 36, 1)",
+            pointBorderWidth: 2,
+            pointRadius: 5,
+            pointHoverRadius: 6,
+            showLine: false,
+            yAxisID: "demand",
           },
         ],
       };
@@ -95,7 +152,7 @@ export default function DemandForecastChart({
         },
       ],
     };
-  }, [activeScenario, gridStatus.current_demand_mw, probability.forecast_demand_30m, probability.forecast_demand_60m]);
+  }, [activeScenario, displayedDayEstimate, gridStatus.current_demand_mw, probability.forecast_demand_30m, probability.forecast_demand_60m]);
 
   const options = useMemo(
     () => ({
@@ -103,7 +160,7 @@ export default function DemandForecastChart({
       maintainAspectRatio: false,
       plugins: {
         legend: {
-          display: Boolean(activeScenario),
+          display: Boolean(displayedDayEstimate),
           labels: {
             color: "#cbd5e1",
             usePointStyle: true,
@@ -111,7 +168,7 @@ export default function DemandForecastChart({
           },
         },
       },
-      scales: activeScenario
+      scales: displayedDayEstimate
         ? {
             x: {
               ticks: {
@@ -132,18 +189,6 @@ export default function DemandForecastChart({
               },
               grid: {
                 color: "rgba(148, 163, 184, 0.14)",
-              },
-            },
-            temperature: {
-              type: "linear" as const,
-              position: "right" as const,
-              min: 20,
-              max: 36,
-              ticks: {
-                color: "#f9a8d4",
-              },
-              grid: {
-                drawOnChartArea: false,
               },
             },
           }
@@ -171,7 +216,7 @@ export default function DemandForecastChart({
             },
           },
     }),
-    [activeScenario],
+    [displayedDayEstimate],
   );
 
   return (
@@ -183,14 +228,18 @@ export default function DemandForecastChart({
               Demand Forecast
             </p>
             <h2 className="mt-1 text-[0.98rem] font-semibold text-white">
-              {activeScenario ? `${activeScenario.scenario_label} Profile` : "Current and Near-Term Load"}
+              {displayedDayEstimate ? "Estimated Total Day Demand" : "Current and Near-Term Load"}
             </h2>
             {calibration?.selection_reason ? (
-              <p className="mt-1 text-[11px] text-slate-400">{calibration.selection_reason}</p>
+              <p className="mt-1 text-[11px] text-slate-400">
+                {displayedDayEstimate
+                  ? `${calibration.selection_reason} Profile shape is aligned to the live demand reading.`
+                  : calibration.selection_reason}
+              </p>
             ) : null}
           </div>
           <span className="rounded-full border border-slate-700 px-2.5 py-1 text-[11px] font-medium text-slate-300">
-            {activeScenario ? "SCADA + Scenario" : "Chart.js"}
+            {displayedDayEstimate ? "Live-adjusted profile" : "Near-term only"}
           </span>
         </div>
       ) : null}
@@ -223,13 +272,13 @@ export default function DemandForecastChart({
             </p>
           </div>
           <div className="flex min-h-[3.25rem] flex-col items-center justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 text-center shadow-inner shadow-black/20">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">30m</p>
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">30m Estimate</p>
             <p className="mt-1 text-[0.86rem] font-semibold leading-tight text-white">
               {probability.forecast_demand_30m.toFixed(0)} MW
             </p>
           </div>
           <div className="flex min-h-[3.25rem] flex-col items-center justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 text-center shadow-inner shadow-black/20">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">60m</p>
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">60m Estimate</p>
             <p className="mt-1 text-[0.86rem] font-semibold leading-tight text-white">
               {probability.forecast_demand_60m.toFixed(0)} MW
             </p>
@@ -238,4 +287,26 @@ export default function DemandForecastChart({
       ) : null}
     </div>
   );
+}
+
+function getTrinidadHour(): number {
+  const hour = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    hour12: false,
+    timeZone: "America/Port_of_Spain",
+  }).formatToParts(new Date()).find((part) => part.type === "hour")?.value;
+  const parsed = Number(hour);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 24;
+}
+
+function circularHourDistance(left: number, right: number): number {
+  const distance = Math.abs(left - right);
+  return Math.min(distance, 24 - distance);
+}
+
+function formatHour(hour: number): string {
+  const normalized = hour % 24;
+  const suffix = normalized >= 12 ? "PM" : "AM";
+  const displayHour = normalized % 12 || 12;
+  return `${displayHour} ${suffix}`;
 }

@@ -1,4 +1,5 @@
 import type { ProbabilityData } from "../types/dashboard";
+import { formatRiskProbability } from "../utils/probability";
 
 interface ProbabilityGaugeProps {
   probability: ProbabilityData;
@@ -81,18 +82,18 @@ export default function ProbabilityGauge({
           </svg>
           <div className="absolute text-center">
             <p className="text-3xl font-semibold text-white">
-              {available ? score.toFixed(2) : "--"}
+              {available ? formatRiskProbability(score) : "--"}
             </p>
             <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
-              0.0 - 1.0
+              Capacity shortfall probability
             </p>
           </div>
         </div>
 
         <div className="grid w-full grid-cols-3 gap-2 text-sm text-slate-300">
-          <RiskBand label="Low" range="0.00–0.44" tone="emerald" />
-          <RiskBand label="Medium" range="0.45–0.69" tone="amber" />
-          <RiskBand label="High" range="0.70–1.00" tone="rose" />
+          <RiskBand label="Low" range="0–29%" tone="emerald" />
+          <RiskBand label="Medium" range="30–65%" tone="amber" />
+          <RiskBand label="High" range="66–100%" tone="rose" />
         </div>
 
         <div className="w-full rounded-xl border border-slate-800 bg-slate-950/55 px-3 py-3">

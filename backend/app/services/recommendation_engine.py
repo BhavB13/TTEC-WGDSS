@@ -1,22 +1,29 @@
 from __future__ import annotations
 
+import math
 from typing import Any
+
+from app.services.risk_probability_engine import OperatingRiskInput, RiskProbabilityEngine
 
 
 class RecommendationEngine:
-    """
-    Rule-based probability engine for the WGDSS MVP.
-    """
+    """Transparent fallback forecast backed by the operating-risk probability model."""
 
-    ENGINE_VERSION = "rules-v1.1"
+    ENGINE_VERSION = "rules-operating-v2.1"
+    MIN_UNCERTAINTY_MW = 15.0
+    DEMAND_UNCERTAINTY_RATIO = 0.02
+
+    def __init__(self, risk_engine: RiskProbabilityEngine | None = None) -> None:
+        self.risk_engine = risk_engine or RiskProbabilityEngine()
 
     def unavailable(self, current_demand_mw: float, reason: str) -> dict[str, Any]:
+        demand = self._safe_float(current_demand_mw) or 0.0
         return {
             "engine_version": self.ENGINE_VERSION,
             "probability_score": 0.0,
             "risk_level": "UNAVAILABLE",
-            "forecast_demand_30m": current_demand_mw,
-            "forecast_demand_60m": current_demand_mw,
+            "forecast_demand_30m": demand,
+            "forecast_demand_60m": demand,
             "recommendation": "DATA UNAVAILABLE",
             "factors": [reason],
             "reason": reason,
@@ -27,169 +34,173 @@ class RecommendationEngine:
         weather: dict[str, Any],
         grid_status: dict[str, Any],
         calibration: dict[str, Any] | None = None,
+        forecast_weather: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        live_temperature_c = self._safe_float(weather.get("temperature_c"))
-        temperature_c = live_temperature_c or 0.0
-        humidity_percent = float(weather.get("humidity_percent", 0.0))
-        rainfall_mm_hr = float(weather.get("rainfall_mm_hr", 0.0))
-        cloud_cover_percent = float(weather.get("cloud_cover_percent", 0.0))
-
-        selected_scenario_label = None
-        selected_demand_mw = None
-        selected_next_demand_mw = None
-        selected_spin_mw = None
-        selected_temperature_c = None
-        selection_confidence = None
-        if calibration:
-            selected_scenario_label = calibration.get("selected_scenario_label")
-            selected_demand_mw = self._safe_float(calibration.get("selected_demand_mw"))
-            selected_next_demand_mw = self._safe_float(calibration.get("selected_next_demand_mw"))
-            selected_spin_mw = self._safe_float(calibration.get("selected_spin_mw"))
-            selected_temperature_c = self._safe_float(calibration.get("selected_temperature_c"))
-            selection_confidence = self._safe_float(
-                calibration.get("selection_confidence")
-            )
-            if (
-                (live_temperature_c is None or live_temperature_c <= 0)
-                and selected_temperature_c is not None
-            ):
-                temperature_c = selected_temperature_c
-
-        current_demand_mw = float(grid_status.get("current_demand_mw", 0.0))
-        current_generation_mw = float(grid_status.get("current_generation_mw", 0.0))
-        reserve_margin_percent = float(grid_status.get("reserve_margin_percent", 0.0))
-        total_available_capacity_mw = float(grid_status.get("total_available_capacity_mw", 0.0))
-
-        factors: list[str] = []
-        score = 0.25
-        if (
-            (live_temperature_c is None or live_temperature_c <= 0)
-            and selected_temperature_c is not None
-        ):
-            factors.append(
-                "Historical SCADA calibration supplied missing ambient temperature"
-            )
-
-        if temperature_c >= 30:
-            temp_boost = min((temperature_c - 29.0) * 0.05, 0.22)
-            score += temp_boost
-            factors.append("High temperature increased expected demand")
-
-        if humidity_percent >= 70:
-            humidity_boost = min((humidity_percent - 68.0) * 0.015, 0.18)
-            score += humidity_boost
-            factors.append("High humidity increased cooling load")
-
-        if rainfall_mm_hr >= 2:
-            rain_reduction = min(rainfall_mm_hr * 0.03, 0.12)
-            score -= rain_reduction
-            factors.append("Rainfall reduced short-term demand pressure")
-
-        if cloud_cover_percent >= 50:
-            cloud_reduction = min((cloud_cover_percent - 50.0) * 0.0015, 0.06)
-            score -= cloud_reduction
-            factors.append("Cloud cover slightly reduced expected load")
-
-        demand_gap_mw = max(0.0, current_demand_mw - current_generation_mw)
-        if demand_gap_mw > 0:
-            demand_pressure = min(
-                demand_gap_mw / max(current_generation_mw, 1.0) * 0.45,
-                0.35,
-            )
-            score += demand_pressure
-            factors.append("Demand is approaching current generation")
-
-        if reserve_margin_percent < 30:
-            reserve_pressure = min((30.0 - reserve_margin_percent) / 30.0 * 0.30, 0.30)
-            score += reserve_pressure
-            factors.append("Reserve margin below threshold")
-
-        if total_available_capacity_mw and current_demand_mw > total_available_capacity_mw:
-            score += 0.20
-            factors.append("Demand is projected to exceed available capacity")
-
-        if selected_demand_mw is not None:
-            scenario_gap = max(0.0, selected_demand_mw - current_generation_mw)
-            if scenario_gap > 0:
-                scenario_pressure = min(
-                    (scenario_gap / max(current_generation_mw, 1.0)) * 0.22,
-                    0.22,
-                )
-                score += scenario_pressure
-                factors.append(
-                    f"Imported {selected_scenario_label or 'scenario'} profile indicates higher load"
-                )
-
-        if selected_spin_mw is not None and selected_spin_mw > 0:
-            spin_ratio = selected_spin_mw / max(
-                selected_demand_mw or current_demand_mw,
-                1.0,
-            )
-            spin_shortfall = max(0.0, 0.15 - spin_ratio)
-            spin_pressure = min((spin_shortfall / 0.15) * 0.12, 0.12)
-            if spin_pressure > 0:
-                score += spin_pressure
-                factors.append("Imported spinning reserve is below the 15% planning threshold")
-
-        probability_score = max(0.0, min(1.0, round(score, 2)))
-        risk_level = self._risk_level(probability_score, reserve_margin_percent)
-        forecast_demand_30m = round(
-            self._forecast_demand(
-                current_demand_mw,
-                temperature_c,
-                humidity_percent,
-                rainfall_mm_hr,
-                cloud_cover_percent,
-                horizon_minutes=30,
-                scenario_base_demand=selected_demand_mw,
-                scenario_followup_demand=selected_next_demand_mw,
-                scenario_confidence=selection_confidence,
-            ),
-            2,
+        temperature_c = self._safe_float(weather.get("temperature_c"))
+        humidity_percent = self._safe_float(weather.get("humidity_percent"))
+        rainfall_mm_hr = self._safe_float(weather.get("rainfall_mm_hr"))
+        cloud_cover_percent = self._safe_float(weather.get("cloud_cover_percent"))
+        current_demand_mw = self._safe_float(grid_status.get("current_demand_mw"))
+        current_generation_mw = self._safe_float(
+            grid_status.get("current_generation_mw")
         )
-        forecast_demand_60m = round(
-            self._forecast_demand(
-                current_demand_mw,
-                temperature_c,
-                humidity_percent,
-                rainfall_mm_hr,
-                cloud_cover_percent,
-                horizon_minutes=60,
-                scenario_base_demand=selected_demand_mw,
-                scenario_followup_demand=selected_next_demand_mw,
-                scenario_confidence=selection_confidence,
-            ),
-            2,
+        available_capacity_mw = self._safe_float(
+            grid_status.get("total_available_capacity_mw")
         )
-        recommendation = self._recommendation(probability_score, reserve_margin_percent)
 
-        reason = "; ".join(factors) if factors else "Conditions remain within normal bounds"
+        required_values = {
+            "temperature": temperature_c,
+            "humidity": humidity_percent,
+            "rainfall": rainfall_mm_hr,
+            "cloud cover": cloud_cover_percent,
+            "current demand": current_demand_mw,
+            "current generation": current_generation_mw,
+            "available capacity": available_capacity_mw,
+        }
+        missing = [name for name, value in required_values.items() if value is None]
+        if missing or current_demand_mw is None or current_demand_mw <= 0:
+            return self.unavailable(
+                current_demand_mw or 0.0,
+                "Fallback forecast unavailable; invalid or missing " + ", ".join(missing),
+            )
+        if available_capacity_mw is None or available_capacity_mw <= 0:
+            return self.unavailable(
+                current_demand_mw,
+                "Fallback forecast unavailable; available capacity must be positive",
+            )
+
+        assert temperature_c is not None
+        assert humidity_percent is not None
+        assert rainfall_mm_hr is not None
+        assert cloud_cover_percent is not None
+        assert current_generation_mw is not None
+
+        scenario = self._scenario_inputs(calibration)
+        future_weather = self._future_weather_inputs(
+            forecast_weather,
+            temperature_c,
+            humidity_percent,
+            rainfall_mm_hr,
+            cloud_cover_percent,
+        )
+        forecast_demand_30m = self._forecast_demand(
+            current_demand_mw=current_demand_mw,
+            temperature_c=temperature_c,
+            humidity_percent=humidity_percent,
+            rainfall_mm_hr=rainfall_mm_hr,
+            cloud_cover_percent=cloud_cover_percent,
+            horizon_minutes=30,
+            scenario_base_demand=scenario[0],
+            scenario_followup_demand=scenario[1],
+            scenario_confidence=scenario[2],
+            forecast_temperature_c=future_weather[0],
+            forecast_humidity_percent=future_weather[1],
+            forecast_rainfall_mm_hr=future_weather[2],
+            forecast_cloud_cover_percent=future_weather[3],
+        )
+        forecast_demand_60m = self._forecast_demand(
+            current_demand_mw=current_demand_mw,
+            temperature_c=temperature_c,
+            humidity_percent=humidity_percent,
+            rainfall_mm_hr=rainfall_mm_hr,
+            cloud_cover_percent=cloud_cover_percent,
+            horizon_minutes=60,
+            scenario_base_demand=scenario[0],
+            scenario_followup_demand=scenario[1],
+            scenario_confidence=scenario[2],
+            forecast_temperature_c=future_weather[0],
+            forecast_humidity_percent=future_weather[1],
+            forecast_rainfall_mm_hr=future_weather[2],
+            forecast_cloud_cover_percent=future_weather[3],
+        )
+        uncertainty_mw = self._forecast_uncertainty(
+            forecast_demand_mw=forecast_demand_60m,
+            temperature_c=temperature_c,
+            humidity_percent=humidity_percent,
+            rainfall_mm_hr=rainfall_mm_hr,
+            scenario_confidence=scenario[2],
+            weather_confidence=future_weather[4],
+        )
+        risk = self.risk_engine.evaluate(
+            OperatingRiskInput(
+                forecast_demand_mw=forecast_demand_60m,
+                forecast_uncertainty_mw=uncertainty_mw,
+                current_demand_mw=current_demand_mw,
+                online_capacity_mw=available_capacity_mw,
+                available_capacity_mw=available_capacity_mw,
+                spinning_reserve_mw=None,
+            )
+        )
+        if risk.risk_level == "UNAVAILABLE":
+            return self.unavailable(current_demand_mw, risk.reasons[0])
+
+        factors = self._forecast_factors(
+            temperature_c=temperature_c,
+            humidity_percent=humidity_percent,
+            rainfall_mm_hr=rainfall_mm_hr,
+            cloud_cover_percent=cloud_cover_percent,
+            current_demand_mw=current_demand_mw,
+            current_generation_mw=current_generation_mw,
+            scenario_label=scenario[3],
+            scenario_base_demand=scenario[0],
+            scenario_followup_demand=scenario[1],
+            forecast_temperature_c=future_weather[0],
+            forecast_humidity_percent=future_weather[1],
+            forecast_rainfall_mm_hr=future_weather[2],
+        )
+        factors.extend(risk.reasons)
+        factors = list(dict.fromkeys(factors))
+        recommendation = self._dashboard_recommendation(risk.recommendation)
         return {
             "engine_version": self.ENGINE_VERSION,
-            "probability_score": probability_score,
-            "risk_level": risk_level,
-            "forecast_demand_30m": forecast_demand_30m,
-            "forecast_demand_60m": forecast_demand_60m,
+            "probability_score": risk.probability_score,
+            "risk_level": risk.risk_level,
+            "forecast_demand_30m": round(forecast_demand_30m, 2),
+            "forecast_demand_60m": round(forecast_demand_60m, 2),
             "recommendation": recommendation,
             "factors": factors,
-            "reason": reason,
+            "reason": "; ".join(factors),
         }
 
     @staticmethod
-    def _risk_level(probability_score: float, reserve_margin_percent: float) -> str:
-        if probability_score >= 0.75 or reserve_margin_percent < 15:
-            return "HIGH"
-        if probability_score >= 0.45 or reserve_margin_percent < 25:
-            return "MEDIUM"
-        return "LOW"
+    def _scenario_inputs(
+        calibration: dict[str, Any] | None,
+    ) -> tuple[float | None, float | None, float | None, str | None]:
+        if not calibration:
+            return None, None, None, None
+        return (
+            RecommendationEngine._safe_float(calibration.get("selected_demand_mw")),
+            RecommendationEngine._safe_float(
+                calibration.get("selected_next_demand_mw")
+            ),
+            RecommendationEngine._safe_float(calibration.get("selection_confidence")),
+            str(calibration.get("selected_scenario_label") or "scenario"),
+        )
 
     @staticmethod
-    def _recommendation(probability_score: float, reserve_margin_percent: float) -> str:
-        if probability_score >= 0.75 or reserve_margin_percent < 15:
-            return "START ADDITIONAL TURBINE"
-        if probability_score >= 0.45 or reserve_margin_percent < 25:
-            return "MONITOR CONDITIONS"
-        return "NO ACTION REQUIRED"
+    def _future_weather_inputs(
+        forecast_weather: dict[str, Any] | None,
+        temperature_c: float,
+        humidity_percent: float,
+        rainfall_mm_hr: float,
+        cloud_cover_percent: float,
+    ) -> tuple[float, float, float, float, float | None]:
+        payload = forecast_weather or {}
+        return (
+            RecommendationEngine._safe_float(payload.get("temperature_c"))
+            or temperature_c,
+            RecommendationEngine._safe_float(payload.get("humidity_percent"))
+            or humidity_percent,
+            RecommendationEngine._safe_float(payload.get("rainfall_mm_hr"))
+            if RecommendationEngine._safe_float(payload.get("rainfall_mm_hr"))
+            is not None
+            else rainfall_mm_hr,
+            RecommendationEngine._safe_float(payload.get("cloud_cover_percent"))
+            if RecommendationEngine._safe_float(payload.get("cloud_cover_percent"))
+            is not None
+            else cloud_cover_percent,
+            RecommendationEngine._safe_float(payload.get("confidence_score")),
+        )
 
     @staticmethod
     def _forecast_demand(
@@ -202,37 +213,145 @@ class RecommendationEngine:
         scenario_base_demand: float | None = None,
         scenario_followup_demand: float | None = None,
         scenario_confidence: float | None = None,
+        forecast_temperature_c: float | None = None,
+        forecast_humidity_percent: float | None = None,
+        forecast_rainfall_mm_hr: float | None = None,
+        forecast_cloud_cover_percent: float | None = None,
     ) -> float:
-        weather_pressure = 0.0
-        if temperature_c > 29:
-            weather_pressure += (temperature_c - 29.0) * 4.5
-        if humidity_percent > 70:
-            weather_pressure += (humidity_percent - 70.0) * 0.8
-        if rainfall_mm_hr >= 2:
-            weather_pressure -= rainfall_mm_hr * 1.5
-        if cloud_cover_percent >= 50:
-            weather_pressure -= (cloud_cover_percent - 50.0) * 0.12
+        horizon_fraction = max(0.0, min(1.0, horizon_minutes / 60.0))
+        projected = current_demand_mw
 
-        horizon_modifier = 1.0 if horizon_minutes <= 30 else 1.25
-        projected = current_demand_mw + weather_pressure * horizon_modifier
-        if scenario_base_demand is not None:
-            scenario_anchor = scenario_base_demand
-            if horizon_minutes > 30 and scenario_followup_demand is not None:
-                scenario_anchor = (scenario_base_demand + scenario_followup_demand) / 2.0
-            confidence = 1.0 if scenario_confidence is None else max(
-                0.0,
-                min(1.0, scenario_confidence),
+        confidence = max(0.0, min(1.0, scenario_confidence or 0.0))
+        if (
+            scenario_base_demand is not None
+            and scenario_base_demand > 0
+            and scenario_followup_demand is not None
+            and scenario_followup_demand >= 0
+        ):
+            profile_ratio = max(
+                0.85,
+                min(1.15, scenario_followup_demand / scenario_base_demand),
             )
-            scenario_weight = 0.5 * confidence
-            projected = projected * (1.0 - scenario_weight) + scenario_anchor * scenario_weight
-        floor = current_demand_mw * 0.92
-        return max(floor, projected)
+            projected *= 1.0 + (profile_ratio - 1.0) * confidence * horizon_fraction
+
+        future_temperature = (
+            temperature_c
+            if forecast_temperature_c is None
+            else forecast_temperature_c
+        )
+        future_humidity = (
+            humidity_percent
+            if forecast_humidity_percent is None
+            else forecast_humidity_percent
+        )
+        future_rainfall = (
+            rainfall_mm_hr
+            if forecast_rainfall_mm_hr is None
+            else forecast_rainfall_mm_hr
+        )
+        future_cloud = (
+            cloud_cover_percent
+            if forecast_cloud_cover_percent is None
+            else forecast_cloud_cover_percent
+        )
+        weather_ratio = (future_temperature - temperature_c) * 0.004
+        weather_ratio += (future_humidity - humidity_percent) * 0.0003
+        weather_ratio -= max(0.0, future_rainfall - rainfall_mm_hr) * 0.001
+        weather_ratio += max(0.0, rainfall_mm_hr - future_rainfall) * 0.0005
+        weather_ratio -= (future_cloud - cloud_cover_percent) * 0.00005
+        if forecast_temperature_c is None and temperature_c > 30.0:
+            weather_ratio += min((temperature_c - 30.0) * 0.00125, 0.00625)
+        projected *= 1.0 + weather_ratio * horizon_fraction * (1.0 - confidence * 0.5)
+
+        maximum_change = 0.10 if horizon_minutes <= 30 else 0.20
+        return max(
+            current_demand_mw * (1.0 - maximum_change),
+            min(current_demand_mw * (1.0 + maximum_change), projected),
+        )
+
+    def _forecast_uncertainty(
+        self,
+        forecast_demand_mw: float,
+        temperature_c: float,
+        humidity_percent: float,
+        rainfall_mm_hr: float,
+        scenario_confidence: float | None,
+        weather_confidence: float | None,
+    ) -> float:
+        confidence = max(0.0, min(1.0, scenario_confidence or 0.0))
+        uncertainty_ratio = self.DEMAND_UNCERTAINTY_RATIO
+        uncertainty_ratio += (1.0 - confidence) * 0.01
+        if weather_confidence is None:
+            uncertainty_ratio += 0.005
+        else:
+            uncertainty_ratio += (1.0 - max(0.0, min(1.0, weather_confidence))) * 0.01
+        if temperature_c >= 32 or humidity_percent >= 85:
+            uncertainty_ratio += 0.005
+        if rainfall_mm_hr >= 8:
+            uncertainty_ratio += 0.005
+        return max(self.MIN_UNCERTAINTY_MW, forecast_demand_mw * uncertainty_ratio)
+
+    @staticmethod
+    def _forecast_factors(
+        temperature_c: float,
+        humidity_percent: float,
+        rainfall_mm_hr: float,
+        cloud_cover_percent: float,
+        current_demand_mw: float,
+        current_generation_mw: float,
+        scenario_label: str | None,
+        scenario_base_demand: float | None,
+        scenario_followup_demand: float | None,
+        forecast_temperature_c: float,
+        forecast_humidity_percent: float,
+        forecast_rainfall_mm_hr: float,
+    ) -> list[str]:
+        factors: list[str] = []
+        if temperature_c > 30:
+            factors.append("High temperature sustains cooling demand")
+        if humidity_percent > 75:
+            factors.append("High humidity sustains cooling demand")
+        if rainfall_mm_hr >= 2:
+            factors.append("Rainfall may reduce short-term demand")
+        if cloud_cover_percent >= 80:
+            factors.append("Dense cloud cover may slightly reduce short-term demand")
+        if forecast_temperature_c > temperature_c + 0.5:
+            factors.append("Forecast warming increases short-term cooling demand")
+        elif forecast_temperature_c < temperature_c - 0.5:
+            factors.append("Forecast cooling reduces short-term cooling demand")
+        if forecast_humidity_percent > humidity_percent + 5:
+            factors.append("Forecast humidity is rising")
+        if forecast_rainfall_mm_hr > rainfall_mm_hr + 1:
+            factors.append("Forecast rainfall may suppress short-term demand")
+        if current_generation_mw < current_demand_mw:
+            factors.append("Current generation is below measured demand")
+        if (
+            scenario_base_demand is not None
+            and scenario_base_demand > 0
+            and scenario_followup_demand is not None
+        ):
+            direction = (
+                "rising"
+                if scenario_followup_demand > scenario_base_demand
+                else "falling"
+                if scenario_followup_demand < scenario_base_demand
+                else "steady"
+            )
+            factors.append(f"Imported {scenario_label or 'scenario'} load shape is {direction}")
+        return factors
+
+    @staticmethod
+    def _dashboard_recommendation(recommendation: str) -> str:
+        if recommendation == "PREPARE ADDITIONAL GENERATION / START ADDITIONAL TURBINE":
+            return "START ADDITIONAL TURBINE"
+        return recommendation
 
     @staticmethod
     def _safe_float(value: Any) -> float | None:
         if value is None:
             return None
         try:
-            return float(value)
+            converted = float(value)
         except (TypeError, ValueError):
             return None
+        return converted if math.isfinite(converted) else None

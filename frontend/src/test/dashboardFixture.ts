@@ -83,4 +83,41 @@ export const dashboardFixture: DashboardSnapshot = {
     fallback_used: false,
     notes: [],
   },
+  demand_forecast: {
+    horizons: [
+      {
+        horizon_hours: 1,
+        forecast_timestamp: "2026-06-27T13:00:00-04:00",
+        forecast_demand_mw: 990,
+        forecast_uncertainty_mw: 18,
+        model_name: "persistence",
+        model_version: "demand-forecast-v1.3",
+        baseline_name: "persistence",
+        baseline_forecast_mw: 985,
+        quality_status: "BASELINE_ACTIVE",
+      },
+    ],
+  },
+  model_status: {
+    active_model: "persistence",
+    model_version: "demand-forecast-v1.3",
+    mode: "BASELINE_ACTIVE",
+    trained_through: "2026-06-27T13:00:00-04:00",
+    metrics: {
+      mae: 10,
+      rmse: 12,
+      mape: 1.2,
+      residual_std: 18,
+    },
+    baseline_comparison: {
+      best_baseline: "persistence",
+      ml_beats_baseline: false,
+    },
+  },
+  scada_status: {
+    source: "scada.csv",
+    latest_snapshot: "2026-06-27T12:00:00-04:00",
+    quality_status: "GOOD",
+    missing_fields: "",
+  },
 };

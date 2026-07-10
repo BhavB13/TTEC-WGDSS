@@ -100,6 +100,46 @@ export interface DataQuality {
   notes: string[];
 }
 
+export interface DemandForecastHorizon {
+  horizon_hours: number;
+  forecast_timestamp: string;
+  forecast_demand_mw: number;
+  forecast_uncertainty_mw: number;
+  model_name: string;
+  model_version: string;
+  baseline_name: string;
+  baseline_forecast_mw: number;
+  quality_status: string;
+}
+
+export interface DemandForecastBundle {
+  horizons: DemandForecastHorizon[];
+}
+
+export interface ModelStatus {
+  active_model?: string | null;
+  model_version?: string | null;
+  mode: string;
+  trained_through?: string | null;
+  metrics: {
+    mae?: number | null;
+    rmse?: number | null;
+    mape?: number | null;
+    residual_std?: number | null;
+  };
+  baseline_comparison: {
+    best_baseline?: string | null;
+    ml_beats_baseline?: boolean | null;
+  };
+}
+
+export interface ScadaStatus {
+  source: string;
+  latest_snapshot?: string | null;
+  quality_status: string;
+  missing_fields: string;
+}
+
 export interface GridStatus {
   timestamp?: string | null;
   current_demand_mw: number;
@@ -135,6 +175,9 @@ export interface DashboardSnapshot {
   recommendation: RecommendationData;
   calibration?: CalibrationSnapshot | null;
   data_quality: DataQuality;
+  demand_forecast?: DemandForecastBundle | null;
+  model_status?: ModelStatus | null;
+  scada_status?: ScadaStatus | null;
 }
 
 // Backwards-compatible aliases for existing component imports.
