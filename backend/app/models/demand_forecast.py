@@ -30,6 +30,14 @@ class ForecastTrainingRow(Base):
     rolling_3h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     rolling_6h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # These are contemporaneous SCADA operating-state values. They provide
+    # context for observed demand without introducing future dispatch leakage.
+    spinning_reserve_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    available_capacity_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    online_capacity_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reserve_margin_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    online_spare_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     hour_of_day: Mapped[int] = mapped_column(Integer, nullable=False)
     day_of_week: Mapped[int] = mapped_column(Integer, nullable=False)
 

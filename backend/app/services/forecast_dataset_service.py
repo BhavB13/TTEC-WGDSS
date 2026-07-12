@@ -207,6 +207,11 @@ class ForecastDatasetService:
             lag_24h_demand_mw=self._lag_demand(snapshot_by_hour, feature_timestamp, 24),
             rolling_3h_demand_mw=self._rolling_average(snapshot_by_hour, feature_timestamp, 3),
             rolling_6h_demand_mw=self._rolling_average(snapshot_by_hour, feature_timestamp, 6),
+            spinning_reserve_mw=snapshot.spinning_reserve_mw,
+            available_capacity_mw=snapshot.available_capacity_mw,
+            online_capacity_mw=snapshot.online_capacity_mw,
+            reserve_margin_mw=snapshot.reserve_margin_mw,
+            online_spare_mw=snapshot.online_spare_mw,
             hour_of_day=feature_timestamp.hour,
             day_of_week=feature_timestamp.weekday(),
             temperature_c=(
@@ -291,6 +296,11 @@ class ForecastDatasetService:
                 feature_timestamp,
                 6,
             ),
+            spinning_reserve_mw=snapshot.spinning_reserve_mw,
+            available_capacity_mw=snapshot.available_capacity_mw,
+            online_capacity_mw=snapshot.online_capacity_mw,
+            reserve_margin_mw=snapshot.reserve_margin_mw,
+            online_spare_mw=snapshot.online_spare_mw,
             hour_of_day=feature_timestamp.hour,
             day_of_week=feature_timestamp.weekday(),
             temperature_c=(

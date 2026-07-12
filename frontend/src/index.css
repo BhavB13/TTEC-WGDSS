@@ -24,6 +24,42 @@ body {
   overflow: hidden;
 }
 
+/* The map remains geographically true in both themes; the surrounding control
+   surfaces adapt for bright operations rooms without changing live layer colors. */
+.theme-light {
+  background: linear-gradient(180deg, #e8f4f7 0%, #dcebf1 100%) !important;
+  color: #0f172a !important;
+}
+
+.theme-light [class*="bg-slate-950"],
+.theme-light [class*="bg-slate-900"],
+.theme-light [class*="bg-slate-800"] {
+  background-color: #f8fafc !important;
+}
+
+.theme-light [class*="text-white"],
+.theme-light [class*="text-slate-100"],
+.theme-light [class*="text-slate-200"] {
+  color: #0f172a !important;
+}
+
+.theme-light [class*="text-slate-300"],
+.theme-light [class*="text-slate-400"],
+.theme-light [class*="text-slate-500"] {
+  color: #475569 !important;
+}
+
+.theme-light [class*="border-slate-"],
+.theme-light [class*="border-cyan-500"] {
+  border-color: rgba(100, 116, 139, 0.38) !important;
+}
+
+.theme-light .leaflet-control-layers,
+.theme-light .leaflet-popup-content-wrapper,
+.theme-light .leaflet-popup-tip {
+  color: #0f172a;
+}
+
 @media (max-width: 1279px) {
   body {
     overflow-x: hidden;

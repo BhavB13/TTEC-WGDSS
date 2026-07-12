@@ -124,6 +124,11 @@ def test_forecast_dataset_builds_rows_without_future_leakage(tmp_path):
     assert row.forecast_wind_speed_kmh == 14
     assert row.forecast_precipitation_probability_percent == 60
     assert row.pressure_hpa == 1012
+    assert row.spinning_reserve_mw == 150
+    assert row.available_capacity_mw == 1200
+    assert row.online_capacity_mw == 950
+    assert row.reserve_margin_mw == 380
+    assert row.online_spare_mw == 130
     assert row.source_quality_status == "GOOD"
 
 

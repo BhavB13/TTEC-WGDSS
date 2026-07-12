@@ -18,6 +18,7 @@ import type {
 } from "../types/dashboard";
 
 type LoadState = "loading" | "ready" | "error";
+type ThemeMode = "dark" | "light";
 type DashboardTab =
   | "home"
   | "operations"
@@ -70,6 +71,15 @@ const FALLBACK_RECOMMENDATION: DashboardSnapshot["recommendation"] = {
 
 export default function Dashboard() {
   const [state, setState] = useState<LoadState>("loading");
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    try {
+      return window.localStorage.getItem("wgdss-theme") === "light"
+        ? "light"
+        : "dark";
+    } catch {
+      return "dark";
+    }
+  });
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [error, setError] = useState<string>("");
   const [refreshError, setRefreshError] = useState<string>("");
@@ -121,6 +131,14 @@ export default function Dashboard() {
     return () => window.clearInterval(refreshInterval);
   }, [loadSnapshot]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("wgdss-theme", theme);
+    } catch {
+      // Theme preference is optional; the dashboard remains usable without storage.
+    }
+  }, [theme]);
+
   const systemStatus = useMemo(() => {
     if (!snapshot) {
       return state === "loading" ? "Loading" : "Unavailable";
@@ -130,7 +148,12 @@ export default function Dashboard() {
 
   if (state === "loading") {
     return (
-      <Shell lastUpdated={null} systemStatus="Loading">
+      <Shell
+        lastUpdated={null}
+        systemStatus="Loading"
+        theme={theme}
+        onThemeChange={setTheme}
+      >
         <LoadingState />
       </Shell>
     );
@@ -138,7 +161,12 @@ export default function Dashboard() {
 
   if (state === "error" || !snapshot) {
     return (
-      <Shell lastUpdated={null} systemStatus="Unavailable">
+      <Shell
+        lastUpdated={null}
+        systemStatus="Unavailable"
+        theme={theme}
+        onThemeChange={setTheme}
+      >
         <ErrorState message={error} onRetry={loadSnapshot} />
       </Shell>
     );
@@ -178,16 +206,18 @@ export default function Dashboard() {
       scenarioLabel={calibration?.selected_scenario_label ?? "Typical Day"}
       dataQuality={dataQuality}
       refreshError={refreshError}
+      theme={theme}
+      onThemeChange={setTheme}
     >
-      <div className="grid h-auto min-h-0 w-full min-w-0 gap-3 xl:h-full xl:grid-cols-[clamp(300px,28vw,390px)_minmax(0,1fr)] xl:items-stretch">
-        <section className="h-[28rem] min-h-0 min-w-0 xl:sticky xl:top-3 xl:self-start xl:h-[calc(100vh-5.25rem)]">
+      <div className="grid h-auto min-h-0 w-full min-w-0 max-w-full gap-3 xl:h-full xl:grid-cols-[clamp(300px,28vw,390px)_minmax(0,1fr)] xl:items-stretch">
+        <section className="h-[28rem] min-h-0 min-w-0 xl:h-full xl:self-stretch">
           <WeatherMap
             className="h-full min-h-0"
             weather={weather}
           />
         </section>
 
-        <section className="flex min-h-[42rem] w-full min-w-0 flex-col overflow-visible rounded-2xl border border-cyan-500/15 bg-slate-900/60 p-2.5 shadow-[0_0_40px_rgba(8,145,178,0.06)] xl:min-h-0 xl:overflow-hidden">
+        <section className="flex min-h-[42rem] w-full min-w-0 max-w-full flex-col overflow-visible rounded-2xl border border-cyan-500/15 bg-slate-900/60 p-2.5 shadow-[0_0_40px_rgba(8,145,178,0.06)] xl:min-h-0 xl:overflow-hidden">
           <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-2.5 overflow-hidden">
             <TabBar activeTab={activeTab} onChange={setActiveTab} />
 
@@ -201,6 +231,7 @@ export default function Dashboard() {
                     recommendation={recommendation}
                     forecastItems={upcomingForecastItems}
                     calibration={calibration}
+                    theme={theme}
                   />
                 </WorkspacePage>
               ) : null}
@@ -229,6 +260,8 @@ export default function Dashboard() {
                     grid={grid}
                     probability={probability}
                     calibration={calibration}
+                    demandForecast={demandForecast}
+                    theme={theme}
                   />
                 </WorkspacePage>
               ) : null}
@@ -255,6 +288,7 @@ export default function Dashboard() {
                     demandForecast={demandForecast}
                     modelStatus={modelStatus}
                     scadaStatus={scadaStatus}
+                    theme={theme}
                   />
                 </WorkspacePage>
               ) : null}
@@ -276,6 +310,8 @@ function Shell({
   scenarioLabel,
   dataQuality,
   refreshError,
+  theme,
+  onThemeChange,
 }: {
   children?: ReactNode;
   lastUpdated: string | null;
@@ -286,9 +322,11 @@ function Shell({
   scenarioLabel?: string;
   dataQuality?: DashboardSnapshot["data_quality"] | null;
   refreshError?: string;
+  theme: ThemeMode;
+  onThemeChange: (theme: ThemeMode) => void;
 }) {
   return (
-    <div className="flex min-h-dvh flex-col overflow-visible bg-[radial-gradient(circle_at_top,_rgba(14,116,144,0.18),_transparent_36%),linear-gradient(180deg,#020617_0%,#020617_100%)] text-slate-100 xl:h-dvh xl:overflow-hidden">
+    <div className={`theme-${theme} flex min-h-dvh w-full max-w-full flex-col overflow-x-hidden overflow-y-visible bg-[radial-gradient(circle_at_top,_rgba(14,116,144,0.18),_transparent_36%),linear-gradient(180deg,#020617_0%,#020617_100%)] text-slate-100 xl:h-dvh xl:overflow-hidden`}>
       <Header
         lastUpdated={lastUpdated}
         systemStatus={systemStatus}
@@ -298,8 +336,10 @@ function Shell({
         scenarioLabel={scenarioLabel}
         dataQuality={dataQuality}
         refreshError={refreshError}
+        theme={theme}
+        onThemeChange={onThemeChange}
       />
-      <main className="flex w-full min-w-0 flex-1 min-h-0 overflow-visible px-4 py-2.5 lg:px-6 xl:overflow-hidden">
+      <main className="flex w-full min-w-0 max-w-full flex-1 min-h-0 overflow-visible px-4 py-2.5 lg:px-6 xl:overflow-hidden">
         {children}
       </main>
     </div>
@@ -314,8 +354,8 @@ function TabBar({
   onChange: (tab: DashboardTab) => void;
 }) {
   const tabs: Array<{ id: DashboardTab; label: string; shortLabel: string }> = [
-    { id: "home", label: "Home", shortLabel: "Home" },
-    { id: "operations", label: "Operations", shortLabel: "Operations" },
+    { id: "home", label: "Operator Overview", shortLabel: "Overview" },
+    { id: "operations", label: "Grid Operations", shortLabel: "Grid Ops" },
     { id: "weather", label: "Weather", shortLabel: "Weather" },
     { id: "demandForecast", label: "Demand Forecast", shortLabel: "Demand" },
     { id: "riskGauge", label: "Risk Gauge", shortLabel: "Risk" },
@@ -324,8 +364,8 @@ function TabBar({
   ];
 
   return (
-    <div className="w-full min-w-0 overflow-x-auto rounded-2xl border border-slate-800 bg-slate-950/50 p-1.5">
-      <div className="grid min-w-[46rem] grid-cols-7 gap-1.5">
+    <div className="w-full min-w-0 max-w-full rounded-2xl border border-slate-800 bg-slate-950/50 p-1.5">
+      <div className="grid min-w-0 grid-cols-4 gap-1.5 sm:grid-cols-7">
       {tabs.map((tab) => {
         const selected = tab.id === activeTab;
         return (
@@ -361,6 +401,7 @@ function HomeTab({
   recommendation,
   forecastItems,
   calibration,
+  theme,
 }: {
   grid: DashboardSnapshot["grid"];
   weather: DashboardSnapshot["weather"];
@@ -368,32 +409,113 @@ function HomeTab({
   recommendation: DashboardSnapshot["recommendation"];
   forecastItems: ForecastData[];
   calibration: CalibrationSnapshot | null;
+  theme: ThemeMode;
 }) {
   return (
     <>
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryTile label="Demand" value={`${grid.current_demand_mw.toFixed(0)} MW`} tone="cyan" />
         <SummaryTile label="Generation" value={`${grid.current_generation_mw.toFixed(0)} MW`} tone="emerald" />
         <SummaryTile label="Reserve Margin" value={`${grid.reserve_margin_percent.toFixed(1)}%`} tone="amber" />
-        <SummaryTile label="Probability" value={formatProbability(probability)} tone="rose" />
-        <SummaryTile label="Action" value={recommendation.recommendation} tone="slate" compactValue />
+        <SummaryTile label="Capacity Risk" value={formatProbability(probability)} tone="rose" />
       </div>
 
-      <div className="grid min-h-0 flex-1 items-stretch gap-2.5 xl:grid-cols-2">
-        <WeatherOverviewCard weather={weather} forecastItems={forecastItems} />
-
-        <HomeForecastRiskCard grid={grid} probability={probability} />
+      <div className="grid min-h-0 flex-1 items-stretch gap-2.5 xl:grid-cols-[minmax(0,1.22fr)_minmax(18rem,0.78fr)]">
+        <DecisionBrief
+          grid={grid}
+          recommendation={recommendation}
+        />
+        <div className="grid min-h-0 gap-2.5 xl:grid-rows-2">
+          <HomeForecastRiskCard grid={grid} probability={probability} theme={theme} />
+          <WeatherOverviewCard weather={weather} forecastItems={forecastItems} />
+        </div>
       </div>
     </>
+  );
+}
+
+function DecisionBrief({
+  grid,
+  recommendation,
+}: {
+  grid: DashboardSnapshot["grid"];
+  recommendation: DashboardSnapshot["recommendation"];
+}) {
+  const factors = recommendation.factors.length > 0
+    ? recommendation.factors.slice(0, 4)
+    : [recommendation.reason];
+  const capacityHeadroom =
+    grid.total_available_capacity_mw - recommendation.forecast_demand_60m;
+  const actionTone =
+    recommendation.risk_level === "HIGH"
+      ? "border-rose-400/35 bg-rose-500/10 text-rose-100"
+      : recommendation.risk_level === "MEDIUM"
+        ? "border-amber-400/35 bg-amber-500/10 text-amber-100"
+        : recommendation.risk_level === "UNAVAILABLE"
+          ? "border-slate-600 bg-slate-800/60 text-slate-200"
+          : "border-emerald-400/35 bg-emerald-500/10 text-emerald-100";
+
+  return (
+    <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/20 bg-slate-900/85 p-3 shadow-[0_0_38px_rgba(8,145,178,0.1)]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
+            Operator Decision
+          </p>
+          <h2 className="mt-1 text-lg font-semibold leading-tight text-white">
+            Recommended Operating Posture
+          </h2>
+        </div>
+        <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${actionTone}`}>
+          {recommendation.risk_level}
+        </span>
+      </div>
+
+      <div className={`mt-3 rounded-xl border p-4 text-center shadow-inner shadow-black/20 ${actionTone}`}>
+        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-300">
+          Recommended Action
+        </p>
+        <p className="mt-2 break-words text-xl font-semibold leading-tight text-white">
+          {recommendation.recommendation}
+        </p>
+      </div>
+
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        <MiniMetric label="Risk Probability" value={formatProbability(recommendation)} />
+        <MiniMetric label="30m Demand" value={`${recommendation.forecast_demand_30m.toFixed(0)} MW`} />
+        <MiniMetric label="60m Headroom" value={formatSignedMegawatts(capacityHeadroom)} />
+      </div>
+
+      <div className="mt-3 min-h-0 flex-1 overflow-auto">
+        <p className="px-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+          Decision Basis
+        </p>
+        <ol className="mt-2 grid gap-1.5">
+          {factors.map((factor, index) => (
+            <li
+              key={`${factor}-${index}`}
+              className="grid min-w-0 grid-cols-[1.6rem_minmax(0,1fr)] items-start gap-2 rounded-lg border border-slate-800 bg-slate-950/55 px-2.5 py-2 text-sm leading-snug text-slate-200"
+            >
+              <span className="flex h-6 w-6 items-center justify-center rounded-full border border-cyan-500/30 bg-cyan-500/10 text-[10px] font-semibold text-cyan-200">
+                {index + 1}
+              </span>
+              <span className="min-w-0 break-words">{factor}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
   );
 }
 
 function HomeForecastRiskCard({
   grid,
   probability,
+  theme,
 }: {
   grid: DashboardSnapshot["grid"];
   probability: DashboardSnapshot["probability"];
+  theme: ThemeMode;
 }) {
   const demandChange60 =
     probability.forecast_demand_60m - grid.current_demand_mw;
@@ -421,6 +543,7 @@ function HomeForecastRiskCard({
           gridStatus={grid}
           probability={probability}
           view="nearTerm"
+          theme={theme}
           showHeader={false}
           showSummary={false}
           className="h-full min-h-[10.5rem] w-full min-w-0 p-1.5"
@@ -467,7 +590,7 @@ function WeatherOverviewCard({
             Weather Drivers
           </p>
           <h2 className="mt-1 text-[0.98rem] font-semibold leading-tight text-white">
-            Current Weather Conditions
+            Demand-Relevant Conditions
           </h2>
         </div>
         <span
@@ -483,20 +606,16 @@ function WeatherOverviewCard({
         </span>
       </div>
 
-      <div className="mt-3 grid min-h-0 flex-1 auto-rows-fr grid-cols-2 gap-2">
+      <div className="mt-2 grid min-h-0 flex-1 auto-rows-fr grid-cols-2 gap-1.5">
         <MiniMetric label="Temperature" value={`${weather.temperature_c.toFixed(1)}°C`} />
         <MiniMetric label="Humidity" value={`${weather.humidity_percent.toFixed(0)}%`} />
         <MiniMetric label="Rainfall" value={`${weather.rainfall_mm_hr.toFixed(1)} mm/hr`} />
         <MiniMetric label="Wind Speed" value={`${weather.wind_speed_kmh.toFixed(1)} km/h`} />
-        <MiniMetric label="Cloud Cover" value={`${weather.cloud_cover_percent.toFixed(0)}%`} />
-        <MiniMetric label="Heat Index" value={`${weather.heat_index_c.toFixed(1)}°C`} />
-        <MiniMetric label="Condition" value={weather.weather_condition} />
-        <MiniMetric label="Observed" value={formatTimestamp(weather.timestamp)} />
-        <MiniMetric label="Provider" value={weather.provider_name} />
         <MiniMetric
-          label="6h Outlook"
+          label="Next Outlook"
           value={leadForecast ? `${leadForecast.temperature_c.toFixed(0)}°C, ${leadForecast.cloud_cover_percent.toFixed(0)}% cloud` : "--"}
         />
+        <MiniMetric label="Condition" value={weather.weather_condition} />
       </div>
     </div>
   );
@@ -756,10 +875,14 @@ function DemandForecastTab({
   grid,
   probability,
   calibration,
+  demandForecast,
+  theme,
 }: {
   grid: DashboardSnapshot["grid"];
   probability: DashboardSnapshot["probability"];
   calibration: CalibrationSnapshot | null;
+  demandForecast: DemandForecastBundle | null;
+  theme: ThemeMode;
 }) {
   const demandDelta30 = probability.forecast_demand_30m - grid.current_demand_mw;
   const demandDelta60 = probability.forecast_demand_60m - grid.current_demand_mw;
@@ -770,6 +893,8 @@ function DemandForecastTab({
         gridStatus={grid}
         probability={probability}
         calibration={calibration}
+        modelForecast={demandForecast}
+        theme={theme}
         className="h-full min-h-0 w-full min-w-0"
       />
       <PanelCard title="Demand Snapshot" className="h-full min-h-0 w-full min-w-0">
@@ -1104,11 +1229,13 @@ function AnalyticsTab({
   demandForecast,
   modelStatus,
   scadaStatus,
+  theme,
 }: {
   calibration: CalibrationSnapshot | null;
   demandForecast: DemandForecastBundle | null;
   modelStatus: ModelStatus | null;
   scadaStatus: ScadaStatus | null;
+  theme: ThemeMode;
 }) {
   return (
     <div className="grid h-full min-h-0 w-full min-w-0 gap-2.5 xl:grid-cols-[minmax(260px,0.36fr)_minmax(0,0.64fr)]">
@@ -1174,6 +1301,7 @@ function AnalyticsTab({
       <ScenarioComparisonChart
         scenarios={calibration?.scenarios ?? []}
         selectedScenarioKey={calibration?.selected_scenario_key}
+        theme={theme}
         className="h-full min-h-0 w-full min-w-0"
       />
     </div>

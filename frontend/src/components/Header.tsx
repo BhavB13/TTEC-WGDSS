@@ -9,6 +9,8 @@ interface HeaderProps {
   scenarioLabel?: string;
   dataQuality?: DataQuality | null;
   refreshError?: string;
+  theme?: "dark" | "light";
+  onThemeChange?: (theme: "dark" | "light") => void;
 }
 
 function formatTimestamp(value?: string | null): string {
@@ -36,10 +38,12 @@ export default function Header({
   scenarioLabel,
   dataQuality,
   refreshError,
+  theme = "dark",
+  onThemeChange,
 }: HeaderProps) {
   return (
-    <header className="border-b border-cyan-500/10 bg-slate-950/95 px-4 py-2 text-slate-100 shadow-[0_0_32px_rgba(8,145,178,0.08)] backdrop-blur">
-      <div className="mx-auto grid w-full max-w-[1680px] gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] xl:items-center">
+    <header className="max-w-full overflow-x-hidden border-b border-cyan-500/10 bg-slate-950/95 px-4 py-2 text-slate-100 shadow-[0_0_32px_rgba(8,145,178,0.08)] backdrop-blur">
+      <div className="mx-auto grid w-full min-w-0 max-w-[1680px] gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] xl:items-center">
         <div className="min-w-0">
           <p className="hidden text-[11px] font-semibold uppercase tracking-[0.3em] text-cyan-300 sm:block">
             WGDSS Control Room
@@ -48,6 +52,16 @@ export default function Header({
             <span className="block sm:inline">T&amp;TEC Weather Grid</span>{" "}
             <span className="block sm:inline">Decision Support System</span>
           </h1>
+          {onThemeChange ? (
+            <button
+              type="button"
+              className="mt-1.5 rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1 text-[10px] font-semibold text-slate-300 hover:border-cyan-400/40 hover:text-cyan-100"
+              onClick={() => onThemeChange(theme === "dark" ? "light" : "dark")}
+              aria-label={theme === "dark" ? "Use light theme" : "Use dark theme"}
+            >
+              {theme === "dark" ? "Light theme" : "Dark theme"}
+            </button>
+          ) : null}
           {refreshError ? (
             <p
               className="mt-1 truncate text-[11px] font-medium text-amber-300"

@@ -27,6 +27,7 @@ import Dashboard from "./Dashboard";
 describe("Dashboard", () => {
   beforeEach(() => {
     getDashboardSnapshot.mockReset();
+    window.localStorage.clear();
   });
 
   it("shows a loading state and then renders live snapshot data", async () => {
@@ -46,17 +47,18 @@ describe("Dashboard", () => {
     expect(screen.getByTestId("weather-map")).toBeInTheDocument();
   });
 
-  it("switches across the home, operations, weather, forecast, risk, guidance, and analytics tabs", async () => {
+  it("switches across the operator overview, grid operations, weather, forecast, risk, guidance, and analytics workspaces", async () => {
     getDashboardSnapshot.mockResolvedValue(dashboardFixture);
     const user = userEvent.setup();
     render(<Dashboard />);
     await screen.findAllByText("950 MW");
 
-    await user.click(screen.getByRole("button", { name: "Home" }));
+    await user.click(screen.getByRole("button", { name: "Operator Overview" }));
     expect(screen.getByText("Weather Drivers")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Next 60 Minutes" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Recommended Operating Posture" })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Operations" }));
+    await user.click(screen.getByRole("button", { name: "Grid Operations" }));
     expect(screen.getByText("Station Dispatch")).toBeInTheDocument();
     expect(screen.getByText("Unit Readiness")).toBeInTheDocument();
 
@@ -91,5 +93,19 @@ describe("Dashboard", () => {
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(screen.getAllByText("950 MW").length).toBeGreaterThan(0));
     expect(getDashboardSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("switches the control-room theme without affecting live dashboard rendering", async () => {
+    getDashboardSnapshot.mockResolvedValue(dashboardFixture);
+    const user = userEvent.setup();
+    render(<Dashboard />);
+
+    await screen.findAllByText("950 MW");
+    const shell = screen.getByRole("main").parentElement;
+    expect(shell).toHaveClass("theme-dark");
+
+    await user.click(screen.getByRole("button", { name: "Use light theme" }));
+    expect(shell).toHaveClass("theme-light");
+    expect(screen.getByTestId("weather-map")).toBeInTheDocument();
   });
 });

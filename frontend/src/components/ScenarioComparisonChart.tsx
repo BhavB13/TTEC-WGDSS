@@ -17,6 +17,7 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip,
 interface ScenarioComparisonChartProps {
   scenarios: CalibrationScenario[];
   selectedScenarioKey?: string | null;
+  theme?: "dark" | "light";
   className?: string;
 }
 
@@ -38,8 +39,12 @@ const PALETTE: Record<string, { border: string; background: string }> = {
 export default function ScenarioComparisonChart({
   scenarios,
   selectedScenarioKey,
+  theme = "dark",
   className = "",
 }: ScenarioComparisonChartProps) {
+  const chartTextColor = theme === "light" ? "#334155" : "#cbd5e1";
+  const chartGridColor =
+    theme === "light" ? "rgba(71, 85, 105, 0.18)" : "rgba(148, 163, 184, 0.12)";
   const { data, options } = useMemo(() => {
     const labels = Array.from({ length: 24 }, (_, index) => `${index + 1}:00`);
     return {
@@ -73,7 +78,7 @@ export default function ScenarioComparisonChart({
             display: true,
             position: "bottom" as const,
             labels: {
-              color: "#cbd5e1",
+              color: chartTextColor,
               usePointStyle: true,
               pointStyle: "line",
               boxWidth: 12,
@@ -83,29 +88,29 @@ export default function ScenarioComparisonChart({
         scales: {
           x: {
             ticks: {
-              color: "#cbd5e1",
+              color: chartTextColor,
               maxRotation: 0,
               autoSkip: true,
             },
             grid: {
-              color: "rgba(148, 163, 184, 0.1)",
+              color: chartGridColor,
             },
           },
           y: {
             min: 700,
             max: 1500,
             ticks: {
-              color: "#cbd5e1",
+              color: chartTextColor,
               stepSize: 100,
             },
             grid: {
-              color: "rgba(148, 163, 184, 0.12)",
+              color: chartGridColor,
             },
           },
         },
       },
     };
-  }, [scenarios, selectedScenarioKey]);
+  }, [chartGridColor, chartTextColor, scenarios, selectedScenarioKey]);
 
   if (scenarios.length === 0) {
     return (

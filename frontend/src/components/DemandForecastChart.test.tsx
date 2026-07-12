@@ -6,7 +6,12 @@ vi.mock("react-chartjs-2", () => ({
 }));
 
 import DemandForecastChart from "./DemandForecastChart";
-import type { CalibrationSnapshot, GridStatus, ProbabilityData } from "../types/dashboard";
+import type {
+  CalibrationSnapshot,
+  DemandForecastBundle,
+  GridStatus,
+  ProbabilityData,
+} from "../types/dashboard";
 
 const grid: GridStatus = {
   current_demand_mw: 950,
@@ -47,6 +52,33 @@ const calibration: CalibrationSnapshot = {
   ],
 };
 
+const modelForecast: DemandForecastBundle = {
+  horizons: [
+    {
+      horizon_hours: 1,
+      forecast_timestamp: "2026-06-27T13:00:00-04:00",
+      forecast_demand_mw: 990,
+      forecast_uncertainty_mw: 18,
+      model_name: "HistGradientBoostingRegressor",
+      model_version: "demand-forecast-v1.4",
+      baseline_name: "persistence",
+      baseline_forecast_mw: 985,
+      quality_status: "ML_ACTIVE",
+    },
+    {
+      horizon_hours: 2,
+      forecast_timestamp: "2026-06-27T14:00:00-04:00",
+      forecast_demand_mw: 1000,
+      forecast_uncertainty_mw: 24,
+      model_name: "HistGradientBoostingRegressor",
+      model_version: "demand-forecast-v1.4",
+      baseline_name: "persistence",
+      baseline_forecast_mw: 990,
+      quality_status: "ML_ACTIVE",
+    },
+  ],
+};
+
 describe("DemandForecastChart", () => {
   it("renders a live-adjusted total-day estimate and near-term numeric values", () => {
     render(
@@ -54,15 +86,16 @@ describe("DemandForecastChart", () => {
         gridStatus={grid}
         probability={probability}
         calibration={calibration}
+        modelForecast={modelForecast}
       />,
     );
 
     expect(screen.getByText("Estimated Total Day Demand")).toBeInTheDocument();
-    expect(screen.getByText("Live-adjusted profile")).toBeInTheDocument();
-    expect(screen.getByText("30m Estimate")).toBeInTheDocument();
-    expect(screen.getByText("60m Estimate")).toBeInTheDocument();
-    expect(screen.getByText("970 MW")).toBeInTheDocument();
-    expect(screen.getByText("985 MW")).toBeInTheDocument();
+    expect(screen.getByText("ML forecast active")).toBeInTheDocument();
+    expect(screen.getByText("1h ML")).toBeInTheDocument();
+    expect(screen.getByText("2h ML")).toBeInTheDocument();
+    expect(screen.getByText("990 MW")).toBeInTheDocument();
+    expect(screen.getByText("1000 MW")).toBeInTheDocument();
     expect(screen.getByTestId("line-chart").parentElement).toHaveClass("w-full");
   });
 });

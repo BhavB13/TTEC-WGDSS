@@ -10,7 +10,12 @@ import {
 } from "chart.js";
 import { Line } from "react-chartjs-2";
 
-import type { CalibrationSnapshot, GridStatus, ProbabilityData } from "../types/dashboard";
+import type {
+  CalibrationSnapshot,
+  DemandForecastBundle,
+  GridStatus,
+  ProbabilityData,
+} from "../types/dashboard";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend);
 
@@ -18,6 +23,8 @@ interface DemandForecastChartProps {
   gridStatus: GridStatus;
   probability: ProbabilityData;
   calibration?: CalibrationSnapshot | null;
+  modelForecast?: DemandForecastBundle | null;
+  theme?: "dark" | "light";
   view?: "day" | "nearTerm";
   className?: string;
   showHeader?: boolean;
@@ -28,11 +35,16 @@ export default function DemandForecastChart({
   gridStatus,
   probability,
   calibration = null,
+  modelForecast = null,
+  theme = "dark",
   view = "day",
   className = "",
   showHeader = true,
   showSummary = true,
 }: DemandForecastChartProps) {
+  const chartTextColor = theme === "light" ? "#334155" : "#cbd5e1";
+  const chartGridColor =
+    theme === "light" ? "rgba(71, 85, 105, 0.18)" : "rgba(148, 163, 184, 0.14)";
   const activeScenario = useMemo(() => {
     if (!calibration?.scenarios?.length) {
       return null;
@@ -68,6 +80,7 @@ export default function DemandForecastChart({
 
     return {
       labels: points.map((point) => formatHour(point.hour)),
+      hours: points.map((point) => point.hour),
       estimatedDemand: points.map((point) =>
         Math.round((point.demand_mw ?? 0) * scale),
       ),
@@ -77,6 +90,46 @@ export default function DemandForecastChart({
   }, [activeScenario, calibration?.selected_hour, gridStatus.current_demand_mw]);
 
   const displayedDayEstimate = view === "day" ? dayEstimate : null;
+  const validatedModelHorizons = useMemo(
+    () =>
+      [...(modelForecast?.horizons ?? [])]
+        .filter(
+          (horizon) =>
+            horizon.forecast_demand_mw > 0 &&
+            ["ML_ACTIVE", "BASELINE_ACTIVE"].some((status) =>
+              horizon.quality_status.startsWith(status),
+            ),
+        )
+        .sort((left, right) => left.horizon_hours - right.horizon_hours),
+    [modelForecast],
+  );
+  const modelIsActive = validatedModelHorizons.some((horizon) =>
+    horizon.quality_status.startsWith("ML_ACTIVE"),
+  );
+  const modelOverlay = useMemo(() => {
+    if (!displayedDayEstimate || validatedModelHorizons.length === 0) {
+      return null;
+    }
+
+    const data = displayedDayEstimate.estimatedDemand.map(() => null as number | null);
+    data[displayedDayEstimate.currentIndex] = gridStatus.current_demand_mw;
+    for (const horizon of validatedModelHorizons) {
+      const targetHour = getTrinidadHourAt(horizon.forecast_timestamp);
+      const targetIndex = displayedDayEstimate.hours.findIndex(
+        (hour) => normalizeHour(hour) === targetHour,
+      );
+      if (targetIndex >= 0) {
+        data[targetIndex] = horizon.forecast_demand_mw;
+      }
+    }
+
+    return data.some(
+      (value, index) =>
+        index !== displayedDayEstimate.currentIndex && value !== null,
+    )
+      ? data
+      : null;
+  }, [displayedDayEstimate, gridStatus.current_demand_mw, validatedModelHorizons]);
 
   const chartConfig = useMemo(() => {
     if (displayedDayEstimate && activeScenario) {
@@ -123,6 +176,27 @@ export default function DemandForecastChart({
             showLine: false,
             yAxisID: "demand",
           },
+          ...(modelOverlay
+            ? [
+                {
+                  label: modelIsActive
+                    ? "Validated ML Forecast"
+                    : "Validated Baseline Forecast",
+                  data: modelOverlay,
+                  borderColor: "rgba(167, 139, 250, 1)",
+                  backgroundColor: "rgba(167, 139, 250, 0.18)",
+                  borderWidth: 2,
+                  borderDash: [6, 4],
+                  pointBackgroundColor: "rgba(196, 181, 253, 1)",
+                  pointBorderColor: "rgba(76, 29, 149, 1)",
+                  pointBorderWidth: 2,
+                  pointRadius: 4,
+                  pointHoverRadius: 6,
+                  spanGaps: true,
+                  yAxisID: "demand",
+                },
+              ]
+            : []),
         ],
       };
     }
@@ -152,7 +226,7 @@ export default function DemandForecastChart({
         },
       ],
     };
-  }, [activeScenario, displayedDayEstimate, gridStatus.current_demand_mw, probability.forecast_demand_30m, probability.forecast_demand_60m]);
+  }, [activeScenario, displayedDayEstimate, gridStatus.current_demand_mw, modelIsActive, modelOverlay, probability.forecast_demand_30m, probability.forecast_demand_60m]);
 
   const options = useMemo(
     () => ({
@@ -162,7 +236,7 @@ export default function DemandForecastChart({
         legend: {
           display: Boolean(displayedDayEstimate),
           labels: {
-            color: "#cbd5e1",
+            color: chartTextColor,
             usePointStyle: true,
             pointStyle: "line",
           },
@@ -172,10 +246,10 @@ export default function DemandForecastChart({
         ? {
             x: {
               ticks: {
-                color: "#cbd5e1",
+                color: chartTextColor,
               },
               grid: {
-                color: "rgba(148, 163, 184, 0.14)",
+                color: chartGridColor,
               },
             },
             demand: {
@@ -184,21 +258,21 @@ export default function DemandForecastChart({
               min: 700,
               max: 1500,
               ticks: {
-                color: "#cbd5e1",
+                color: chartTextColor,
                 stepSize: 100,
               },
               grid: {
-                color: "rgba(148, 163, 184, 0.14)",
+                color: chartGridColor,
               },
             },
           }
         : {
             x: {
               ticks: {
-                color: "#cbd5e1",
+                color: chartTextColor,
               },
               grid: {
-                color: "rgba(148, 163, 184, 0.14)",
+                color: chartGridColor,
               },
             },
             demand: {
@@ -207,16 +281,16 @@ export default function DemandForecastChart({
               min: 700,
               max: 1500,
               ticks: {
-                color: "#cbd5e1",
+                color: chartTextColor,
                 stepSize: 100,
               },
               grid: {
-                color: "rgba(148, 163, 184, 0.14)",
+                color: chartGridColor,
               },
             },
           },
     }),
-    [displayedDayEstimate],
+    [chartGridColor, chartTextColor, displayedDayEstimate],
   );
 
   return (
@@ -239,7 +313,13 @@ export default function DemandForecastChart({
             ) : null}
           </div>
           <span className="rounded-full border border-slate-700 px-2.5 py-1 text-[11px] font-medium text-slate-300">
-            {displayedDayEstimate ? "Live-adjusted profile" : "Near-term only"}
+            {validatedModelHorizons.length > 0
+              ? modelIsActive
+                ? "ML forecast active"
+                : "Validated baseline active"
+              : displayedDayEstimate
+                ? "Live-adjusted profile"
+                : "Near-term only"}
           </span>
         </div>
       ) : null}
@@ -271,18 +351,30 @@ export default function DemandForecastChart({
               {gridStatus.current_demand_mw.toFixed(0)} MW
             </p>
           </div>
-          <div className="flex min-h-[3.25rem] flex-col items-center justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 text-center shadow-inner shadow-black/20">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">30m Estimate</p>
-            <p className="mt-1 text-[0.86rem] font-semibold leading-tight text-white">
-              {probability.forecast_demand_30m.toFixed(0)} MW
-            </p>
-          </div>
-          <div className="flex min-h-[3.25rem] flex-col items-center justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 text-center shadow-inner shadow-black/20">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">60m Estimate</p>
-            <p className="mt-1 text-[0.86rem] font-semibold leading-tight text-white">
-              {probability.forecast_demand_60m.toFixed(0)} MW
-            </p>
-          </div>
+          {(validatedModelHorizons.length > 0
+            ? validatedModelHorizons.slice(0, 2).map((horizon) => ({
+                label: `${horizon.horizon_hours}h ${modelIsActive ? "ML" : "Model"}`,
+                value: `${horizon.forecast_demand_mw.toFixed(0)} MW`,
+                detail: `+/- ${horizon.forecast_uncertainty_mw.toFixed(0)} MW`,
+              }))
+            : [
+                {
+                  label: "30m Estimate",
+                  value: `${probability.forecast_demand_30m.toFixed(0)} MW`,
+                  detail: "Operating forecast",
+                },
+                {
+                  label: "60m Estimate",
+                  value: `${probability.forecast_demand_60m.toFixed(0)} MW`,
+                  detail: "Operating forecast",
+                },
+              ]).map((summary) => (
+            <div key={summary.label} className="flex min-h-[3.25rem] flex-col items-center justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-2 text-center shadow-inner shadow-black/20">
+              <p className="text-[10px] uppercase tracking-[0.12em] text-slate-400">{summary.label}</p>
+              <p className="mt-1 text-[0.86rem] font-semibold leading-tight text-white">{summary.value}</p>
+              <p className="mt-0.5 text-[9px] text-slate-500">{summary.detail}</p>
+            </div>
+          ))}
         </div>
       ) : null}
     </div>
@@ -297,6 +389,23 @@ function getTrinidadHour(): number {
   }).formatToParts(new Date()).find((part) => part.type === "hour")?.value;
   const parsed = Number(hour);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 24;
+}
+
+function getTrinidadHourAt(timestamp: string): number {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return -1;
+  }
+  const hour = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    hour12: false,
+    timeZone: "America/Port_of_Spain",
+  }).formatToParts(date).find((part) => part.type === "hour")?.value;
+  return normalizeHour(Number(hour));
+}
+
+function normalizeHour(hour: number): number {
+  return Number.isFinite(hour) ? hour % 24 : -1;
 }
 
 function circularHourDistance(left: number, right: number): number {

@@ -17,6 +17,8 @@ from app.services.demand_forecast_baselines import (
 )
 from app.services.demand_forecast_model_service import (
     DemandForecastModelService,
+    _feature_fill_values,
+    _feature_vector,
     _training_sample_weights,
 )
 
@@ -425,3 +427,34 @@ def test_ml_sample_weights_favor_recent_complete_rows(tmp_path):
     assert weights[1] > weights[0]
     assert weights[2] < weights[1]
     assert round(sum(weights) / len(weights), 10) == 1.0
+
+
+def test_ml_feature_vector_includes_scada_generation_context(tmp_path):
+    session_factory = _session_factory(tmp_path)
+    _seed_training_rows(session_factory, count=3)
+    with session_factory() as session:
+        rows = list(
+            session.scalars(
+                select(ForecastTrainingRow).order_by(
+                    ForecastTrainingRow.feature_timestamp
+                )
+            )
+        )
+        rows[0].spinning_reserve_mw = 150
+        rows[0].available_capacity_mw = 1200
+        rows[0].online_capacity_mw = 1000
+        rows[0].reserve_margin_mw = 240
+        rows[0].online_spare_mw = 40
+        session.commit()
+
+    fill_values = _feature_fill_values(rows)
+    with_generation_context = _feature_vector(rows[0], fill_values)
+    rows[0].online_capacity_mw = 0
+    rows[0].available_capacity_mw = 0
+    rows[0].spinning_reserve_mw = 0
+    rows[0].reserve_margin_mw = 0
+    rows[0].online_spare_mw = 0
+    without_generation_context = _feature_vector(rows[0], fill_values)
+
+    assert len(with_generation_context) == len(without_generation_context)
+    assert with_generation_context != without_generation_context

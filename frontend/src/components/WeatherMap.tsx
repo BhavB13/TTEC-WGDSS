@@ -282,6 +282,9 @@ export default function WeatherMap({
 }: WeatherMapProps) {
   const [hurricaneEnabled, setHurricaneEnabled] = useState(false);
   const [windFlowEnabled, setWindFlowEnabled] = useState(false);
+  const [imageryStatus, setImageryStatus] = useState<
+    "checking" | "ready" | "degraded"
+  >("checking");
   const [windFlowStatus, setWindFlowStatus] = useState<
     "loading" | "active" | "error"
   >("loading");
@@ -341,24 +344,24 @@ export default function WeatherMap({
   return (
     <div className={`flex h-full w-full min-w-0 flex-col rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2 shadow-[0_0_40px_rgba(8,145,178,0.08)] ${className}`}>
       <div className="mb-1 flex items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
             Weather Map
           </p>
-          <h2 className="mt-1 text-xl font-semibold text-white">
+          <h2 className="mt-1 text-base font-semibold leading-tight text-white">
             Trinidad and Tobago Operations Map
           </h2>
         </div>
-        <span className="rounded-full border border-slate-700 px-3 py-1 text-xs font-medium text-slate-300">
-          {!hurricaneEnabled
-            ? "Storm tracking off"
-            : stormTrackingFailed
-              ? "Storm feed unavailable"
-              : stormTracking === null
-                ? "Checking NHC storms"
-                : activeStorms.length === 0
-                  ? "No active NHC storms"
-                  : `${activeStorms.length} active storm${activeStorms.length === 1 ? "" : "s"}`}
+        <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-semibold ${
+          imageryStatus === "degraded"
+            ? "border-amber-400/35 bg-amber-500/10 text-amber-100"
+            : "border-cyan-400/25 bg-cyan-500/10 text-cyan-100"
+        }`}>
+          {imageryStatus === "degraded"
+            ? "Imagery degraded"
+            : imageryStatus === "checking"
+              ? "Checking imagery"
+              : "Imagery live"}
         </span>
       </div>
 
@@ -387,7 +390,7 @@ export default function WeatherMap({
           <LayersControl position="topright">
             <LayersControl.BaseLayer name="OpenStreetMap">
               <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                attribution="OpenStreetMap"
                 url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
                 {...BASE_TILE_LAYER_OPTIONS}
               />
@@ -395,7 +398,7 @@ export default function WeatherMap({
 
             <LayersControl.BaseLayer checked name="NASA Blue Marble">
               <TileLayer
-                attribution="Satellite imagery &copy; NASA Earth Observatory / GIBS"
+                attribution="NASA GIBS"
                 url={satelliteBaseUrl}
                 maxNativeZoom={8}
                 maxZoom={11}
@@ -403,41 +406,49 @@ export default function WeatherMap({
               />
             </LayersControl.BaseLayer>
 
-            <LayersControl.Overlay checked name={CLOUD_SYSTEMS_LAYER_NAME}>
+            <LayersControl.Overlay checked name={`${CLOUD_SYSTEMS_LAYER_NAME} (NASA/NOAA)`}>
               <LayerGroup>
                 {cloudSystemsTileUrl ? (
                   <TileLayer
-                    attribution="Cloud imagery &copy; NASA GIBS / NOAA"
+                    attribution="Clouds: NASA/NOAA"
                     opacity={0.78}
                     maxNativeZoom={7}
                     maxZoom={11}
                     zIndex={500}
                     pane="overlayPane"
                     url={cloudSystemsTileUrl}
+                    eventHandlers={{
+                      tileload: () => setImageryStatus("ready"),
+                      tileerror: () => setImageryStatus("degraded"),
+                    }}
                     {...WEATHER_TILE_LAYER_OPTIONS}
                   />
                 ) : null}
               </LayerGroup>
             </LayersControl.Overlay>
 
-            <LayersControl.Overlay checked name="Rainfall Coverage">
+            <LayersControl.Overlay checked name="Rainfall Coverage (NASA GPM)">
               <LayerGroup>
                 {rainfallTileUrl ? (
                   <TileLayer
-                    attribution="Rain imagery &copy; NASA GIBS / NASA GPM"
+                    attribution="Rain: NASA GPM"
                     opacity={0.72}
                     maxNativeZoom={6}
                     maxZoom={11}
                     zIndex={490}
                     pane="overlayPane"
                     url={rainfallTileUrl}
+                    eventHandlers={{
+                      tileload: () => setImageryStatus("ready"),
+                      tileerror: () => setImageryStatus("degraded"),
+                    }}
                     {...WEATHER_TILE_LAYER_OPTIONS}
                   />
                 ) : null}
               </LayerGroup>
             </LayersControl.Overlay>
 
-            <LayersControl.Overlay checked name="Wind Direction">
+            <LayersControl.Overlay checked name="Wind Direction (Live)">
               <LayerGroup>
                 {windDirection != null ? (
                   <WindDirectionMarker
@@ -449,7 +460,7 @@ export default function WeatherMap({
               </LayerGroup>
             </LayersControl.Overlay>
 
-            <LayersControl.Overlay name="Wind Flow">
+            <LayersControl.Overlay name="Wind Flow (Live)">
               <LayerGroup />
             </LayersControl.Overlay>
 
@@ -461,6 +472,9 @@ export default function WeatherMap({
                     position={[station.lat, station.lon]}
                     icon={generationIcon}
                   >
+                    <Tooltip direction="top" offset={[0, -14]}>
+                      Generation: {station.name}
+                    </Tooltip>
                     <Popup>
                       <div className="text-sm">
                         <p className="font-semibold">{station.name}</p>
@@ -480,6 +494,9 @@ export default function WeatherMap({
                     position={[station.lat, station.lon]}
                     icon={substationIcon}
                   >
+                    <Tooltip direction="top" offset={[0, -14]}>
+                      Substation: {station.name}
+                    </Tooltip>
                     <Popup>
                       <div className="text-sm">
                         <p className="font-semibold">{station.name}</p>
@@ -514,6 +531,9 @@ export default function WeatherMap({
               <LayerGroup>
                 {loadCenters.map((center) => (
                   <Marker key={center.id} position={[center.lat, center.lon]} icon={loadIcon}>
+                    <Tooltip direction="top" offset={[0, -14]}>
+                      Load center: {center.name}
+                    </Tooltip>
                     <Popup>
                       <div className="text-sm">
                         <p className="font-semibold">{center.name}</p>
@@ -667,6 +687,17 @@ export default function WeatherMap({
                 : "Wind flow temporarily unavailable"}
           </div>
         ) : null}
+        <details className="absolute bottom-8 left-2 z-[1001] max-w-[14rem] rounded-lg border border-slate-700/80 bg-slate-950/90 text-[10px] text-slate-200 shadow-lg backdrop-blur">
+          <summary className="cursor-pointer list-none px-2.5 py-1.5 font-semibold text-cyan-100">
+            Map key
+          </summary>
+          <div className="grid gap-1 border-t border-slate-800 px-2.5 py-2 leading-snug">
+            <p><span className="font-semibold text-cyan-200">Cloud systems</span> Satellite cloud imagery for situational awareness.</p>
+            <p><span className="font-semibold text-sky-200">Rainfall</span> GPM precipitation-rate imagery.</p>
+            <p><span className="font-semibold text-emerald-200">G</span> Generation station <span className="font-semibold text-amber-200">S</span> Substation <span className="font-semibold text-cyan-200">L</span> Load center.</p>
+            <p className="text-slate-400">Select layers from the control at top right. Visual layers support, but do not replace, dispatch telemetry.</p>
+          </div>
+        </details>
       </div>
     </div>
   );
@@ -741,7 +772,7 @@ function MapOverlaySync({
       if (event.name === "Hurricane / Tropical Storm Tracking") {
         onHurricaneChange(true);
       }
-      if (event.name === "Wind Flow") {
+      if (event.name === "Wind Flow (Live)") {
         onWindFlowChange(true);
       }
     },
@@ -749,7 +780,7 @@ function MapOverlaySync({
       if (event.name === "Hurricane / Tropical Storm Tracking") {
         onHurricaneChange(false);
       }
-      if (event.name === "Wind Flow") {
+      if (event.name === "Wind Flow (Live)") {
         onWindFlowChange(false);
       }
     },

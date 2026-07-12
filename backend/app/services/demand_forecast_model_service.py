@@ -21,7 +21,7 @@ from app.services.demand_forecast_baselines import (
 )
 from app.services.forecast_dataset_service import ForecastDatasetService
 
-MODEL_VERSION = "demand-forecast-v1.3"
+MODEL_VERSION = "demand-forecast-v1.4"
 MIN_FORECAST_UNCERTAINTY_MW = 5.0
 MIN_FORECAST_UNCERTAINTY_DEMAND_RATIO = 0.015
 MIN_ML_TRAIN_ROWS = 48
@@ -37,6 +37,11 @@ FEATURE_COLUMNS = (
     "lag_24h_demand_mw",
     "rolling_3h_demand_mw",
     "rolling_6h_demand_mw",
+    "spinning_reserve_mw",
+    "available_capacity_mw",
+    "online_capacity_mw",
+    "reserve_margin_mw",
+    "online_spare_mw",
     "temperature_c",
     "humidity_percent",
     "rainfall_mm_hr",
@@ -63,6 +68,11 @@ FEATURE_DEFAULTS = {
     "forecast_cloud_cover_percent": 50.0,
     "forecast_wind_speed_kmh": 0.0,
     "forecast_precipitation_probability_percent": 0.0,
+    "spinning_reserve_mw": 0.0,
+    "available_capacity_mw": 0.0,
+    "online_capacity_mw": 0.0,
+    "reserve_margin_mw": 0.0,
+    "online_spare_mw": 0.0,
 }
 
 
@@ -603,6 +613,24 @@ def _feature_vector(
     )
     rainfall = max(0.0, _filled(row.rainfall_mm_hr, 0.0))
     forecast_rainfall = max(0.0, _filled(row.forecast_rainfall_mm_hr, 0.0))
+    current_demand = max(0.0, row.current_demand_mw)
+    online_capacity = max(
+        0.0,
+        _filled(row.online_capacity_mw, fill_values["online_capacity_mw"]),
+    )
+    available_capacity = max(
+        0.0,
+        _filled(row.available_capacity_mw, fill_values["available_capacity_mw"]),
+    )
+    spinning_reserve = max(
+        0.0,
+        _filled(row.spinning_reserve_mw, fill_values["spinning_reserve_mw"]),
+    )
+    online_spare = _filled(row.online_spare_mw, online_capacity - current_demand)
+    reserve_margin = _filled(
+        row.reserve_margin_mw,
+        available_capacity - current_demand,
+    )
     vector.extend(
         (
             math.sin(target_hour_angle),
@@ -620,6 +648,11 @@ def _feature_vector(
             rain_probability / 100.0,
             math.log1p(rainfall),
             math.log1p(forecast_rainfall),
+            current_demand / online_capacity if online_capacity > 0.0 else 0.0,
+            current_demand / available_capacity if available_capacity > 0.0 else 0.0,
+            online_spare,
+            reserve_margin,
+            spinning_reserve / current_demand if current_demand > 0.0 else 0.0,
             1.0 if row.source_quality_status == "GOOD" else 0.0,
         )
     )
