@@ -2,26 +2,25 @@
 
 ## Recommended Order
 
-1. Review the current SCADA and forecasting working-tree changes for coherence across models, migrations, services, scripts, and tests.
-2. Run targeted backend validation for the in-flight work:
-   - `backend\\venv\\Scripts\\python.exe -m pytest -q`
-   - `backend\\venv\\Scripts\\python.exe -m alembic check`
-3. Confirm the modified files still align with `docs/SCADA_WEATHER_MATH_UPGRADE_PLAN.md`, especially around:
-   - timestamp-based alignment
-   - no future leakage
-   - baseline-first forecasting
-   - backward-compatible dashboard integration
-4. Record the validated state and remaining gaps back into `CURRENT_STATUS.md`.
-5. Only after backend validation is clean, consider frontend or snapshot-surface changes for forecast/model visibility.
+1. Obtain historical CSV exports for all five required SCADA tags, with `Avg
+   Value`, `Quality`, and overlapping timestamps.
+2. Run the SCADA replay pipeline and review its preflight warnings, normalized
+   snapshot coverage, baseline comparison, uncertainty, and risk-readiness
+   report. Do not treat a short replay as production validation.
+3. Configure an external supervised refresh schedule only after replay data is
+   adequate and the active model has been reviewed by engineering.
+4. Add a real grid provider only through a controlled historian/API/OPC-UA/CSV
+   export integration. Keep `MockGridProvider` available for demo and testing.
+5. Add operational observability before production: structured logs, import and
+   refresh job monitoring, alert routing, backup/restore checks, and access
+   control.
+6. Expand model validation with multiple seasons, public holidays, outages,
+   dispatch constraints, and more weather regimes before relying on ML output.
 
-## Good Nightly Slices
+## Do Not Do Yet
 
-- Review one migration or one backend service cluster at a time
-- Add or tighten tests around SCADA import, snapshot building, and dataset leakage boundaries
-- Update docs after validation confirms the actual implementation
-
-## Avoid Early
-
-- Large frontend changes before the backend contract is stable
-- Reverting or rewriting existing uncommitted work without human direction
-- Deployments or external environment changes during overnight automation
+- Do not label simulated grid data as live SCADA.
+- Do not auto-train inside the FastAPI request process.
+- Do not activate ML merely because it runs; it must beat chronological
+  baselines and be reviewed with enough representative data.
+- Do not import the calibration Excel archive as raw SCADA CSV telemetry.

@@ -18,6 +18,10 @@ from app.services.scada_replay_validation_service import (
     ScadaReplayValidationReport,
     ScadaReplayValidationService,
 )
+from app.services.scada_replay_preflight_service import (
+    ScadaReplayPreflightReport,
+    ScadaReplayPreflightService,
+)
 from app.services.scada_snapshot_service import ScadaSnapshotBuildResult, ScadaSnapshotService
 from app.services.demand_forecast_model_service import DemandForecastModelService
 from app.services.forecast_dataset_service import ForecastDatasetService
@@ -25,6 +29,7 @@ from app.services.forecast_dataset_service import ForecastDatasetService
 
 @dataclass(frozen=True)
 class ScadaReplayPipelineResult:
+    preflight_report: ScadaReplayPreflightReport
     import_results: list[ScadaImportResult]
     snapshot_result: ScadaSnapshotBuildResult
     dataset_result: ForecastDatasetBuildResult
@@ -49,6 +54,13 @@ def run_pipeline(
     session_factory=SessionLocal,
 ) -> ScadaReplayPipelineResult:
     import_service = ScadaImportService(session_factory=session_factory)
+    preflight_report = ScadaReplayPreflightService(import_service=import_service).inspect(
+        csv_paths
+    )
+    if not preflight_report.ready:
+        raise ValueError(
+            "SCADA replay preflight failed: " + "; ".join(preflight_report.blockers)
+        )
     import_results = [import_service.import_csv(path) for path in csv_paths]
 
     snapshot_result = ScadaSnapshotService(
@@ -65,6 +77,7 @@ def run_pipeline(
     ).build_report()
 
     return ScadaReplayPipelineResult(
+        preflight_report=preflight_report,
         import_results=import_results,
         snapshot_result=snapshot_result,
         dataset_result=dataset_result,
@@ -76,6 +89,7 @@ def run_pipeline(
 def format_summary(result: ScadaReplayPipelineResult) -> str:
     lines = [
         "SCADA Replay Pipeline Summary",
+        f"preflight aligned Good-quality hours: {result.preflight_report.aligned_hour_count}",
         f"files imported: {result.files_imported}",
         f"duplicates skipped: {result.duplicates_skipped}",
         f"raw rows stored: {result.raw_rows_stored}",
@@ -85,6 +99,8 @@ def format_summary(result: ScadaReplayPipelineResult) -> str:
         f"skipped rows: {result.dataset_result.skipped_rows}",
         f"model horizons evaluated: {len(result.training_result.results)}",
     ]
+    if result.preflight_report.warnings:
+        lines.append("preflight warnings: " + "; ".join(result.preflight_report.warnings))
     for item in result.training_result.results:
         lines.extend(
             [

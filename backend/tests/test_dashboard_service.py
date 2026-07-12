@@ -207,8 +207,10 @@ async def test_dashboard_snapshot_aggregates_live_data_and_persists():
     assert len(snapshot.forecast.items) == 1
     assert snapshot.data_quality.weather_status == "LIVE"
     assert snapshot.data_quality.grid_status == "SIMULATED"
+    assert snapshot.data_quality.decision_status == "SIMULATION"
     assert snapshot.data_quality.calibration_status == "UNAVAILABLE"
     assert snapshot.data_quality.overall_status == "GOOD"
+    assert any("not live dispatch" in note for note in snapshot.data_quality.notes)
     assert len(persistence.snapshots) == 1
 
 
@@ -399,7 +401,7 @@ async def test_dashboard_snapshot_exposes_model_scada_status_and_operating_risk(
     assert snapshot.probability.risk_level == "HIGH"
     assert snapshot.probability.forecast_demand_30m == 970
     assert snapshot.recommendation.recommendation == "START ADDITIONAL TURBINE"
-    assert snapshot.data_quality.decision_status == "AVAILABLE"
+    assert snapshot.data_quality.decision_status == "SIMULATION"
 
 
 def test_historical_backtest_result_cannot_drive_live_operating_risk(tmp_path):

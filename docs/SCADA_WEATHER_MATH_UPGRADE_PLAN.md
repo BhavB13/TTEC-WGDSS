@@ -6,13 +6,16 @@ This upgrade moves WGDSS from mostly rule-based, mock-grid decision support towa
 
 ### Implemented Mathematical Hardening
 
-The current `v1.3` forecasting implementation and `v1.2` operating-risk implementation add these integrity controls:
+The current `v1.4` forecasting implementation and `v1.3` operating-risk implementation add these integrity controls:
 
 - Baseline and ML evaluation use chronological outer holdout data.
 - Baseline choice and ML parameter choice use expanding-window walk-forward validation inside the training period, leaving the outer holdout untouched until final evaluation.
 - Hourly-average baselines are keyed to the forecast target hour, not the feature hour.
 - Daily and weekly cycles use sine/cosine encoding so midnight and adjacent days remain mathematically close.
 - Model features retain target-hour forecast humidity, wind speed, precipitation probability, and current pressure instead of discarding fields already supplied by the weather providers.
+- Contemporaneous SCADA spinning reserve, available capacity, online capacity,
+  reserve margin, and online spare values are retained as operating-context
+  features without using future dispatch data.
 - Cooling-degree, temperature/humidity interaction, forecast-temperature delta, transformed rainfall, source-quality, and missing-value indicators are generated without changing the stored training schema.
 - Forecast weather is eligible for a training row only when its `created_at` timestamp proves it was available at the feature timestamp.
 - Bad SCADA feature/target rows are excluded from model fitting; weather-degraded rows remain usable with explicit missingness indicators.
@@ -945,7 +948,7 @@ The dashboard snapshot may now include these optional objects:
         "forecast_demand_mw": 1040,
         "forecast_uncertainty_mw": 30,
         "model_name": "persistence",
-        "model_version": "demand-forecast-v1.3",
+        "model_version": "demand-forecast-v1.4",
         "baseline_name": "persistence",
         "baseline_forecast_mw": 1030,
         "quality_status": "BASELINE_ACTIVE"
@@ -954,7 +957,7 @@ The dashboard snapshot may now include these optional objects:
   },
   "model_status": {
     "active_model": "persistence",
-    "model_version": "demand-forecast-v1.3",
+    "model_version": "demand-forecast-v1.4",
     "mode": "BASELINE_ACTIVE",
     "trained_through": "2026-06-30T09:00:00Z",
     "metrics": {

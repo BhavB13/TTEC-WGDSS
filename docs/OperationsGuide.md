@@ -107,6 +107,11 @@ CALIBRATION_AUTO_IMPORT=true
 `LIVE`, `CALIBRATED`, `FALLBACK`, or `STALE`; grid data as `LIVE` or `SIMULATED`;
 and calibration as `CALIBRATED` or `UNAVAILABLE`.
 
+When the active provider is `MockGridProvider`, `data_quality.decision_status`
+is `SIMULATION` and the dashboard labels grid status as simulated. Those values
+support training and replay only; they must not be interpreted as live dispatch
+authority.
+
 Forecast periods are a rolling horizon beginning at the current hour. The UI
 shows the next six periods strictly after the current Trinidad time and refreshes
 the snapshot every five minutes. Imported SCADA temperature is historical
@@ -115,6 +120,33 @@ calibration evidence and is never substituted for a live weather observation.
 Dashboard requests persist weather, grid, and probability observations when
 `SNAPSHOT_PERSISTENCE_ENABLED=true`. Persistence failures degrade the quality
 status but do not interrupt the operator snapshot.
+
+## Historical SCADA Replay And Forecast Refresh
+
+The SCADA CSV path is a historical-export prototype workflow, not a live SCADA
+integration. Before the replay pipeline imports data it verifies all required
+tags, Good-quality samples, and timestamp overlap. Run it with all source CSVs:
+
+```powershell
+cd backend
+venv\Scripts\python.exe scripts\run_scada_replay_pipeline.py C:\exports\*.csv
+```
+
+The supported tags are `PTL132 GENERATION TOTALS`, `MHO132 AVERAGE AMBIENT
+TEMPERATURE`, `GSYS SYSTEM_CORRECTED_SPIN_TOTAL`, `GSYS SYSTEM_AVAIL_TOTAL`, and
+`GSYS SYSTEM_ONLN_TOTAL`. The pipeline requires at least eight aligned hours;
+short history may replay but is not a trusted production-training set.
+
+Run supervised refresh outside the API process after new Good-quality SCADA data
+arrives:
+
+```powershell
+venv\Scripts\python.exe scripts\refresh_demand_forecast.py
+```
+
+It requires 48 snapshots by default and skips when there is no new data. Model
+results should be reviewed against their chronological baseline metrics before
+they influence operating decisions.
 
 ## Validation
 

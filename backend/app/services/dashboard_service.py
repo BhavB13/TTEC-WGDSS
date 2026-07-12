@@ -310,10 +310,11 @@ class DashboardService:
             notes.append(
                 "Grid telemetry is missing: " + ", ".join(grid.missing_fields)
             )
+        simulated_grid = "Mock" in grid.source_provider
         decision_status = (
             "INHIBITED"
             if stale or grid_stale or grid_quality != "GOOD" or grid.missing_fields
-            else "AVAILABLE"
+            else ("SIMULATION" if simulated_grid else "AVAILABLE")
         )
         if grid_fallback_used:
             grid_status = "FALLBACK"
@@ -322,7 +323,12 @@ class DashboardService:
         elif grid_quality in {"BAD", "UNCERTAIN"}:
             grid_status = grid_quality
         else:
-            grid_status = "SIMULATED" if "Mock" in grid.source_provider else "LIVE"
+            grid_status = "SIMULATED" if simulated_grid else "LIVE"
+
+        if simulated_grid:
+            notes.append(
+                "Grid telemetry is simulated; this snapshot is for training and replay, not live dispatch"
+            )
 
         return DataQualityResponse(
             overall_status=(

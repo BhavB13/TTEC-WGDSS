@@ -361,7 +361,7 @@ export default function WeatherMap({
             ? "Imagery degraded"
             : imageryStatus === "checking"
               ? "Checking imagery"
-              : "Imagery live"}
+              : "Imagery available"}
         </span>
       </div>
 
@@ -692,8 +692,8 @@ export default function WeatherMap({
             Map key
           </summary>
           <div className="grid gap-1 border-t border-slate-800 px-2.5 py-2 leading-snug">
-            <p><span className="font-semibold text-cyan-200">Cloud systems</span> Satellite cloud imagery for situational awareness.</p>
-            <p><span className="font-semibold text-sky-200">Rainfall</span> GPM precipitation-rate imagery.</p>
+            <p><span className="font-semibold text-cyan-200">Cloud systems</span> Latest provider satellite imagery for situational awareness; observation age can vary.</p>
+            <p><span className="font-semibold text-sky-200">Rainfall</span> Latest provider GPM precipitation-rate imagery; observation age can vary.</p>
             <p><span className="font-semibold text-emerald-200">G</span> Generation station <span className="font-semibold text-amber-200">S</span> Substation <span className="font-semibold text-cyan-200">L</span> Load center.</p>
             <p className="text-slate-400">Select layers from the control at top right. Visual layers support, but do not replace, dispatch telemetry.</p>
           </div>

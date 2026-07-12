@@ -87,7 +87,11 @@ export default function Header({
           />
           <HeaderMetric
             label="Grid Status"
-            value={gridStatus ?? systemStatus}
+            value={
+              dataQuality?.grid_status === "SIMULATED"
+                ? `Simulated · ${gridStatus ?? systemStatus}`
+                : (gridStatus ?? systemStatus)
+            }
             tone={
               dataQuality?.grid_is_stale ||
               dataQuality?.grid_fallback_used ||

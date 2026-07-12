@@ -79,7 +79,7 @@ class ScadaImportService:
                     skipped_duplicate=True,
                 )
 
-            measurements = self._read_measurements(source)
+            measurements = self.read_measurements(source)
             import_run = ScadaImportRun(
                 source_filename=source.name,
                 source_path=source_path,
@@ -109,8 +109,15 @@ class ScadaImportService:
                 row_count=len(measurements),
             )
 
-    def _read_measurements(self, source: Path) -> list[dict[str, Any]]:
-        with source.open("r", encoding="utf-8-sig", newline="") as handle:
+    def read_measurements(self, source: str | Path) -> list[dict[str, Any]]:
+        """Parse and validate a SCADA export without persisting its rows."""
+        path = Path(source)
+        if not path.exists():
+            raise FileNotFoundError(f"SCADA CSV not found: {path}")
+        if not path.is_file():
+            raise ValueError(f"SCADA CSV path is not a file: {path}")
+
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             if reader.fieldnames is None:
                 raise ValueError("SCADA CSV is missing a header row")

@@ -11,6 +11,8 @@ from app.models.base import Base
 from app.models.forecast import Forecast
 from app.models.scada import ScadaGridSnapshot
 from app.models.weather import Weather
+import pytest
+
 from scripts.run_scada_replay_pipeline import format_summary, run_pipeline
 
 
@@ -47,10 +49,16 @@ def _value_for_tag(tag_name: str, hour: int) -> float:
     raise ValueError(f"Unexpected tag {tag_name}")
 
 
-def _write_scada_csv(path: Path, missing_online_hour: int | None = None) -> None:
+def _write_scada_csv(
+    path: Path,
+    missing_online_hour: int | None = None,
+    excluded_tag: str | None = None,
+) -> None:
     rows: list[list[str]] = []
     for hour in range(9):
         for pen_index, tag_name in reversed(SCADA_TAGS):
+            if tag_name == excluded_tag:
+                continue
             if tag_name == "GSYS SYSTEM_ONLN_TOTAL" and hour == missing_online_hour:
                 continue
             timestamp = _ts(hour)
@@ -168,6 +176,19 @@ def test_full_scada_replay_pipeline_handles_duplicates_and_reports_quality(tmp_p
 
     summary = format_summary(result)
     assert "files imported: 1" in summary
+    assert "preflight aligned Good-quality hours: 8" in summary
     assert "duplicates skipped: 1" in summary
     assert "model horizons evaluated: 3" in summary
     assert "1h ML beats baseline: false" in summary
+
+
+def test_scada_replay_pipeline_rejects_missing_required_tag_before_import(tmp_path):
+    session_factory = _session_factory(tmp_path)
+    csv_path = tmp_path / "incomplete_scada_replay.csv"
+    _write_scada_csv(csv_path, excluded_tag="GSYS SYSTEM_ONLN_TOTAL")
+
+    with pytest.raises(ValueError, match="missing required SCADA tag"):
+        run_pipeline([csv_path], session_factory=session_factory)
+
+    with session_factory() as session:
+        assert session.scalar(select(ScadaGridSnapshot)) is None
