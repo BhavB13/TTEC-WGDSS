@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -42,6 +43,13 @@ class ScadaImportResult:
     import_run_id: int
     row_count: int
     skipped_duplicate: bool = False
+    duplicate_rows_skipped: int = 0
+
+
+@dataclass(frozen=True)
+class ScadaParseResult:
+    measurements: list[dict[str, Any]]
+    duplicate_rows_skipped: int
 
 
 class ScadaImportService:
@@ -57,8 +65,27 @@ class ScadaImportService:
 
         if self.session_factory is SessionLocal:
             initialize_database()
-        source_hash = self._file_hash(source)
-        source_path = str(source.resolve())
+        payload = source.read_bytes()
+        return self.import_payload(
+            payload,
+            source_filename=source.name,
+            source_path=str(source.resolve()),
+        )
+
+    def import_payload(
+        self,
+        payload: bytes,
+        *,
+        source_filename: str,
+        source_path: str,
+    ) -> ScadaImportResult:
+        """Import one CSV payload while preserving logical archive provenance."""
+        if self.session_factory is SessionLocal:
+            initialize_database()
+        source_hash = hashlib.sha256(payload).hexdigest()
+        measurements, duplicate_rows = self._read_measurements_text(
+            payload.decode("utf-8-sig")
+        )
 
         with self.session_factory() as session:
             existing = session.scalar(
@@ -67,7 +94,7 @@ class ScadaImportService:
             if existing is not None:
                 logger.info(
                     "Skipping duplicate SCADA import for %s with hash %s",
-                    source.name,
+                    source_filename,
                     source_hash,
                 )
                 return ScadaImportResult(
@@ -77,16 +104,19 @@ class ScadaImportService:
                     import_run_id=existing.id,
                     row_count=existing.row_count,
                     skipped_duplicate=True,
+                    duplicate_rows_skipped=0,
                 )
 
-            measurements = self.read_measurements(source)
             import_run = ScadaImportRun(
-                source_filename=source.name,
+                source_filename=source_filename,
                 source_path=source_path,
                 source_hash=source_hash,
                 row_count=len(measurements),
                 import_status="IMPORTED",
-                summary=f"Imported {len(measurements)} SCADA measurement row(s)",
+                summary=(
+                    f"Imported {len(measurements)} SCADA measurement row(s); "
+                    f"skipped {duplicate_rows} exact duplicate row(s)"
+                ),
             )
             session.add(import_run)
             session.flush()
@@ -95,18 +125,19 @@ class ScadaImportService:
                 session.add(
                     ScadaRawMeasurement(
                         import_run_id=import_run.id,
-                        source_filename=source.name,
+                        source_filename=source_filename,
                         **measurement,
                     )
                 )
 
             session.commit()
             return ScadaImportResult(
-                source_filename=source.name,
+                source_filename=source_filename,
                 source_hash=source_hash,
                 imported=True,
                 import_run_id=import_run.id,
                 row_count=len(measurements),
+                duplicate_rows_skipped=duplicate_rows,
             )
 
     def read_measurements(self, source: str | Path) -> list[dict[str, Any]]:
@@ -117,26 +148,65 @@ class ScadaImportService:
         if not path.is_file():
             raise ValueError(f"SCADA CSV path is not a file: {path}")
 
-        with path.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.DictReader(handle)
-            if reader.fieldnames is None:
-                raise ValueError("SCADA CSV is missing a header row")
-
-            header_map = self._build_header_map(reader.fieldnames)
-            missing = sorted(REQUIRED_HEADERS - set(header_map))
-            if missing:
-                raise ValueError(
-                    "SCADA CSV is missing required header(s): " + ", ".join(missing)
-                )
-
-            measurements: list[dict[str, Any]] = []
-            for line_number, row in enumerate(reader, start=2):
-                normalized = self._normalize_row(row, header_map)
-                if not self._row_has_values(normalized):
-                    continue
-                measurements.append(self._parse_measurement(normalized, line_number))
-
+        measurements, _ = self._read_measurements_text(
+            path.read_text(encoding="utf-8-sig")
+        )
         return measurements
+
+    def read_measurements_bytes(self, payload: bytes) -> list[dict[str, Any]]:
+        return self.parse_measurements_bytes(payload).measurements
+
+    def parse_measurements_bytes(self, payload: bytes) -> ScadaParseResult:
+        measurements, duplicates = self._read_measurements_text(
+            payload.decode("utf-8-sig")
+        )
+        return ScadaParseResult(measurements, duplicates)
+
+    def _read_measurements_text(
+        self,
+        text: str,
+    ) -> tuple[list[dict[str, Any]], int]:
+        reader = csv.DictReader(io.StringIO(text, newline=""))
+        if reader.fieldnames is None:
+            raise ValueError("SCADA CSV is missing a header row")
+
+        header_map = self._build_header_map(reader.fieldnames)
+        missing = sorted(REQUIRED_HEADERS - set(header_map))
+        if missing:
+            raise ValueError(
+                "SCADA CSV is missing required header(s): " + ", ".join(missing)
+            )
+
+        measurements: list[dict[str, Any]] = []
+        seen: set[tuple[Any, ...]] = set()
+        duplicates = 0
+        for line_number, row in enumerate(reader, start=2):
+            normalized = self._normalize_row(row, header_map)
+            if not self._row_has_values(normalized):
+                continue
+            measurement = self._parse_measurement(normalized, line_number)
+            identity = self._measurement_identity(measurement)
+            if identity in seen:
+                duplicates += 1
+                continue
+            seen.add(identity)
+            measurements.append(measurement)
+        return measurements, duplicates
+
+    @staticmethod
+    def _measurement_identity(measurement: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            measurement["pen_index"],
+            measurement["tag_name"],
+            measurement["start_time"],
+            measurement["end_time"],
+            measurement["min_time"],
+            measurement["min_value"],
+            measurement["max_time"],
+            measurement["max_value"],
+            measurement["avg_value"],
+            str(measurement["quality"]).strip().lower(),
+        )
 
     @staticmethod
     def _build_header_map(fieldnames: list[str]) -> dict[str, str]:
@@ -221,7 +291,7 @@ class ScadaImportService:
     def _parse_datetime(value: str, field_name: str, line_number: int) -> datetime | None:
         if value is None or value.strip() == "":
             return None
-        raw = value.strip()
+        raw = " ".join(value.strip().split())
         if _looks_like_excel_serial(raw):
             return _excel_serial_to_datetime(float(raw))
 
@@ -237,10 +307,14 @@ class ScadaImportService:
             "%Y-%m-%d %H:%M",
             "%m/%d/%Y %H:%M:%S",
             "%m/%d/%Y %H:%M",
+            "%m/%d/%y %H:%M:%S",
+            "%m/%d/%y %H:%M",
             "%d/%m/%Y %H:%M:%S",
             "%d/%m/%Y %H:%M",
             "%m/%d/%Y %I:%M:%S %p",
             "%m/%d/%Y %I:%M %p",
+            "%m/%d/%y %I:%M:%S %p",
+            "%m/%d/%y %I:%M %p",
             "%d/%m/%Y %I:%M:%S %p",
             "%d/%m/%Y %I:%M %p",
         )

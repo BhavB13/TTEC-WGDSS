@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Iterable
+from datetime import datetime, timedelta
+from typing import Any, Iterable, Mapping
 
 from sqlalchemy import delete, select
 
@@ -30,7 +30,12 @@ REQUIRED_SNAPSHOT_FIELDS = {
     "online_capacity_mw",
 }
 
-GOOD_QUALITY_VALUES = {"good"}
+STRICT_QUALITY_VALUES = {"good"}
+CONDITIONAL_QUALITY_VALUES = {"other"}
+USABLE_QUALITY_VALUES = STRICT_QUALITY_VALUES | CONDITIONAL_QUALITY_VALUES
+MIN_HOURLY_COVERAGE = 0.90
+MAX_EXPECTED_COVERAGE = 1.05
+RESAMPLING_METHOD = "interval_overlap_hourly"
 
 
 @dataclass(frozen=True)
@@ -38,6 +43,7 @@ class ScadaSnapshotBuildResult:
     snapshots_created: int
     source_measurements: int
     degraded_snapshots: int
+    conditional_snapshots: int = 0
 
 
 class ScadaSnapshotService:
@@ -73,63 +79,149 @@ class ScadaSnapshotService:
             session.add_all(snapshots)
             session.commit()
 
-        degraded = sum(1 for snapshot in snapshots if snapshot.quality_status != "GOOD")
+        degraded = sum(1 for snapshot in snapshots if snapshot.quality_status == "DEGRADED")
+        conditional = sum(
+            1 for snapshot in snapshots if snapshot.quality_status == "USABLE_WITH_WARNING"
+        )
         return ScadaSnapshotBuildResult(
             snapshots_created=len(snapshots),
             source_measurements=len(measurements),
             degraded_snapshots=degraded,
+            conditional_snapshots=conditional,
         )
+
+    def preview_hourly_snapshots(
+        self,
+        measurements: Iterable[ScadaRawMeasurement | Mapping[str, Any]],
+    ) -> list[ScadaGridSnapshot]:
+        """Build snapshots without persistence for preflight and quality reports."""
+        return self._build_snapshots(measurements)
 
     def _build_snapshots(
         self,
-        measurements: Iterable[ScadaRawMeasurement],
+        measurements: Iterable[ScadaRawMeasurement | Mapping[str, Any]],
     ) -> list[ScadaGridSnapshot]:
-        grouped: dict[datetime, list[ScadaRawMeasurement]] = defaultdict(list)
-        for measurement in measurements:
-            grouped[_hour_bucket(measurement.start_time)].append(measurement)
-
-        snapshots: list[ScadaGridSnapshot] = []
-        for timestamp, rows in sorted(grouped.items()):
-            field_values, field_qualities, source_names = self._aggregate_rows(rows)
-            snapshot = self._snapshot_from_fields(
-                timestamp=timestamp,
-                field_values=field_values,
-                field_qualities=field_qualities,
-                source_names=source_names,
+        unique = self._deduplicate_measurements(measurements)
+        buckets: dict[datetime, dict[str, dict[str, Any]]] = defaultdict(
+            lambda: defaultdict(
+                lambda: {
+                    "weighted_sum": 0.0,
+                    "coverage_seconds": 0.0,
+                    "excluded_seconds": 0.0,
+                    "point_values": [],
+                    "qualities": set(),
+                    "excluded_qualities": set(),
+                    "sources": set(),
+                }
             )
-            snapshots.append(snapshot)
-        return snapshots
+        )
+        bucket_sources: dict[datetime, set[str]] = defaultdict(set)
 
-    @staticmethod
-    def _aggregate_rows(
-        rows: list[ScadaRawMeasurement],
-    ) -> tuple[dict[str, float], dict[str, list[str]], set[str]]:
-        values_by_field: dict[str, list[float]] = defaultdict(list)
-        qualities_by_field: dict[str, list[str]] = defaultdict(list)
-        source_names: set[str] = set()
-
-        for row in rows:
-            field_name = SCADA_TAG_FIELD_MAP.get(row.tag_name)
-            if field_name is None:
+        for measurement in unique:
+            tag_name = str(_measurement_value(measurement, "tag_name") or "").strip()
+            field_name = SCADA_TAG_FIELD_MAP.get(tag_name)
+            start_time = _measurement_value(measurement, "start_time")
+            end_time = _measurement_value(measurement, "end_time")
+            if field_name is None or not isinstance(start_time, datetime):
                 continue
-            values_by_field[field_name].append(row.avg_value)
-            qualities_by_field[field_name].append(row.quality)
-            source_names.add(row.source_filename)
+            value = float(_measurement_value(measurement, "avg_value"))
+            quality = str(_measurement_value(measurement, "quality") or "unknown").strip()
+            normalized_quality = quality.lower()
+            source = str(
+                _measurement_value(measurement, "source_filename") or "SCADA CSV"
+            )
 
-        field_values = {
-            field_name: sum(values) / len(values)
-            for field_name, values in values_by_field.items()
-            if values
-        }
-        return field_values, dict(qualities_by_field), source_names
+            if not isinstance(end_time, datetime) or end_time <= start_time:
+                hour = _hour_bucket(start_time)
+                accumulator = buckets[hour][field_name]
+                accumulator["sources"].add(source)
+                bucket_sources[hour].add(source)
+                if normalized_quality in USABLE_QUALITY_VALUES:
+                    accumulator["point_values"].append(value)
+                    accumulator["qualities"].add(normalized_quality)
+                else:
+                    accumulator["excluded_qualities"].add(normalized_quality)
+                continue
+
+            hour = _hour_bucket(start_time)
+            while hour < end_time:
+                hour_end = hour + timedelta(hours=1)
+                overlap_seconds = max(
+                    0.0,
+                    (min(end_time, hour_end) - max(start_time, hour)).total_seconds(),
+                )
+                if overlap_seconds > 0:
+                    accumulator = buckets[hour][field_name]
+                    accumulator["sources"].add(source)
+                    bucket_sources[hour].add(source)
+                    if normalized_quality in USABLE_QUALITY_VALUES:
+                        accumulator["weighted_sum"] += value * overlap_seconds
+                        accumulator["coverage_seconds"] += overlap_seconds
+                        accumulator["qualities"].add(normalized_quality)
+                    else:
+                        accumulator["excluded_seconds"] += overlap_seconds
+                        accumulator["excluded_qualities"].add(normalized_quality)
+                hour = hour_end
+
+        return [
+            self._snapshot_from_accumulators(
+                timestamp,
+                field_accumulators,
+                bucket_sources[timestamp],
+            )
+            for timestamp, field_accumulators in sorted(buckets.items())
+        ]
 
     @staticmethod
-    def _snapshot_from_fields(
+    def _deduplicate_measurements(
+        measurements: Iterable[ScadaRawMeasurement | Mapping[str, Any]],
+    ) -> list[ScadaRawMeasurement | Mapping[str, Any]]:
+        unique: list[ScadaRawMeasurement | Mapping[str, Any]] = []
+        seen: set[tuple[Any, ...]] = set()
+        for measurement in measurements:
+            identity = (
+                str(_measurement_value(measurement, "tag_name") or "").strip(),
+                _measurement_value(measurement, "start_time"),
+                _measurement_value(measurement, "end_time"),
+                _measurement_value(measurement, "avg_value"),
+                str(_measurement_value(measurement, "quality") or "").strip().lower(),
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            unique.append(measurement)
+        return unique
+
+    @staticmethod
+    def _snapshot_from_accumulators(
         timestamp: datetime,
-        field_values: dict[str, float],
-        field_qualities: dict[str, list[str]],
+        field_accumulators: dict[str, dict[str, Any]],
         source_names: set[str],
     ) -> ScadaGridSnapshot:
+        field_values: dict[str, float] = {}
+        field_coverage: dict[str, float] = {}
+        conditional_fields: list[str] = []
+        excluded_fields: list[str] = []
+        overlapping_fields: list[str] = []
+        for field_name, accumulator in field_accumulators.items():
+            coverage_seconds = float(accumulator["coverage_seconds"])
+            coverage_ratio = coverage_seconds / 3600.0
+            point_values = [float(value) for value in accumulator["point_values"]]
+            if coverage_seconds <= 0 and point_values:
+                coverage_ratio = 1.0
+                field_values[field_name] = sum(point_values) / len(point_values)
+            field_coverage[field_name] = coverage_ratio
+            if coverage_seconds > 0:
+                field_values[field_name] = (
+                    float(accumulator["weighted_sum"]) / coverage_seconds
+                )
+            if CONDITIONAL_QUALITY_VALUES & set(accumulator["qualities"]):
+                conditional_fields.append(field_name)
+            if accumulator["excluded_qualities"]:
+                excluded_fields.append(field_name)
+            if coverage_ratio > MAX_EXPECTED_COVERAGE:
+                overlapping_fields.append(field_name)
+
         current_demand_mw = field_values.get("current_demand_mw")
         available_capacity_mw = field_values.get("available_capacity_mw")
         online_capacity_mw = field_values.get("online_capacity_mw")
@@ -144,8 +236,39 @@ class ScadaSnapshotService:
         if current_demand_mw is not None and online_capacity_mw is not None:
             online_spare_mw = online_capacity_mw - current_demand_mw
 
-        quality_status = _snapshot_quality(field_values, field_qualities)
-        missing_fields = sorted(REQUIRED_SNAPSHOT_FIELDS - set(field_values))
+        insufficient_fields = {
+            field
+            for field in REQUIRED_SNAPSHOT_FIELDS
+            if field_coverage.get(field, 0.0) < MIN_HOURLY_COVERAGE
+        }
+        missing_fields = sorted(insufficient_fields)
+        quality_notes: list[str] = []
+        if insufficient_fields:
+            quality_notes.append(
+                "Hourly coverage below 90% for " + ", ".join(sorted(insufficient_fields))
+            )
+        if conditional_fields:
+            quality_notes.append(
+                "Conditionally accepted 'Other' quality for "
+                + ", ".join(sorted(conditional_fields))
+            )
+        if excluded_fields:
+            quality_notes.append(
+                "Excluded non-usable quality for " + ", ".join(sorted(excluded_fields))
+            )
+        if overlapping_fields:
+            quality_notes.append(
+                "Overlapping interval coverage for " + ", ".join(sorted(overlapping_fields))
+            )
+
+        if insufficient_fields or excluded_fields or overlapping_fields:
+            quality_status = "DEGRADED"
+        elif conditional_fields:
+            quality_status = "USABLE_WITH_WARNING"
+        else:
+            quality_status = "GOOD"
+        required_coverages = [field_coverage.get(field, 0.0) for field in REQUIRED_SNAPSHOT_FIELDS]
+        coverage_percent = min(required_coverages, default=0.0) * 100.0
         source = ", ".join(sorted(source_names)) if source_names else "SCADA CSV"
 
         return ScadaGridSnapshot(
@@ -160,6 +283,9 @@ class ScadaSnapshotService:
             online_spare_mw=_round_or_none(online_spare_mw),
             quality_status=quality_status,
             missing_fields=", ".join(missing_fields),
+            coverage_percent=round(min(100.0, coverage_percent), 2),
+            quality_notes="; ".join(quality_notes),
+            resampling_method=RESAMPLING_METHOD,
             source=source,
         )
 
@@ -168,21 +294,13 @@ def _hour_bucket(value: datetime) -> datetime:
     return value.replace(minute=0, second=0, microsecond=0)
 
 
-def _snapshot_quality(
-    field_values: dict[str, float],
-    field_qualities: dict[str, list[str]],
-) -> str:
-    if not REQUIRED_SNAPSHOT_FIELDS.issubset(field_values):
-        return "DEGRADED"
-
-    for required_field in REQUIRED_SNAPSHOT_FIELDS:
-        qualities = field_qualities.get(required_field, [])
-        if not qualities:
-            return "DEGRADED"
-        if any(quality.strip().lower() not in GOOD_QUALITY_VALUES for quality in qualities):
-            return "DEGRADED"
-
-    return "GOOD"
+def _measurement_value(
+    measurement: ScadaRawMeasurement | Mapping[str, Any],
+    field_name: str,
+) -> Any:
+    if isinstance(measurement, Mapping):
+        return measurement.get(field_name)
+    return getattr(measurement, field_name, None)
 
 
 def _round_or_none(value: float | None) -> float | None:

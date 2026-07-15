@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -21,7 +22,8 @@ from app.services.demand_forecast_baselines import (
 )
 from app.services.forecast_dataset_service import ForecastDatasetService
 
-MODEL_VERSION = "demand-forecast-v1.4"
+MODEL_VERSION = "demand-forecast-v2.0"
+FEATURE_PROFILE = "demand_weather_v2"
 MIN_FORECAST_UNCERTAINTY_MW = 5.0
 MIN_FORECAST_UNCERTAINTY_DEMAND_RATIO = 0.015
 MIN_ML_TRAIN_ROWS = 48
@@ -30,19 +32,26 @@ WALK_FORWARD_FOLDS = 3
 RECENCY_HALF_LIFE_HOURS = 14 * 24
 WEATHER_DEGRADED_WEIGHT = 0.7
 LEGACY_DEGRADED_WEIGHT = 0.5
+SCADA_ACCEPTED_WEIGHT = 0.8
+TRUSTED_HISTORY_HOURS = 60 * 24
 FEATURE_COLUMNS = (
     "current_demand_mw",
     "lag_1h_demand_mw",
     "lag_2h_demand_mw",
+    "lag_3h_demand_mw",
+    "lag_6h_demand_mw",
     "lag_24h_demand_mw",
     "rolling_3h_demand_mw",
     "rolling_6h_demand_mw",
-    "spinning_reserve_mw",
-    "available_capacity_mw",
-    "online_capacity_mw",
-    "reserve_margin_mw",
-    "online_spare_mw",
+    "rolling_24h_demand_mw",
+    "demand_rate_1h_mw",
+    "demand_rate_3h_mw",
+    "demand_rate_6h_mw",
     "temperature_c",
+    "scada_temperature_c",
+    "temperature_lag_1h_c",
+    "rolling_3h_temperature_c",
+    "temperature_rate_1h_c",
     "humidity_percent",
     "rainfall_mm_hr",
     "cloud_cover_percent",
@@ -68,11 +77,10 @@ FEATURE_DEFAULTS = {
     "forecast_cloud_cover_percent": 50.0,
     "forecast_wind_speed_kmh": 0.0,
     "forecast_precipitation_probability_percent": 0.0,
-    "spinning_reserve_mw": 0.0,
-    "available_capacity_mw": 0.0,
-    "online_capacity_mw": 0.0,
-    "reserve_margin_mw": 0.0,
-    "online_spare_mw": 0.0,
+    "scada_temperature_c": 28.0,
+    "temperature_lag_1h_c": 28.0,
+    "rolling_3h_temperature_c": 28.0,
+    "temperature_rate_1h_c": 0.0,
 }
 
 
@@ -99,6 +107,10 @@ class HorizonModelResult:
     ml_beats_baseline: bool
     train_rows: int
     test_rows: int
+    feature_profile: str = FEATURE_PROFILE
+    validation_status: str = "PROTOTYPE"
+    training_span_hours: int = 0
+    candidate_metrics: dict[str, dict[str, float | str]] | None = None
 
 
 @dataclass(frozen=True)
@@ -154,6 +166,15 @@ class DemandForecastModelService:
                         residual_std=result.metrics.residual_std,
                         ml_beats_baseline=result.ml_beats_baseline,
                         quality_status=result.mode,
+                        feature_profile=result.feature_profile,
+                        validation_status=result.validation_status,
+                        training_span_hours=result.training_span_hours,
+                        train_row_count=result.train_rows,
+                        test_row_count=result.test_rows,
+                        candidate_metrics=json.dumps(
+                            result.candidate_metrics or {},
+                            sort_keys=True,
+                        ),
                     )
                 )
             session.commit()
@@ -271,6 +292,22 @@ class DemandForecastModelService:
         ):
             uncertainty *= 1.25
 
+        training_span_hours = max(
+            0,
+            int(
+                (
+                    train_rows[-1].feature_timestamp
+                    - train_rows[0].feature_timestamp
+                ).total_seconds()
+                / 3600.0
+            ),
+        )
+        validation_status = (
+            "VALIDATED"
+            if training_span_hours >= TRUSTED_HISTORY_HOURS
+            else "PROTOTYPE"
+        )
+
         return HorizonModelResult(
             horizon_hours=horizon_hours,
             mode=mode,
@@ -285,6 +322,22 @@ class DemandForecastModelService:
             ml_beats_baseline=ml_beats_baseline,
             train_rows=len(train_rows),
             test_rows=len(test_rows),
+            training_span_hours=training_span_hours,
+            validation_status=validation_status,
+            candidate_metrics={
+                "active": {
+                    "model": active_model,
+                    "mae": active_metrics.mae,
+                    "rmse": active_metrics.rmse,
+                    "mape": active_metrics.mape,
+                },
+                "baseline": {
+                    "model": best_baseline,
+                    "mae": baseline_metrics.mae,
+                    "rmse": baseline_metrics.rmse,
+                    "mape": baseline_metrics.mape,
+                },
+            },
         )
 
     @staticmethod
@@ -613,24 +666,6 @@ def _feature_vector(
     )
     rainfall = max(0.0, _filled(row.rainfall_mm_hr, 0.0))
     forecast_rainfall = max(0.0, _filled(row.forecast_rainfall_mm_hr, 0.0))
-    current_demand = max(0.0, row.current_demand_mw)
-    online_capacity = max(
-        0.0,
-        _filled(row.online_capacity_mw, fill_values["online_capacity_mw"]),
-    )
-    available_capacity = max(
-        0.0,
-        _filled(row.available_capacity_mw, fill_values["available_capacity_mw"]),
-    )
-    spinning_reserve = max(
-        0.0,
-        _filled(row.spinning_reserve_mw, fill_values["spinning_reserve_mw"]),
-    )
-    online_spare = _filled(row.online_spare_mw, online_capacity - current_demand)
-    reserve_margin = _filled(
-        row.reserve_margin_mw,
-        available_capacity - current_demand,
-    )
     vector.extend(
         (
             math.sin(target_hour_angle),
@@ -648,11 +683,6 @@ def _feature_vector(
             rain_probability / 100.0,
             math.log1p(rainfall),
             math.log1p(forecast_rainfall),
-            current_demand / online_capacity if online_capacity > 0.0 else 0.0,
-            current_demand / available_capacity if available_capacity > 0.0 else 0.0,
-            online_spare,
-            reserve_margin,
-            spinning_reserve / current_demand if current_demand > 0.0 else 0.0,
             1.0 if row.source_quality_status == "GOOD" else 0.0,
         )
     )
@@ -702,13 +732,17 @@ def _training_sample_weights(rows: list[ForecastTrainingRow]) -> list[float]:
         )
         recency_weight = 0.5 ** (age_hours / RECENCY_HALF_LIFE_HOURS)
         quality = row.source_quality_status.upper()
-        quality_weight = (
-            1.0
-            if quality == "GOOD"
-            else WEATHER_DEGRADED_WEIGHT
-            if quality == "WEATHER_DEGRADED"
-            else LEGACY_DEGRADED_WEIGHT
-        )
+        if quality == "GOOD":
+            quality_weight = 1.0
+        elif quality in {"SCADA_ACCEPTED", "USABLE_WITH_WARNING"}:
+            quality_weight = SCADA_ACCEPTED_WEIGHT
+        elif quality in {
+            "WEATHER_DEGRADED",
+            "SCADA_ACCEPTED_WEATHER_DEGRADED",
+        }:
+            quality_weight = WEATHER_DEGRADED_WEIGHT
+        else:
+            quality_weight = LEGACY_DEGRADED_WEIGHT
         weights.append(recency_weight * quality_weight)
     average_weight = sum(weights) / len(weights)
     if average_weight <= 0:

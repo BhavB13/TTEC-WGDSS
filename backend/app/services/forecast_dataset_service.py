@@ -108,7 +108,7 @@ class ForecastDatasetService:
         latest_snapshot = snapshots[-1]
         if (
             latest_snapshot.current_demand_mw is None
-            or latest_snapshot.quality_status != "GOOD"
+            or latest_snapshot.quality_status not in {"GOOD", "USABLE_WITH_WARNING"}
             or bool(latest_snapshot.missing_fields.strip())
         ):
             return {}
@@ -204,20 +204,62 @@ class ForecastDatasetService:
             current_demand_mw=snapshot.current_demand_mw,
             lag_1h_demand_mw=self._lag_demand(snapshot_by_hour, feature_timestamp, 1),
             lag_2h_demand_mw=self._lag_demand(snapshot_by_hour, feature_timestamp, 2),
+            lag_3h_demand_mw=self._lag_demand(snapshot_by_hour, feature_timestamp, 3),
+            lag_6h_demand_mw=self._lag_demand(snapshot_by_hour, feature_timestamp, 6),
             lag_24h_demand_mw=self._lag_demand(snapshot_by_hour, feature_timestamp, 24),
             rolling_3h_demand_mw=self._rolling_average(snapshot_by_hour, feature_timestamp, 3),
             rolling_6h_demand_mw=self._rolling_average(snapshot_by_hour, feature_timestamp, 6),
+            rolling_24h_demand_mw=self._rolling_average(
+                snapshot_by_hour, feature_timestamp, 24
+            ),
+            demand_rate_1h_mw=self._rate(
+                snapshot_by_hour, feature_timestamp, "current_demand_mw", 1
+            ),
+            demand_rate_3h_mw=self._rate(
+                snapshot_by_hour, feature_timestamp, "current_demand_mw", 3
+            ),
+            demand_rate_6h_mw=self._rate(
+                snapshot_by_hour, feature_timestamp, "current_demand_mw", 6
+            ),
             spinning_reserve_mw=snapshot.spinning_reserve_mw,
             available_capacity_mw=snapshot.available_capacity_mw,
             online_capacity_mw=snapshot.online_capacity_mw,
             reserve_margin_mw=snapshot.reserve_margin_mw,
             online_spare_mw=snapshot.online_spare_mw,
+            spinning_reserve_lag_1h_mw=self._lag_value(
+                snapshot_by_hour, feature_timestamp, "spinning_reserve_mw", 1
+            ),
+            available_capacity_lag_1h_mw=self._lag_value(
+                snapshot_by_hour, feature_timestamp, "available_capacity_mw", 1
+            ),
+            online_capacity_lag_1h_mw=self._lag_value(
+                snapshot_by_hour, feature_timestamp, "online_capacity_mw", 1
+            ),
+            spinning_reserve_rate_1h_mw=self._rate(
+                snapshot_by_hour, feature_timestamp, "spinning_reserve_mw", 1
+            ),
+            available_capacity_rate_1h_mw=self._rate(
+                snapshot_by_hour, feature_timestamp, "available_capacity_mw", 1
+            ),
+            online_capacity_rate_1h_mw=self._rate(
+                snapshot_by_hour, feature_timestamp, "online_capacity_mw", 1
+            ),
             hour_of_day=feature_timestamp.hour,
             day_of_week=feature_timestamp.weekday(),
             temperature_c=(
                 weather.temperature_c
                 if weather is not None
                 else snapshot.temperature_c
+            ),
+            scada_temperature_c=snapshot.temperature_c,
+            temperature_lag_1h_c=self._lag_value(
+                snapshot_by_hour, feature_timestamp, "temperature_c", 1
+            ),
+            rolling_3h_temperature_c=self._rolling_value(
+                snapshot_by_hour, feature_timestamp, "temperature_c", 3
+            ),
+            temperature_rate_1h_c=self._rate(
+                snapshot_by_hour, feature_timestamp, "temperature_c", 1
             ),
             humidity_percent=weather.humidity_percent if weather is not None else None,
             rainfall_mm_hr=weather.rainfall_mm_hr if weather is not None else None,
@@ -246,6 +288,8 @@ class ForecastDatasetService:
                 if forecast is not None
                 else None
             ),
+            forecast_weather_source=(forecast.provider_name if forecast is not None else None),
+            forecast_weather_issued_at=(forecast.created_at if forecast is not None else None),
             source_quality_status=self._source_quality(
                 snapshot,
                 target_snapshot,
@@ -281,6 +325,16 @@ class ForecastDatasetService:
                 feature_timestamp,
                 2,
             ),
+            lag_3h_demand_mw=self._lag_demand(
+                snapshot_by_hour,
+                feature_timestamp,
+                3,
+            ),
+            lag_6h_demand_mw=self._lag_demand(
+                snapshot_by_hour,
+                feature_timestamp,
+                6,
+            ),
             lag_24h_demand_mw=self._lag_demand(
                 snapshot_by_hour,
                 feature_timestamp,
@@ -296,15 +350,57 @@ class ForecastDatasetService:
                 feature_timestamp,
                 6,
             ),
+            rolling_24h_demand_mw=self._rolling_average(
+                snapshot_by_hour,
+                feature_timestamp,
+                24,
+            ),
+            demand_rate_1h_mw=self._rate(
+                snapshot_by_hour, feature_timestamp, "current_demand_mw", 1
+            ),
+            demand_rate_3h_mw=self._rate(
+                snapshot_by_hour, feature_timestamp, "current_demand_mw", 3
+            ),
+            demand_rate_6h_mw=self._rate(
+                snapshot_by_hour, feature_timestamp, "current_demand_mw", 6
+            ),
             spinning_reserve_mw=snapshot.spinning_reserve_mw,
             available_capacity_mw=snapshot.available_capacity_mw,
             online_capacity_mw=snapshot.online_capacity_mw,
             reserve_margin_mw=snapshot.reserve_margin_mw,
             online_spare_mw=snapshot.online_spare_mw,
+            spinning_reserve_lag_1h_mw=self._lag_value(
+                snapshot_by_hour, feature_timestamp, "spinning_reserve_mw", 1
+            ),
+            available_capacity_lag_1h_mw=self._lag_value(
+                snapshot_by_hour, feature_timestamp, "available_capacity_mw", 1
+            ),
+            online_capacity_lag_1h_mw=self._lag_value(
+                snapshot_by_hour, feature_timestamp, "online_capacity_mw", 1
+            ),
+            spinning_reserve_rate_1h_mw=self._rate(
+                snapshot_by_hour, feature_timestamp, "spinning_reserve_mw", 1
+            ),
+            available_capacity_rate_1h_mw=self._rate(
+                snapshot_by_hour, feature_timestamp, "available_capacity_mw", 1
+            ),
+            online_capacity_rate_1h_mw=self._rate(
+                snapshot_by_hour, feature_timestamp, "online_capacity_mw", 1
+            ),
             hour_of_day=feature_timestamp.hour,
             day_of_week=feature_timestamp.weekday(),
             temperature_c=(
                 weather.temperature_c if weather is not None else snapshot.temperature_c
+            ),
+            scada_temperature_c=snapshot.temperature_c,
+            temperature_lag_1h_c=self._lag_value(
+                snapshot_by_hour, feature_timestamp, "temperature_c", 1
+            ),
+            rolling_3h_temperature_c=self._rolling_value(
+                snapshot_by_hour, feature_timestamp, "temperature_c", 3
+            ),
+            temperature_rate_1h_c=self._rate(
+                snapshot_by_hour, feature_timestamp, "temperature_c", 1
             ),
             humidity_percent=weather.humidity_percent if weather is not None else None,
             rainfall_mm_hr=weather.rainfall_mm_hr if weather is not None else None,
@@ -333,9 +429,9 @@ class ForecastDatasetService:
                 if forecast is not None
                 else None
             ),
-            source_quality_status=(
-                "GOOD" if weather is not None and forecast is not None else "WEATHER_DEGRADED"
-            ),
+            forecast_weather_source=(forecast.provider_name if forecast is not None else None),
+            forecast_weather_issued_at=(forecast.created_at if forecast is not None else None),
+            source_quality_status=self._inference_quality(snapshot, weather, forecast),
         )
 
     @staticmethod
@@ -362,6 +458,19 @@ class ForecastDatasetService:
         return lagged.current_demand_mw if lagged is not None else None
 
     @staticmethod
+    def _lag_value(
+        snapshot_by_hour: dict[datetime, ScadaGridSnapshot],
+        timestamp: datetime,
+        field_name: str,
+        lag_hours: int,
+    ) -> float | None:
+        lagged = snapshot_by_hour.get(timestamp - timedelta(hours=lag_hours))
+        if lagged is None:
+            return None
+        value = getattr(lagged, field_name, None)
+        return float(value) if value is not None else None
+
+    @staticmethod
     def _rolling_average(
         snapshot_by_hour: dict[datetime, ScadaGridSnapshot],
         timestamp: datetime,
@@ -377,17 +486,78 @@ class ForecastDatasetService:
         return round(sum(values) / len(values), 4)
 
     @staticmethod
+    def _rolling_value(
+        snapshot_by_hour: dict[datetime, ScadaGridSnapshot],
+        timestamp: datetime,
+        field_name: str,
+        window_hours: int,
+    ) -> float | None:
+        values: list[float] = []
+        for offset in range(window_hours):
+            row = snapshot_by_hour.get(timestamp - timedelta(hours=offset))
+            value = getattr(row, field_name, None) if row is not None else None
+            if value is not None:
+                values.append(float(value))
+        if not values:
+            return None
+        return round(sum(values) / len(values), 4)
+
+    @classmethod
+    def _rate(
+        cls,
+        snapshot_by_hour: dict[datetime, ScadaGridSnapshot],
+        timestamp: datetime,
+        field_name: str,
+        lag_hours: int,
+    ) -> float | None:
+        current = snapshot_by_hour.get(timestamp)
+        current_value = getattr(current, field_name, None) if current is not None else None
+        lagged_value = cls._lag_value(
+            snapshot_by_hour,
+            timestamp,
+            field_name,
+            lag_hours,
+        )
+        if current_value is None or lagged_value is None:
+            return None
+        return round((float(current_value) - lagged_value) / lag_hours, 4)
+
+    @staticmethod
     def _source_quality(
         snapshot: ScadaGridSnapshot,
         target_snapshot: ScadaGridSnapshot,
         weather: Weather | None,
         forecast: Forecast | None,
     ) -> str:
-        if snapshot.quality_status != "GOOD" or target_snapshot.quality_status != "GOOD":
+        usable = {"GOOD", "USABLE_WITH_WARNING"}
+        if snapshot.quality_status not in usable or target_snapshot.quality_status not in usable:
             return "SCADA_DEGRADED"
+        if (
+            snapshot.quality_status == "USABLE_WITH_WARNING"
+            or target_snapshot.quality_status == "USABLE_WITH_WARNING"
+        ):
+            return (
+                "SCADA_ACCEPTED"
+                if weather is not None and forecast is not None
+                else "SCADA_ACCEPTED_WEATHER_DEGRADED"
+            )
         if weather is None or forecast is None:
             return "WEATHER_DEGRADED"
         return "GOOD"
+
+    @staticmethod
+    def _inference_quality(
+        snapshot: ScadaGridSnapshot,
+        weather: Weather | None,
+        forecast: Forecast | None,
+    ) -> str:
+        if snapshot.quality_status == "USABLE_WITH_WARNING":
+            return (
+                "SCADA_ACCEPTED"
+                if weather is not None and forecast is not None
+                else "SCADA_ACCEPTED_WEATHER_DEGRADED"
+            )
+        return "GOOD" if weather is not None and forecast is not None else "WEATHER_DEGRADED"
 
 
 def _hour_key(value: datetime) -> datetime:

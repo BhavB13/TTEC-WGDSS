@@ -88,6 +88,13 @@ class ScadaGridSnapshot(Base):
     online_spare_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     quality_status: Mapped[str] = mapped_column(String(32), nullable=False)
     missing_fields: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    coverage_percent: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    quality_notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    resampling_method: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="interval_overlap_hourly",
+    )
     source: Mapped[str] = mapped_column(String(500), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(

@@ -429,7 +429,7 @@ def test_ml_sample_weights_favor_recent_complete_rows(tmp_path):
     assert round(sum(weights) / len(weights), 10) == 1.0
 
 
-def test_ml_feature_vector_includes_scada_generation_context(tmp_path):
+def test_ml_feature_vector_excludes_scada_generation_context(tmp_path):
     session_factory = _session_factory(tmp_path)
     _seed_training_rows(session_factory, count=3)
     with session_factory() as session:
@@ -457,4 +457,4 @@ def test_ml_feature_vector_includes_scada_generation_context(tmp_path):
     without_generation_context = _feature_vector(rows[0], fill_values)
 
     assert len(with_generation_context) == len(without_generation_context)
-    assert with_generation_context != without_generation_context
+    assert with_generation_context == without_generation_context

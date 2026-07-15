@@ -7,6 +7,7 @@ from typing import Protocol
 from zipfile import BadZipFile, ZipFile
 
 from app.services.calibration_import_service import CalibrationImportService
+from app.services.scada_archive_service import ScadaArchiveService
 from app.services.scada_import_service import ScadaImportService
 
 
@@ -141,13 +142,49 @@ class CalibrationArchiveAdapter:
         )
 
 
+class ScadaArchiveAdapter:
+    adapter_id = "scada_archive_v2"
+
+    def __init__(self, service: ScadaArchiveService | None = None) -> None:
+        self.service = service or ScadaArchiveService()
+
+    def can_handle(self, source: Path) -> bool:
+        return self.service.can_handle(source)
+
+    def validate(self, source: Path) -> list[str]:
+        return list(self.service.inspect_archive(source).warnings)
+
+    def import_dataset(self, source: Path) -> HistoricalImportReport:
+        result = self.service.import_archive(source)
+        return HistoricalImportReport(
+            adapter_id=self.adapter_id,
+            source_filename=result.report.source_filename,
+            source_hash=result.report.source_hash,
+            imported=result.files_imported > 0,
+            skipped_duplicate=(
+                bool(result.import_results)
+                and result.duplicate_files_skipped == len(result.import_results)
+            ),
+            row_count=result.rows_imported,
+            validation_status=result.report.validation_status,
+            schema_mapping=dict(SCADA_SCHEMA_MAPPING),
+            warnings=list(result.report.warnings),
+            next_actions=[
+                "Build interval-overlap hourly SCADA snapshots",
+                "Backfill current-time historical weather without using future observations",
+                "Generate leakage-safe horizon features and run chronological model comparison",
+                "Review prototype metrics before activating a retrained model",
+            ],
+        )
+
+
 class HistoricalDataImportService:
     def __init__(
         self,
         adapters: list[HistoricalDatasetAdapter] | None = None,
     ) -> None:
         self.adapters = (
-            [ScadaCsvAdapter(), CalibrationArchiveAdapter()]
+            [ScadaCsvAdapter(), ScadaArchiveAdapter(), CalibrationArchiveAdapter()]
             if adapters is None
             else list(adapters)
         )
