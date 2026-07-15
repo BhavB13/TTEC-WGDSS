@@ -2,12 +2,14 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { dashboardFixture } from "../test/dashboardFixture";
+import { dashboardFixture, replayDashboardFixture } from "../test/dashboardFixture";
 
 const getDashboardSnapshot = vi.fn();
+const controlReplay = vi.fn();
 
 vi.mock("../services/api", () => ({
   getDashboardSnapshot: (...args: unknown[]) => getDashboardSnapshot(...args),
+  controlReplay: (...args: unknown[]) => controlReplay(...args),
 }));
 vi.mock("../components/WeatherMap", () => ({
   default: () => <div data-testid="weather-map">Weather map</div>,
@@ -21,13 +23,37 @@ vi.mock("../components/ProbabilityGauge", () => ({
 vi.mock("../components/ScenarioComparisonChart", () => ({
   default: () => <div data-testid="scenario-chart">Scenario chart</div>,
 }));
+vi.mock("../components/ReplayLoadChart", () => ({
+  default: () => <div data-testid="replay-load-chart">Replay load chart</div>,
+}));
+vi.mock("../components/HistoricalDemandChart", () => ({
+  default: () => <div data-testid="historical-demand-chart">Historical demand chart</div>,
+}));
 
 import Dashboard from "./Dashboard";
 
 describe("Dashboard", () => {
   beforeEach(() => {
     getDashboardSnapshot.mockReset();
+    controlReplay.mockReset();
     window.localStorage.clear();
+  });
+
+  it("renders the simulated-live control room and advances playback", async () => {
+    getDashboardSnapshot.mockResolvedValue(replayDashboardFixture);
+    controlReplay.mockResolvedValue(replayDashboardFixture.replay?.status);
+    const user = userEvent.setup();
+    render(<Dashboard />);
+
+    expect(await screen.findByText("Simulated Live SCADA")).toBeInTheDocument();
+    expect(screen.getByTestId("replay-load-chart")).toBeInTheDocument();
+    expect(screen.getByText("Weather · Current + 6 Hours")).toBeInTheDocument();
+    expect(screen.getByText("9/720 June records · 1.1%")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Step" }));
+    await waitFor(() =>
+      expect(controlReplay).toHaveBeenCalledWith({ action: "step" }),
+    );
   });
 
   it("shows a loading state and then renders live snapshot data", async () => {

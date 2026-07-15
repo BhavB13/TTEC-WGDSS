@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     GRID_PROVIDER: str = "mock"
     GRID_STALE_AFTER_SECONDS: int = 30
     MODEL_FORECAST_STALE_AFTER_SECONDS: int = 7200
+    DEMO_REPLAY_ENABLED: bool = True
+    DEMO_REPLAY_AUTO_SEED: bool = True
+    DEMO_DATASET_YEAR: int = 2025
+    DEMO_REPLAY_MONTH: int = 6
 
     model_config = SettingsConfigDict(
         env_file=".env",

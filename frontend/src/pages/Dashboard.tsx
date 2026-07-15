@@ -3,11 +3,14 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import CurrentConditions from "../components/CurrentConditions";
 import DemandForecastChart from "../components/DemandForecastChart";
 import Header from "../components/Header";
+import HistoricalDemandChart from "../components/HistoricalDemandChart";
 import ProbabilityGauge from "../components/ProbabilityGauge";
+import ReplayControlBar from "../components/ReplayControlBar";
+import ReplayLoadChart from "../components/ReplayLoadChart";
 import { formatRiskProbability } from "../utils/probability";
 import ScenarioComparisonChart from "../components/ScenarioComparisonChart";
 import WeatherMap from "../components/WeatherMap";
-import { getDashboardSnapshot } from "../services/api";
+import { controlReplay, getDashboardSnapshot } from "../services/api";
 import type {
   CalibrationSnapshot,
   DashboardSnapshot,
@@ -15,6 +18,7 @@ import type {
   ForecastData,
   ModelStatus,
   ScadaStatus,
+  ReplayDashboard,
 } from "../types/dashboard";
 
 type LoadState = "loading" | "ready" | "error";
@@ -84,6 +88,7 @@ export default function Dashboard() {
   const [error, setError] = useState<string>("");
   const [refreshError, setRefreshError] = useState<string>("");
   const [activeTab, setActiveTab] = useState<DashboardTab>("home");
+  const [replayBusy, setReplayBusy] = useState(false);
 
   const loadSnapshot = useCallback(
     async (
@@ -124,12 +129,27 @@ export default function Dashboard() {
 
   useEffect(() => {
     void loadSnapshot({ forceRefresh: true, showLoading: true });
+  }, [loadSnapshot]);
+
+  useEffect(() => {
     const refreshInterval = window.setInterval(() => {
       void loadSnapshot({ forceRefresh: false, showLoading: false });
-    }, 5 * 60 * 1000);
-
+    }, snapshot?.replay ? 5_000 : 5 * 60 * 1000);
     return () => window.clearInterval(refreshInterval);
-  }, [loadSnapshot]);
+  }, [loadSnapshot, snapshot?.replay]);
+
+  const handleReplayControl = useCallback(
+    async (input: Parameters<typeof controlReplay>[0]) => {
+      setReplayBusy(true);
+      try {
+        await controlReplay(input);
+        await loadSnapshot({ forceRefresh: false, showLoading: false });
+      } finally {
+        setReplayBusy(false);
+      }
+    },
+    [loadSnapshot],
+  );
 
   useEffect(() => {
     try {
@@ -194,7 +214,10 @@ export default function Dashboard() {
   const forecastItems = Array.isArray(snapshot.forecast?.items)
     ? snapshot.forecast.items
     : [];
-  const upcomingForecastItems = getUpcomingForecastItems(forecastItems, new Date(), 6);
+  const forecastReference = snapshot.replay?.status.cursor_at
+    ? new Date(snapshot.replay.status.cursor_at)
+    : new Date();
+  const upcomingForecastItems = getUpcomingForecastItems(forecastItems, forecastReference, 6);
 
   return (
     <Shell
@@ -203,7 +226,7 @@ export default function Dashboard() {
       gridStatus={grid.grid_status}
       weatherStatus={dataQuality.weather_status}
       forecastStatus={dataQuality.weather_status}
-      scenarioLabel={calibration?.selected_scenario_label ?? "Typical Day"}
+      scenarioLabel={snapshot.replay?.summary.replay_month_label ?? calibration?.selected_scenario_label ?? "Typical Day"}
       dataQuality={dataQuality}
       refreshError={refreshError}
       theme={theme}
@@ -220,6 +243,13 @@ export default function Dashboard() {
         <section className="flex min-h-[42rem] w-full min-w-0 max-w-full flex-col overflow-visible rounded-2xl border border-cyan-500/15 bg-slate-900/60 p-2.5 shadow-[0_0_40px_rgba(8,145,178,0.06)] xl:min-h-0 xl:overflow-hidden">
           <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-2.5 overflow-hidden">
             <TabBar activeTab={activeTab} onChange={setActiveTab} />
+            {snapshot.replay ? (
+              <ReplayControlBar
+                status={snapshot.replay.status}
+                busy={replayBusy}
+                onControl={handleReplayControl}
+              />
+            ) : null}
 
             <div className="min-h-0 flex-1 w-full min-w-0 overflow-visible xl:overflow-hidden">
               {activeTab === "home" ? (
@@ -232,6 +262,7 @@ export default function Dashboard() {
                     forecastItems={upcomingForecastItems}
                     calibration={calibration}
                     theme={theme}
+                    replay={snapshot.replay ?? null}
                   />
                 </WorkspacePage>
               ) : null}
@@ -262,6 +293,7 @@ export default function Dashboard() {
                     calibration={calibration}
                     demandForecast={demandForecast}
                     theme={theme}
+                    replay={snapshot.replay ?? null}
                   />
                 </WorkspacePage>
               ) : null}
@@ -289,6 +321,7 @@ export default function Dashboard() {
                     modelStatus={modelStatus}
                     scadaStatus={scadaStatus}
                     theme={theme}
+                    replay={snapshot.replay ?? null}
                   />
                 </WorkspacePage>
               ) : null}
@@ -402,6 +435,7 @@ function HomeTab({
   forecastItems,
   calibration,
   theme,
+  replay,
 }: {
   grid: DashboardSnapshot["grid"];
   weather: DashboardSnapshot["weather"];
@@ -410,7 +444,27 @@ function HomeTab({
   forecastItems: ForecastData[];
   calibration: CalibrationSnapshot | null;
   theme: ThemeMode;
+  replay: ReplayDashboard | null;
 }) {
+  if (replay) {
+    return (
+      <>
+        <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-5">
+          <SummaryTile label="Demand" value={`${grid.current_demand_mw.toFixed(0)} MW`} tone="cyan" />
+          <SummaryTile label="Generation" value={`${grid.current_generation_mw.toFixed(0)} MW`} tone="emerald" />
+          <SummaryTile label="Available" value={`${grid.total_available_capacity_mw.toFixed(0)} MW`} tone="cyan" />
+          <SummaryTile label="Reserve Margin" value={`${grid.reserve_margin_percent.toFixed(1)}%`} tone="amber" />
+          <SummaryTile label="Capacity Risk" value={formatProbability(probability)} tone="rose" />
+        </div>
+
+        <div className="grid min-h-0 flex-1 gap-2.5 xl:grid-cols-[minmax(0,1.42fr)_minmax(18rem,0.58fr)]">
+          <ReplayLoadChart replay={replay} theme={theme} compact />
+          <ReplayWeatherPanel weather={weather} forecastItems={forecastItems} />
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
@@ -431,6 +485,51 @@ function HomeTab({
         </div>
       </div>
     </>
+  );
+}
+
+function ReplayWeatherPanel({
+  weather,
+  forecastItems,
+}: {
+  weather: DashboardSnapshot["weather"];
+  forecastItems: ForecastData[];
+}) {
+  return (
+    <PanelCard title="Weather · Current + 6 Hours" className="h-full min-h-0">
+      <div className="flex h-full min-h-0 flex-col gap-2">
+        <div className="grid grid-cols-3 gap-1.5">
+          <MiniMetric label="Temperature" value={`${weather.temperature_c.toFixed(1)}°C`} />
+          <MiniMetric label="Humidity" value={`${weather.humidity_percent.toFixed(0)}%`} />
+          <MiniMetric label="Rain" value={`${weather.rainfall_mm_hr.toFixed(1)} mm/h`} />
+          <MiniMetric label="Wind" value={`${weather.wind_speed_kmh.toFixed(0)} km/h`} />
+          <MiniMetric label="Cloud" value={`${weather.cloud_cover_percent.toFixed(0)}%`} />
+          <MiniMetric label="Pressure" value={weather.pressure_hpa != null ? `${weather.pressure_hpa.toFixed(0)} hPa` : "--"} />
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-slate-800 bg-slate-950/45">
+          <table className="w-full table-fixed text-left text-[10px] tabular-nums">
+            <thead className="sticky top-0 bg-slate-950 text-slate-400">
+              <tr>
+                <th className="px-2 py-1.5 font-medium">Time</th>
+                <th className="px-2 py-1.5 font-medium">Temp</th>
+                <th className="px-2 py-1.5 font-medium">Rain</th>
+                <th className="px-2 py-1.5 font-medium">Cloud</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800 text-slate-200">
+              {forecastItems.slice(0, 6).map((period) => (
+                <tr key={period.forecast_timestamp}>
+                  <td className="px-2 py-1.5">{formatHourOnly(period.forecast_timestamp)}</td>
+                  <td className="px-2 py-1.5">{period.temperature_c.toFixed(1)}°</td>
+                  <td className="px-2 py-1.5">{period.rainfall_mm_hr.toFixed(1)}</td>
+                  <td className="px-2 py-1.5">{period.cloud_cover_percent.toFixed(0)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </PanelCard>
   );
 }
 
@@ -877,26 +976,32 @@ function DemandForecastTab({
   calibration,
   demandForecast,
   theme,
+  replay,
 }: {
   grid: DashboardSnapshot["grid"];
   probability: DashboardSnapshot["probability"];
   calibration: CalibrationSnapshot | null;
   demandForecast: DemandForecastBundle | null;
   theme: ThemeMode;
+  replay: ReplayDashboard | null;
 }) {
   const demandDelta30 = probability.forecast_demand_30m - grid.current_demand_mw;
   const demandDelta60 = probability.forecast_demand_60m - grid.current_demand_mw;
 
   return (
     <div className="grid h-full min-h-0 w-full min-w-0 grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)]">
-      <DemandForecastChart
-        gridStatus={grid}
-        probability={probability}
-        calibration={calibration}
-        modelForecast={demandForecast}
-        theme={theme}
-        className="h-full min-h-0 w-full min-w-0"
-      />
+      {replay ? (
+        <ReplayLoadChart replay={replay} theme={theme} />
+      ) : (
+        <DemandForecastChart
+          gridStatus={grid}
+          probability={probability}
+          calibration={calibration}
+          modelForecast={demandForecast}
+          theme={theme}
+          className="h-full min-h-0 w-full min-w-0"
+        />
+      )}
       <PanelCard title="Demand Snapshot" className="h-full min-h-0 w-full min-w-0">
         <div className="grid h-full grid-cols-2 gap-1.5 text-sm text-slate-200">
           <MiniMetric label="Current Demand" value={`${grid.current_demand_mw.toFixed(0)} MW`} />
@@ -924,6 +1029,18 @@ function DemandForecastTab({
                 : "Unavailable"
             }
           />
+          {replay ? (
+            <>
+              <MiniMetric
+                label="Historical Average"
+                value={`${replay.summary.historical_average_demand_mw.toFixed(0)} MW`}
+              />
+              <MiniMetric
+                label="Forecast Day Peak"
+                value={`${replay.summary.current_day_peak_forecast_mw.toFixed(0)} MW`}
+              />
+            </>
+          ) : null}
         </div>
       </PanelCard>
     </div>
@@ -1230,18 +1347,31 @@ function AnalyticsTab({
   modelStatus,
   scadaStatus,
   theme,
+  replay,
 }: {
   calibration: CalibrationSnapshot | null;
   demandForecast: DemandForecastBundle | null;
   modelStatus: ModelStatus | null;
   scadaStatus: ScadaStatus | null;
   theme: ThemeMode;
+  replay: ReplayDashboard | null;
 }) {
   return (
     <div className="grid h-full min-h-0 w-full min-w-0 gap-2.5 xl:grid-cols-[minmax(260px,0.36fr)_minmax(0,0.64fr)]">
       <div className="grid h-full min-h-0 gap-2.5">
-        <PanelCard title="Calibration Summary" className="min-h-0">
+        <PanelCard title={replay ? "Historical Dataset" : "Calibration Summary"} className="min-h-0">
           <div className="grid h-full min-h-0 auto-rows-fr grid-cols-2 gap-2">
+            {replay ? (
+              <>
+                <MiniMetric label="Historical Months" value={`${replay.summary.historical_months}`} />
+                <MiniMetric label="Historical Records" value={replay.summary.historical_record_count.toLocaleString()} />
+                <MiniMetric label="Average Demand" value={`${replay.summary.historical_average_demand_mw.toFixed(0)} MW`} />
+                <MiniMetric label="Historical Peak" value={`${replay.summary.historical_peak_demand_mw.toFixed(0)} MW`} />
+                <MiniMetric label="Replay Window" value={replay.summary.replay_month_label} />
+                <MiniMetric label="Revealed Records" value={`${replay.status.revealed_records}/${replay.status.total_replay_records}`} />
+              </>
+            ) : (
+              <>
                 <MiniMetric
                   label="Selected Scenario"
                   value={calibration?.selected_scenario_label ?? "Typical Day"}
@@ -1288,6 +1418,8 @@ function AnalyticsTab({
               value={calibration?.selection_reason ?? "Calibration data unavailable"}
             />
           </div>
+              </>
+            )}
           </div>
         </PanelCard>
 
@@ -1298,12 +1430,16 @@ function AnalyticsTab({
         />
       </div>
 
-      <ScenarioComparisonChart
-        scenarios={calibration?.scenarios ?? []}
-        selectedScenarioKey={calibration?.selected_scenario_key}
-        theme={theme}
-        className="h-full min-h-0 w-full min-w-0"
-      />
+      {replay ? (
+        <HistoricalDemandChart replay={replay} theme={theme} />
+      ) : (
+        <ScenarioComparisonChart
+          scenarios={calibration?.scenarios ?? []}
+          selectedScenarioKey={calibration?.selected_scenario_key}
+          theme={theme}
+          className="h-full min-h-0 w-full min-w-0"
+        />
+      )}
     </div>
   );
 }
@@ -1435,6 +1571,14 @@ function formatTimestamp(value?: string | null): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
+}
+
+function formatHourOnly(value: string): string {
+  return new Intl.DateTimeFormat("en-TT", {
+    hour: "numeric",
+    hour12: true,
+    timeZone: "America/Port_of_Spain",
+  }).format(new Date(value));
 }
 
 function formatShortDateTime(value?: string | null): string {

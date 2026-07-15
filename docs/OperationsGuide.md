@@ -148,6 +148,25 @@ It requires 48 snapshots by default and skips when there is no new data. Model
 results should be reviewed against their chronological baseline metrics before
 they influence operating decisions.
 
+## Bundled Production Demonstration
+
+When `DEMO_REPLAY_ENABLED=true`, the dashboard uses a clearly labelled
+simulated-live feed backed by 8,760 deterministic hourly SCADA/weather
+observations. June 2025 is replayed; the remaining eleven months support
+historical analytics. This mode does not claim a live T&TEC integration.
+
+Initialize or reset it with:
+
+```powershell
+cd backend
+venv\Scripts\python.exe scripts\seed_demo_replay.py --force
+```
+
+The dashboard refreshes every five seconds while replay metadata is present.
+Play/Pause/Step/Reset actions persist in `demo_replay_state`; source
+observations in `demo_observations` remain immutable. See `DEMO_REPLAY.md` for
+the full data-flow and no-future-leakage rules.
+
 ## Validation
 
 ```powershell

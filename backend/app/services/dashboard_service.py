@@ -12,6 +12,7 @@ from app.schemas.probability import ProbabilityResponse
 from app.schemas.recommendation import RecommendationResponse
 from app.schemas.weather import CurrentWeatherResponse
 from app.services.calibration_service import CalibrationService
+from app.services.demo_replay_service import DemoReplayService
 from app.services.grid_service import GridService
 from app.services.model_status_service import ModelStatusService
 from app.services.recommendation_engine import RecommendationEngine
@@ -28,6 +29,7 @@ class DashboardService:
         calibration_service: CalibrationService | None = None,
         model_status_service: ModelStatusService | None = None,
         persistence_service: SnapshotPersistenceService | None = None,
+        demo_replay_service: DemoReplayService | None = None,
     ) -> None:
         self.weather_service = weather_service or WeatherService()
         self.grid_service = grid_service or GridService()
@@ -35,6 +37,14 @@ class DashboardService:
         self.calibration_service = calibration_service or CalibrationService()
         self.model_status_service = model_status_service or ModelStatusService()
         self.persistence_service = persistence_service or SnapshotPersistenceService()
+        self.demo_replay_service = demo_replay_service
+        if (
+            self.demo_replay_service is None
+            and weather_service is None
+            and grid_service is None
+            and settings.DEMO_REPLAY_ENABLED
+        ):
+            self.demo_replay_service = DemoReplayService()
         self._last_weather: dict[str, Any] | None = None
         self._last_forecast: list[dict[str, Any]] | None = None
         self._last_grid_status: dict[str, Any] | None = None
@@ -47,27 +57,40 @@ class DashboardService:
         days: int = 7,
         force_refresh: bool = False,
     ) -> DashboardSnapshotResponse:
-        weather_task = self.weather_service.get_current_weather(
-            latitude,
-            longitude,
-            force_refresh=force_refresh,
+        replay_context = (
+            await asyncio.to_thread(self.demo_replay_service.get_dashboard_context)
+            if self.demo_replay_service is not None
+            else None
         )
-        forecast_task = self.weather_service.get_forecast(
-            latitude,
-            longitude,
-            days=days,
-            force_refresh=force_refresh,
-        )
-        grid_task = self.grid_service.get_grid_status()
-        generation_task = self.grid_service.get_generation_status()
-
-        results = await asyncio.gather(
-            weather_task,
-            forecast_task,
-            grid_task,
-            generation_task,
-            return_exceptions=True,
-        )
+        replay_active = replay_context is not None
+        if replay_context is not None:
+            results = [
+                replay_context["weather"],
+                replay_context["forecast"],
+                replay_context["grid"],
+                replay_context["generation_units"],
+            ]
+        else:
+            weather_task = self.weather_service.get_current_weather(
+                latitude,
+                longitude,
+                force_refresh=force_refresh,
+            )
+            forecast_task = self.weather_service.get_forecast(
+                latitude,
+                longitude,
+                days=days,
+                force_refresh=force_refresh,
+            )
+            grid_task = self.grid_service.get_grid_status()
+            generation_task = self.grid_service.get_generation_status()
+            results = await asyncio.gather(
+                weather_task,
+                forecast_task,
+                grid_task,
+                generation_task,
+                return_exceptions=True,
+            )
         degradation_notes: list[str] = []
         weather, weather_fallback = self._resolve_result(
             "current weather",
@@ -109,8 +132,8 @@ class DashboardService:
         calibration = self.calibration_service.get_snapshot(weather)
 
         calibration_payload = calibration.model_dump() if calibration is not None else None
-        weather_age_seconds = self._age_seconds(weather.get("timestamp"))
-        grid_age_seconds = self._age_seconds(grid_status.get("timestamp"))
+        weather_age_seconds = 0 if replay_active else self._age_seconds(weather.get("timestamp"))
+        grid_age_seconds = 0 if replay_active else self._age_seconds(grid_status.get("timestamp"))
         grid_quality = str(grid_status.get("quality_status", "GOOD")).upper()
         grid_missing_fields = grid_status.get("missing_fields", [])
         grid_is_stale = (
@@ -186,10 +209,12 @@ class DashboardService:
                 degradation_notes=degradation_notes,
                 grid_fallback_used=grid_fallback,
                 weather_cache_fallback=weather_fallback,
+                replay_active=replay_active,
             ),
             demand_forecast=demand_forecast,
             model_status=model_status,
             scada_status=scada_status,
+            replay=(replay_context["replay"] if replay_context is not None else None),
         )
         if settings.SNAPSHOT_PERSISTENCE_ENABLED:
             persisted = await asyncio.to_thread(self.persistence_service.persist, snapshot)
@@ -251,9 +276,10 @@ class DashboardService:
         degradation_notes: list[str] | None = None,
         grid_fallback_used: bool = False,
         weather_cache_fallback: bool = False,
+        replay_active: bool = False,
     ) -> DataQualityResponse:
-        age_seconds = self._age_seconds(weather.timestamp)
-        grid_age_seconds = self._age_seconds(grid.timestamp)
+        age_seconds = 0 if replay_active else self._age_seconds(weather.timestamp)
+        grid_age_seconds = 0 if replay_active else self._age_seconds(grid.timestamp)
 
         stale = age_seconds is not None and age_seconds > settings.DATA_STALE_AFTER_SECONDS
         grid_stale = (
@@ -282,6 +308,8 @@ class DashboardService:
         )
         calibrated = "SCADA Calibration" in weather.provider_name
         weather_status = "STALE" if stale else ("FALLBACK" if fallback_used else "LIVE")
+        if replay_active:
+            weather_status = "SIMULATED_REPLAY"
         if calibrated:
             weather_status = "CALIBRATED"
 
@@ -310,7 +338,7 @@ class DashboardService:
             notes.append(
                 "Grid telemetry is missing: " + ", ".join(grid.missing_fields)
             )
-        simulated_grid = "Mock" in grid.source_provider
+        simulated_grid = "Mock" in grid.source_provider or replay_active
         decision_status = (
             "INHIBITED"
             if stale or grid_stale or grid_quality != "GOOD" or grid.missing_fields
@@ -323,11 +351,15 @@ class DashboardService:
         elif grid_quality in {"BAD", "UNCERTAIN"}:
             grid_status = grid_quality
         else:
-            grid_status = "SIMULATED" if simulated_grid else "LIVE"
+            grid_status = "SIMULATED_REPLAY" if replay_active else ("SIMULATED" if simulated_grid else "LIVE")
 
         if simulated_grid:
             notes.append(
                 "Grid telemetry is simulated; this snapshot is for training and replay, not live dispatch"
+            )
+        if replay_active:
+            notes.append(
+                "Weather and grid measurements follow the persisted demonstration replay cursor"
             )
 
         return DataQualityResponse(

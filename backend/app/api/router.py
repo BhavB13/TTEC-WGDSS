@@ -4,6 +4,7 @@ from app.api.dashboard import router as dashboard_router
 from app.api.generation import router as generation_router
 from app.api.health import router as health_router
 from app.api.recommendations import router as recommendations_router
+from app.api.replay import router as replay_router
 from app.api.storm import router as storm_router
 from app.api.weather import router as weather_router
 
@@ -37,4 +38,9 @@ api_router.include_router(
 api_router.include_router(
     storm_router,
     tags=["storm"],
+)
+
+api_router.include_router(
+    replay_router,
+    tags=["replay"],
 )

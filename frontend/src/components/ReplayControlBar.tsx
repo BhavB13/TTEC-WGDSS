@@ -1,0 +1,105 @@
+import type { ReplayStatus } from "../types/dashboard";
+
+interface ReplayControlBarProps {
+  status: ReplayStatus;
+  busy?: boolean;
+  onControl: (input: {
+    action: "play" | "pause" | "reset" | "step" | "configure";
+    step_minutes?: number;
+    speed_multiplier?: number;
+  }) => Promise<void>;
+}
+
+export default function ReplayControlBar({
+  status,
+  busy = false,
+  onControl,
+}: ReplayControlBarProps) {
+  return (
+    <section className="grid min-w-0 gap-2 rounded-xl border border-cyan-500/20 bg-slate-950/70 px-3 py-2 lg:grid-cols-[minmax(15rem,1fr)_auto_auto] lg:items-center">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`h-2 w-2 rounded-full ${status.is_playing ? "animate-pulse bg-emerald-400" : "bg-amber-400"}`} />
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300">
+            Simulated Live SCADA
+          </p>
+          <span className="rounded border border-slate-700 px-1.5 py-0.5 text-[9px] text-slate-400">
+            {status.is_playing ? "PLAYING" : "PAUSED"}
+          </span>
+        </div>
+        <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+          <p className="text-sm font-semibold tabular-nums text-white">
+            {formatReplayTimestamp(status.cursor_at)}
+          </p>
+          <p className="text-[10px] text-slate-400">
+            {status.revealed_records}/{status.total_replay_records} June records · {status.progress_percent.toFixed(1)}%
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void onControl({ action: status.is_playing ? "pause" : "play" })}
+          className="min-w-[4.5rem] rounded-lg border border-cyan-400/30 bg-cyan-500/12 px-2.5 py-1.5 text-[10px] font-semibold text-cyan-100 disabled:opacity-50"
+        >
+          {status.is_playing ? "Pause" : "Play"}
+        </button>
+        <button
+          type="button"
+          disabled={busy || status.is_playing}
+          onClick={() => void onControl({ action: "step" })}
+          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[10px] font-semibold text-slate-200 disabled:opacity-40"
+        >
+          Step
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void onControl({ action: "reset" })}
+          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[10px] font-semibold text-slate-300 disabled:opacity-40"
+        >
+          Reset
+        </button>
+      </div>
+
+      <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
+        <label htmlFor="replay-step">Step</label>
+        <select
+          id="replay-step"
+          value={status.step_minutes}
+          disabled={busy}
+          onChange={(event) => void onControl({ action: "configure", step_minutes: Number(event.target.value) })}
+          className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-1.5 text-slate-100"
+        >
+          <option value={60}>1 hour</option>
+          <option value={360}>6 hours</option>
+          <option value={1440}>1 day</option>
+        </select>
+        <label htmlFor="replay-speed">Rate</label>
+        <select
+          id="replay-speed"
+          value={status.speed_multiplier}
+          disabled={busy}
+          onChange={(event) => void onControl({ action: "configure", speed_multiplier: Number(event.target.value) })}
+          className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-1.5 text-slate-100"
+        >
+          <option value={60}>1 min/s</option>
+          <option value={600}>10 min/s</option>
+          <option value={3600}>1 hr/s</option>
+          <option value={86400}>1 day/s</option>
+        </select>
+      </div>
+    </section>
+  );
+}
+
+function formatReplayTimestamp(value: string): string {
+  const date = new Date(value);
+  return new Intl.DateTimeFormat("en-TT", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "America/Port_of_Spain",
+  }).format(date);
+}

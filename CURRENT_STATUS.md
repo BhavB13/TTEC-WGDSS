@@ -1,16 +1,19 @@
 # Current Status
 
-Last updated: 2026-07-12
+Last updated: 2026-07-15
 
 ## Snapshot
 
-WGDSS is operational as a weather-driven, control-room dashboard with live
-weather data, simulated grid telemetry, calibrated historical profiles, and a
-validated historical-SCADA forecasting foundation.
+WGDSS is operational as a weather/grid control-room demonstration with an
+immutable 12-month hourly archive and a persistent June simulated-live replay.
 
 The dashboard currently uses `MockGridProvider`. It is explicitly labelled
 `SIMULATED` and is suitable for demonstration, training, replay, and UI
 validation only. It is not live T&TEC dispatch telemetry.
+
+With `DEMO_REPLAY_ENABLED=true` (the local demonstration default), the dashboard
+instead consumes `SimulatedLiveScadaReplay`. It is also explicitly simulation
+only and does not claim a live T&TEC feed.
 
 ## Implemented And Validated
 
@@ -29,6 +32,11 @@ validation only. It is not live T&TEC dispatch telemetry.
   newer data before model retraining.
 - Alembic migration chain checked cleanly, including legacy repair of
   `scada_grid_snapshots.missing_fields`.
+- Deterministic 8,760-row 2025 SCADA/weather demonstration archive.
+- June replay cursor with Play/Pause/Step/Reset, configurable interval/rate, and
+  persistent progress.
+- Full-day weather-informed load forecast, revealed actuals, historical hourly
+  baseline, 48-hour trends, and 12-month analytics.
 
 ## Current Data Limitation
 

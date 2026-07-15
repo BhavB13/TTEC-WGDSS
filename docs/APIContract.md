@@ -47,6 +47,20 @@ The response contains:
     "quality_status": "GOOD",
     "missing_fields": ""
   },
+  "replay": {
+    "status": {
+      "mode": "SIMULATED_LIVE",
+      "cursor_at": "2025-06-01T08:00:00",
+      "is_playing": false,
+      "step_minutes": 60,
+      "speed_multiplier": 600,
+      "progress_percent": 1.1
+    },
+    "operational_history": [],
+    "full_day_load_forecast": [],
+    "monthly_history": [],
+    "summary": {}
+  },
   "calibration": {
     "selected_scenario_key": "rainy",
     "selection_confidence": 0.64,
@@ -74,6 +88,17 @@ The response contains:
 
 Weather status values are `LIVE`, `CALIBRATED`, `FALLBACK`, and `STALE`.
 Grid status identifies the Version 1 mock source as `SIMULATED`.
+Demonstration replay snapshots identify grid/weather status as
+`SIMULATED_REPLAY` and decision status as `SIMULATION`.
+
+## Replay controls
+
+- `GET /api/v1/replay/status`
+- `POST /api/v1/replay/control`
+
+Control actions are `play`, `pause`, `reset`, `step`, and `configure`.
+`step_minutes` accepts 15 through 1,440 minutes and `speed_multiplier` accepts 1
+through 86,400 simulated seconds per real second.
 
 Each hourly forecast item includes `source_count`, `source_names`,
 `temperature_spread_c`, and `cloud_cover_spread_percent`. The normal operating

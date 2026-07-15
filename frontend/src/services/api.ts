@@ -5,6 +5,7 @@ import type {
   ProbabilityData,
   RecommendationData,
   WeatherData,
+  ReplayStatus,
 } from "../types/dashboard";
 import type { StormTrackingSnapshot } from "../types/storm";
 
@@ -17,6 +18,7 @@ const API_BASE_URL = (
 ).replace(/\/$/, "");
 const DASHBOARD_SNAPSHOT_PATH = "/api/v1/dashboard/snapshot";
 const STORM_TRACKING_PATH = "/api/v1/storm/tracking";
+const REPLAY_CONTROL_PATH = "/api/v1/replay/control";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
@@ -101,4 +103,16 @@ export async function getStormTracking(options?: {
     ? `${STORM_TRACKING_PATH}?force_refresh=true`
     : STORM_TRACKING_PATH;
   return requestJson<StormTrackingSnapshot>(path);
+}
+
+export async function controlReplay(input: {
+  action: "play" | "pause" | "reset" | "step" | "configure";
+  step_minutes?: number;
+  speed_multiplier?: number;
+}): Promise<ReplayStatus> {
+  return requestJson<ReplayStatus>(REPLAY_CONTROL_PATH, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
 }

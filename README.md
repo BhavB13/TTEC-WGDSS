@@ -66,7 +66,18 @@ Database Layer
 
 Current Project Status
 
-The Version 1 dashboard is operational with live Open-Meteo weather, a three-member Open-Meteo/MET Norway/NOAA GFS hourly forecast consensus, provider fallback, simulated grid data, Leaflet operational layers, rule-based recommendations, persisted historical snapshots, and imported SCADA calibration profiles.
+The dashboard now includes a realistic production-system demonstration mode. It
+uses an immutable 12-month hourly SCADA/weather archive, replays June as a
+persisted simulated-live feed, preserves the other eleven months for analytics,
+and exposes playback controls, full-day demand forecasts, six-hour weather,
+generation, demand, capacity, and reserve measurements. The bundled dataset is
+deterministic synthetic demonstration data and is never presented as live T&TEC
+SCADA telemetry.
+
+The existing live weather providers, Leaflet operational map and overlays,
+historical SCADA CSV pipeline, calibration profiles, forecasting services, and
+risk engine remain available. See `docs/DEMO_REPLAY.md` for replay architecture,
+provenance, forecast leakage controls, and the production replacement path.
 
 See `docs/OperationsGuide.md` for startup, migration, import, testing, and deployment instructions. See `docs/ExternalServices.md` for the no-cost provider matrix, quotas, licensing boundary, and optional paid alternatives.
 
@@ -91,8 +102,7 @@ Documentation:
 
 Future Enhancements
 
-- Demand forecasting
-- Historical analytics
-- Machine learning recommendations
 - Real-time SCADA integration
+- Multi-season validation using approved T&TEC historical exports
+- Production model registry and monitored scheduled retraining
 - Generation asset visualization

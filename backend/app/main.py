@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.core.logging_config import configure_logging
 from app.database.init_db import initialize_database
 from app.services.calibration_import_service import CalibrationImportService
+from app.services.demo_replay_service import DemoReplayService
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -33,6 +34,12 @@ async def lifespan(app: FastAPI):
             import_service.import_archive_if_present(settings.CALIBRATION_DATA_ZIP_PATH)
         except Exception:  # pragma: no cover - startup resilience
             logger.exception("Calibration import skipped")
+    if settings.DEMO_REPLAY_ENABLED and settings.DEMO_REPLAY_AUTO_SEED:
+        try:
+            row_count = DemoReplayService().ensure_seeded()
+            logger.info("Demo replay dataset ready with %s hourly observations", row_count)
+        except Exception:  # pragma: no cover - startup resilience
+            logger.exception("Demo replay dataset initialization skipped")
     yield
     logger.info("Shutting down %s", settings.APP_NAME)
 

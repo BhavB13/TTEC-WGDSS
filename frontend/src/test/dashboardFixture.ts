@@ -121,3 +121,59 @@ export const dashboardFixture: DashboardSnapshot = {
     missing_fields: "",
   },
 };
+
+export const replayDashboardFixture: DashboardSnapshot = {
+  ...dashboardFixture,
+  weather: {
+    ...dashboardFixture.weather,
+    timestamp: "2025-06-01T08:00:00-04:00",
+    provider_name: "Simulated Live · Historical Weather Replay",
+  },
+  grid: {
+    ...dashboardFixture.grid,
+    timestamp: "2025-06-01T08:00:00-04:00",
+    source_provider: "SimulatedLiveScadaReplay",
+  },
+  replay: {
+    status: {
+      mode: "SIMULATED_LIVE",
+      dataset_label: "2025 hourly SCADA + weather demonstration",
+      dataset_start: "2025-01-01T00:00:00-04:00",
+      dataset_end: "2025-12-31T23:00:00-04:00",
+      replay_start: "2025-06-01T00:00:00-04:00",
+      replay_end: "2025-06-30T23:00:00-04:00",
+      cursor_at: "2025-06-01T08:00:00-04:00",
+      is_playing: false,
+      step_minutes: 60,
+      speed_multiplier: 600,
+      progress_percent: 1.1,
+      revealed_records: 9,
+      total_replay_records: 720,
+      source: "WGDSS 12-Month Synthetic SCADA/Weather Demonstration",
+    },
+    operational_history: [],
+    full_day_load_forecast: Array.from({ length: 24 }, (_, hour) => ({
+      timestamp: `2025-06-01T${String(hour).padStart(2, "0")}:00:00-04:00`,
+      forecast_demand_mw: 800 + hour * 10,
+      historical_average_mw: 790 + hour * 9,
+      actual_demand_mw: hour <= 8 ? 795 + hour * 10 : null,
+      uncertainty_mw: 20,
+    })),
+    monthly_history: Array.from({ length: 12 }, (_, index) => ({
+      month: new Intl.DateTimeFormat("en", { month: "short", timeZone: "UTC" }).format(new Date(Date.UTC(2025, index, 1))),
+      average_demand_mw: 880 + index * 4,
+      peak_demand_mw: 1220 + index * 5,
+      average_temperature_c: 27 + index / 10,
+      rainfall_total_mm: 40 + index * 8,
+      data_phase: index === 5 ? "REPLAY_SOURCE" as const : "HISTORICAL" as const,
+    })),
+    summary: {
+      historical_months: 11,
+      historical_record_count: 8040,
+      historical_average_demand_mw: 910,
+      historical_peak_demand_mw: 1320,
+      replay_month_label: "June 2025",
+      current_day_peak_forecast_mw: 1030,
+    },
+  },
+};

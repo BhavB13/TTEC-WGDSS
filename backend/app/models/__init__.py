@@ -1,6 +1,7 @@
 from app.models.base import Base
 from app.models.calibration import CalibrationImportRun, CalibrationScenarioProfile, ScadaTemperatureSample
 from app.models.demand_forecast import DemandForecastResult, ForecastTrainingRow
+from app.models.demo_replay import DemoObservation, DemoReplayState
 from app.models.forecast import Forecast
 from app.models.generation import Generation
 from app.models.grid_data import GridData
@@ -16,6 +17,8 @@ __all__ = [
     "CalibrationImportRun",
     "CalibrationScenarioProfile",
     "DemandForecastResult",
+    "DemoObservation",
+    "DemoReplayState",
     "Forecast",
     "ForecastTrainingRow",
     "Generation",

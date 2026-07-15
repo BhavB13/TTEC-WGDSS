@@ -13,6 +13,7 @@ from app.schemas.model_status import (
 )
 from app.schemas.probability import ProbabilityResponse
 from app.schemas.recommendation import RecommendationResponse
+from app.schemas.replay import ReplayDashboardResponse
 from app.schemas.weather import CurrentWeatherResponse
 
 
@@ -32,3 +33,4 @@ class DashboardSnapshotResponse(BaseModel):
     demand_forecast: DemandForecastBundleResponse | None = None
     model_status: ModelStatusResponse | None = None
     scada_status: ScadaStatusResponse | None = None
+    replay: ReplayDashboardResponse | None = None

@@ -140,6 +140,64 @@ export interface ScadaStatus {
   missing_fields: string;
 }
 
+export interface ReplayStatus {
+  mode: "SIMULATED_LIVE" | string;
+  dataset_label: string;
+  dataset_start: string;
+  dataset_end: string;
+  replay_start: string;
+  replay_end: string;
+  cursor_at: string;
+  is_playing: boolean;
+  step_minutes: number;
+  speed_multiplier: number;
+  progress_percent: number;
+  revealed_records: number;
+  total_replay_records: number;
+  source: string;
+}
+
+export interface OperationalTrendPoint {
+  timestamp: string;
+  demand_mw: number;
+  generation_mw: number;
+  available_capacity_mw: number;
+  reserve_margin_percent: number;
+  temperature_c: number;
+  rainfall_mm_hr: number;
+  data_phase: "HISTORICAL" | "SIMULATED_LIVE";
+}
+
+export interface LoadForecastPoint {
+  timestamp: string;
+  forecast_demand_mw: number;
+  historical_average_mw: number;
+  actual_demand_mw?: number | null;
+  uncertainty_mw: number;
+}
+
+export interface ReplayDashboard {
+  status: ReplayStatus;
+  operational_history: OperationalTrendPoint[];
+  full_day_load_forecast: LoadForecastPoint[];
+  monthly_history: Array<{
+    month: string;
+    average_demand_mw: number;
+    peak_demand_mw: number;
+    average_temperature_c: number;
+    rainfall_total_mm: number;
+    data_phase: "HISTORICAL" | "REPLAY_SOURCE";
+  }>;
+  summary: {
+    historical_months: number;
+    historical_record_count: number;
+    historical_average_demand_mw: number;
+    historical_peak_demand_mw: number;
+    replay_month_label: string;
+    current_day_peak_forecast_mw: number;
+  };
+}
+
 export interface GridStatus {
   timestamp?: string | null;
   current_demand_mw: number;
@@ -178,6 +236,7 @@ export interface DashboardSnapshot {
   demand_forecast?: DemandForecastBundle | null;
   model_status?: ModelStatus | null;
   scada_status?: ScadaStatus | null;
+  replay?: ReplayDashboard | null;
 }
 
 // Backwards-compatible aliases for existing component imports.

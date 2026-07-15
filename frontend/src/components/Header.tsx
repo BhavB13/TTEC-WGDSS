@@ -88,7 +88,7 @@ export default function Header({
           <HeaderMetric
             label="Grid Status"
             value={
-              dataQuality?.grid_status === "SIMULATED"
+              dataQuality?.grid_status.startsWith("SIMULATED")
                 ? `Simulated · ${gridStatus ?? systemStatus}`
                 : (gridStatus ?? systemStatus)
             }
