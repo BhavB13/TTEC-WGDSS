@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from statistics import mean
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, select
@@ -32,6 +33,18 @@ class ForecastEvaluationDataset:
     source_snapshots: int
     skipped_rows: int
     as_of: datetime
+
+
+@dataclass(frozen=True)
+class _HistoricalWeatherForecast:
+    temperature_c: float
+    humidity_percent: float
+    rainfall_mm_hr: float
+    cloud_cover_percent: float
+    wind_speed_kph: float
+    precipitation_probability_percent: float
+    provider_name: str
+    created_at: datetime
 
 
 class ForecastDatasetService:
@@ -207,6 +220,11 @@ class ForecastDatasetService:
                 forecasts_by_hour.get(target_timestamp, []),
                 available_at,
             )
+            forecast = forecast or self._historical_weather_forecast(
+                weather_by_hour,
+                target_timestamp,
+                feature_timestamp,
+            )
             rows[horizon_hours] = self._inference_row(
                 snapshot=latest_snapshot,
                 feature_timestamp=feature_timestamp,
@@ -253,6 +271,11 @@ class ForecastDatasetService:
                     forecasts_by_hour.get(target_timestamp, []),
                     feature_timestamp,
                 )
+                forecast = forecast or self._historical_weather_forecast(
+                    weather_by_hour,
+                    target_timestamp,
+                    feature_timestamp,
+                )
                 rows.append(
                     self._training_row(
                         snapshot=snapshot,
@@ -277,7 +300,7 @@ class ForecastDatasetService:
         horizon_hours: int,
         snapshot_by_hour: dict[datetime, ScadaGridSnapshot],
         weather: Weather | None,
-        forecast: Forecast | None,
+        forecast: Forecast | _HistoricalWeatherForecast | None,
     ) -> ForecastTrainingRow:
         return ForecastTrainingRow(
             feature_timestamp=feature_timestamp,
@@ -391,7 +414,7 @@ class ForecastDatasetService:
         horizon_hours: int,
         snapshot_by_hour: dict[datetime, ScadaGridSnapshot],
         weather: Weather | None,
-        forecast: Forecast | None,
+        forecast: Forecast | _HistoricalWeatherForecast | None,
     ) -> ForecastTrainingRow:
         assert snapshot.current_demand_mw is not None
         return ForecastTrainingRow(
@@ -538,6 +561,43 @@ class ForecastDatasetService:
         return max(available, key=lambda row: _local_naive(row.created_at))
 
     @staticmethod
+    def _historical_weather_forecast(
+        weather_by_hour: dict[datetime, Weather],
+        target_timestamp: datetime,
+        feature_timestamp: datetime,
+    ) -> _HistoricalWeatherForecast | None:
+        available = [
+            (timestamp, weather)
+            for timestamp, weather in weather_by_hour.items()
+            if timestamp <= feature_timestamp
+        ]
+        if not available:
+            return None
+        same_hour = [
+            weather
+            for timestamp, weather in available
+            if timestamp.hour == target_timestamp.hour
+        ][-21:]
+        samples = same_hour or [weather for _, weather in available[-24:]]
+        rainy_samples = sum(1 for weather in samples if weather.rainfall_mm_hr > 0)
+        return _HistoricalWeatherForecast(
+            temperature_c=round(mean(row.temperature_c for row in samples), 4),
+            humidity_percent=round(mean(row.humidity_percent for row in samples), 4),
+            rainfall_mm_hr=round(mean(row.rainfall_mm_hr for row in samples), 4),
+            cloud_cover_percent=round(
+                mean(row.cloud_cover_percent for row in samples),
+                4,
+            ),
+            wind_speed_kph=round(mean(row.wind_speed_kph for row in samples), 4),
+            precipitation_probability_percent=round(
+                rainy_samples / len(samples) * 100.0,
+                2,
+            ),
+            provider_name="Historical Weather Baseline (past observations only)",
+            created_at=feature_timestamp,
+        )
+
+    @staticmethod
     def _lag_demand(
         snapshot_by_hour: dict[datetime, ScadaGridSnapshot],
         timestamp: datetime,
@@ -616,7 +676,7 @@ class ForecastDatasetService:
         snapshot: ScadaGridSnapshot,
         target_snapshot: ScadaGridSnapshot,
         weather: Weather | None,
-        forecast: Forecast | None,
+        forecast: Forecast | _HistoricalWeatherForecast | None,
     ) -> str:
         usable = {"GOOD", "USABLE_WITH_WARNING"}
         if snapshot.quality_status not in usable or target_snapshot.quality_status not in usable:
@@ -625,27 +685,31 @@ class ForecastDatasetService:
             snapshot.quality_status == "USABLE_WITH_WARNING"
             or target_snapshot.quality_status == "USABLE_WITH_WARNING"
         ):
-            return (
-                "SCADA_ACCEPTED"
-                if weather is not None and forecast is not None
-                else "SCADA_ACCEPTED_WEATHER_DEGRADED"
-            )
+            if weather is None or forecast is None:
+                return "SCADA_ACCEPTED_WEATHER_DEGRADED"
+            if isinstance(forecast, _HistoricalWeatherForecast):
+                return "SCADA_ACCEPTED_WEATHER_BASELINE"
+            return "SCADA_ACCEPTED"
         if weather is None or forecast is None:
             return "WEATHER_DEGRADED"
+        if isinstance(forecast, _HistoricalWeatherForecast):
+            return "WEATHER_BASELINE"
         return "GOOD"
 
     @staticmethod
     def _inference_quality(
         snapshot: ScadaGridSnapshot,
         weather: Weather | None,
-        forecast: Forecast | None,
+        forecast: Forecast | _HistoricalWeatherForecast | None,
     ) -> str:
         if snapshot.quality_status == "USABLE_WITH_WARNING":
-            return (
-                "SCADA_ACCEPTED"
-                if weather is not None and forecast is not None
-                else "SCADA_ACCEPTED_WEATHER_DEGRADED"
-            )
+            if weather is None or forecast is None:
+                return "SCADA_ACCEPTED_WEATHER_DEGRADED"
+            if isinstance(forecast, _HistoricalWeatherForecast):
+                return "SCADA_ACCEPTED_WEATHER_BASELINE"
+            return "SCADA_ACCEPTED"
+        if isinstance(forecast, _HistoricalWeatherForecast):
+            return "WEATHER_BASELINE"
         return "GOOD" if weather is not None and forecast is not None else "WEATHER_DEGRADED"
 
 

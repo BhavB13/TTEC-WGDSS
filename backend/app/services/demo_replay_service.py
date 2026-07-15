@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import threading
 from calendar import monthrange
@@ -16,8 +17,17 @@ from app.core.config import settings
 from app.database.init_db import initialize_database
 from app.database.session import SessionLocal
 from app.models.demo_replay import DemoObservation, DemoReplayState
+from app.models.demand_forecast import ScadaReplayForecastResult
 from app.models.scada import ScadaGridSnapshot
 from app.models.weather import Weather
+from app.schemas.model_status import (
+    BaselineComparisonResponse,
+    DemandForecastBundleResponse,
+    DemandForecastHorizonResponse,
+    ModelMetricsResponse,
+    ModelStatusResponse,
+    ScadaStatusResponse,
+)
 from app.schemas.replay import (
     LoadForecastPointResponse,
     MonthlyHistoryPointResponse,
@@ -127,13 +137,24 @@ class DemoReplayService:
         with self._lock, self.session_factory() as session:
             state = self._state(session)
             self._advance_if_playing(state)
+            observation_timestamp = state.cursor_at.replace(
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
             observation = session.scalar(
-                select(DemoObservation).where(DemoObservation.timestamp == state.cursor_at)
+                select(DemoObservation).where(
+                    DemoObservation.timestamp == observation_timestamp
+                )
             )
             if observation is None:
                 return None
             scada_overlay = self._scada_overlay(session, state)
-            active_observation = scada_overlay.get(state.cursor_at, observation)
+            active_observation = scada_overlay.get(observation_timestamp, observation)
+            replay_forecasts = self._persisted_replay_forecasts(
+                session,
+                active_observation,
+            )
             weather_forecast = self._weather_forecast(
                 session,
                 state,
@@ -146,8 +167,20 @@ class DemoReplayService:
                 active_observation,
                 weather_forecast,
                 scada_overlay,
+                replay_forecasts,
             )
-            risk_payload = self._operating_risk_payload(active_observation, replay)
+            risk_payload = self._operating_risk_payload(
+                active_observation,
+                replay,
+                replay_forecasts,
+            )
+            demand_forecast = self._replay_demand_forecast_bundle(
+                active_observation,
+                replay_forecasts,
+                replay,
+            )
+            model_status = self._replay_model_status(replay_forecasts, replay)
+            scada_status = self._replay_scada_status(active_observation)
             session.commit()
         return {
             "weather": _weather_payload(active_observation),
@@ -156,12 +189,16 @@ class DemoReplayService:
             "generation_units": _generation_units(active_observation),
             "replay": replay,
             "risk_payload": risk_payload,
+            "demand_forecast": demand_forecast,
+            "model_status": model_status,
+            "scada_status": scada_status,
         }
 
     def _operating_risk_payload(
         self,
         observation: _WeatherGridObservation,
         replay: ReplayDashboardResponse,
+        replay_forecasts: list[ScadaReplayForecastResult],
     ) -> dict[str, object]:
         future = [
             point
@@ -169,8 +206,12 @@ class DemoReplayService:
             if point.timestamp > observation.timestamp
             and point.timestamp <= observation.timestamp + timedelta(hours=6)
         ]
-        profile: list[OperatingForecastPoint] = []
-        if future:
+        profile = self._direct_operating_profile(
+            observation,
+            replay,
+            replay_forecasts,
+        )
+        if not profile and future:
             first = future[0]
             first_horizon = max(
                 1,
@@ -225,6 +266,10 @@ class DemoReplayService:
                 available_capacity_mw=observation.available_capacity_mw,
                 spinning_reserve_mw=observation.spinning_reserve_mw,
                 forecast_profile=tuple(profile),
+                available_capacity_is_verified=(
+                    isinstance(observation, _ScadaReplayObservation)
+                    and not _has_missing_operating_capacity(observation.missing_fields)
+                ),
             )
         )
         forecast_30 = min(profile, key=lambda point: abs(point.horizon_minutes - 30))
@@ -251,6 +296,206 @@ class DemoReplayService:
             "available_start_capacity_mw": risk.available_start_capacity_mw,
             "residual_shortfall_mw": risk.residual_shortfall_mw,
         }
+
+    @staticmethod
+    def _direct_operating_profile(
+        observation: _WeatherGridObservation,
+        replay: ReplayDashboardResponse,
+        replay_forecasts: list[ScadaReplayForecastResult],
+    ) -> list[OperatingForecastPoint]:
+        if not replay_forecasts:
+            return []
+        replay_by_timestamp = {
+            point.timestamp: point for point in replay.full_day_load_forecast
+        }
+        profile: list[OperatingForecastPoint] = []
+        for row in sorted(replay_forecasts, key=lambda item: item.horizon_hours):
+            display_timestamp = observation.timestamp + timedelta(
+                hours=row.horizon_hours
+            )
+            display_point = replay_by_timestamp.get(display_timestamp)
+            profile.append(
+                OperatingForecastPoint(
+                    horizon_minutes=row.horizon_hours * 60,
+                    forecast_demand_mw=row.forecast_demand_mw,
+                    forecast_uncertainty_mw=row.forecast_uncertainty_mw,
+                    weather_effect_mw=(
+                        display_point.weather_impact_mw
+                        if display_point is not None
+                        else 0.0
+                    ),
+                    confidence=_replay_forecast_confidence(row),
+                )
+            )
+        first = profile[0]
+        for horizon in (20, 30):
+            if horizon >= first.horizon_minutes:
+                continue
+            fraction = horizon / first.horizon_minutes
+            profile.append(
+                OperatingForecastPoint(
+                    horizon_minutes=horizon,
+                    forecast_demand_mw=(
+                        observation.demand_mw
+                        + (first.forecast_demand_mw - observation.demand_mw)
+                        * fraction
+                    ),
+                    forecast_uncertainty_mw=max(
+                        5.0,
+                        first.forecast_uncertainty_mw * math.sqrt(fraction),
+                    ),
+                    weather_effect_mw=first.weather_effect_mw * fraction,
+                    confidence=first.confidence,
+                )
+            )
+        return sorted(profile, key=lambda point: point.horizon_minutes)
+
+    @staticmethod
+    def _persisted_replay_forecasts(
+        session,
+        observation: _WeatherGridObservation,
+    ) -> list[ScadaReplayForecastResult]:
+        if not isinstance(observation, _ScadaReplayObservation):
+            return []
+        source_cursor = observation.source_timestamp.replace(tzinfo=None)
+        rows = list(
+            session.scalars(
+                select(ScadaReplayForecastResult)
+                .where(ScadaReplayForecastResult.source_cursor_at == source_cursor)
+                .order_by(ScadaReplayForecastResult.horizon_hours)
+            )
+        )
+        valid: list[ScadaReplayForecastResult] = []
+        for row in rows:
+            expected_target = source_cursor + timedelta(hours=row.horizon_hours)
+            if (
+                row.horizon_hours in {1, 2, 6}
+                and row.feature_timestamp == source_cursor
+                and row.forecast_timestamp == expected_target
+            ):
+                valid.append(row)
+        return valid if {row.horizon_hours for row in valid} == {1, 2, 6} else []
+
+    @staticmethod
+    def _replay_demand_forecast_bundle(
+        observation: _WeatherGridObservation,
+        replay_forecasts: list[ScadaReplayForecastResult],
+        replay: ReplayDashboardResponse,
+    ) -> DemandForecastBundleResponse:
+        if not replay_forecasts:
+            chart_by_timestamp = {
+                point.timestamp: point for point in replay.full_day_load_forecast
+            }
+            fallback_horizons: list[DemandForecastHorizonResponse] = []
+            for horizon in (1, 2, 6):
+                target = observation.timestamp + timedelta(hours=horizon)
+                point = chart_by_timestamp.get(target)
+                if point is None:
+                    continue
+                fallback_horizons.append(
+                    DemandForecastHorizonResponse(
+                        horizon_hours=horizon,
+                        forecast_timestamp=target,
+                        forecast_demand_mw=point.forecast_demand_mw,
+                        forecast_uncertainty_mw=point.uncertainty_mw,
+                        model_name=replay.summary.forecast_model,
+                        model_version="demo-load-forecast-v1.0",
+                        baseline_name="HourlyHistoricalAverage",
+                        baseline_forecast_mw=point.historical_average_mw,
+                        quality_status=replay.summary.forecast_mode,
+                        feature_timestamp=observation.timestamp,
+                        feature_profile="replay_weather_features",
+                        validation_status="PROTOTYPE",
+                        training_rows=replay.summary.training_rows,
+                    )
+                )
+            return DemandForecastBundleResponse(horizons=fallback_horizons)
+        return DemandForecastBundleResponse(
+            horizons=[
+                DemandForecastHorizonResponse(
+                    horizon_hours=row.horizon_hours,
+                    forecast_timestamp=(
+                        observation.timestamp + timedelta(hours=row.horizon_hours)
+                    ),
+                    forecast_demand_mw=row.forecast_demand_mw,
+                    forecast_uncertainty_mw=row.forecast_uncertainty_mw,
+                    model_name=row.model_name,
+                    model_version=row.model_version,
+                    baseline_name=row.baseline_name,
+                    baseline_forecast_mw=row.baseline_forecast_mw,
+                    quality_status=row.quality_status,
+                    feature_timestamp=observation.timestamp,
+                    generated_at=row.generated_at,
+                    feature_profile=row.feature_profile,
+                    validation_status=row.validation_status,
+                    training_rows=row.training_rows,
+                )
+                for row in replay_forecasts
+            ]
+        )
+
+    @staticmethod
+    def _replay_model_status(
+        replay_forecasts: list[ScadaReplayForecastResult],
+        replay: ReplayDashboardResponse,
+    ) -> ModelStatusResponse:
+        if not replay_forecasts:
+            return ModelStatusResponse(
+                active_model=replay.summary.forecast_model,
+                model_version="demo-load-forecast-v1.0",
+                mode=replay.summary.forecast_mode,
+                trained_through=replay.status.cursor_at,
+                feature_profile="replay_weather_features",
+                validation_status="PROTOTYPE",
+                train_row_count=replay.summary.training_rows,
+                test_row_count=0,
+                metrics=ModelMetricsResponse(
+                    mae=replay.summary.forecast_mae_mw,
+                    residual_std=replay.summary.residual_std_mw,
+                ),
+                baseline_comparison=BaselineComparisonResponse(
+                    best_baseline="HourlyHistoricalAverage",
+                    ml_beats_baseline=(replay.summary.forecast_mode == "ML_ACTIVE"),
+                ),
+            )
+        primary = min(replay_forecasts, key=lambda row: row.horizon_hours)
+        return ModelStatusResponse(
+            active_model=primary.model_name,
+            model_version=primary.model_version,
+            mode=primary.quality_status,
+            trained_through=primary.feature_timestamp,
+            generated_at=primary.generated_at,
+            feature_profile=primary.feature_profile,
+            validation_status=primary.validation_status,
+            training_span_hours=primary.training_span_hours,
+            train_row_count=primary.train_row_count,
+            test_row_count=primary.test_row_count,
+            candidate_metrics=_json_object(primary.candidate_metrics),
+            metrics=ModelMetricsResponse(
+                mae=primary.mae,
+                rmse=primary.rmse,
+                mape=primary.mape,
+                residual_std=primary.residual_std,
+            ),
+            baseline_comparison=BaselineComparisonResponse(
+                best_baseline=primary.baseline_name,
+                ml_beats_baseline=primary.ml_beats_baseline,
+            ),
+        )
+
+    @staticmethod
+    def _replay_scada_status(
+        observation: _WeatherGridObservation,
+    ) -> ScadaStatusResponse | None:
+        if not isinstance(observation, _ScadaReplayObservation):
+            return None
+        return ScadaStatusResponse(
+            source=observation.source,
+            latest_snapshot=observation.timestamp,
+            available_at=observation.timestamp,
+            quality_status=observation.quality_status,
+            missing_fields=observation.missing_fields,
+        )
 
     def get_status(self) -> ReplayStatusResponse:
         self.ensure_seeded()
@@ -487,6 +732,7 @@ class DemoReplayService:
         observation: _WeatherGridObservation,
         weather_forecast: list[dict[str, object]],
         scada_overlay: dict[datetime, _ScadaReplayObservation],
+        replay_forecasts: list[ScadaReplayForecastResult],
     ) -> ReplayDashboardResponse:
         history_start = state.cursor_at - timedelta(hours=47)
         raw_history = list(
@@ -508,13 +754,25 @@ class DemoReplayService:
             weather_forecast,
             scada_overlay,
         )
+        direct_by_display_timestamp = {
+            observation.timestamp + timedelta(hours=row.horizon_hours): row
+            for row in replay_forecasts
+        }
         forecast = [
             LoadForecastPointResponse(
                 timestamp=point.timestamp,
-                forecast_demand_mw=point.forecast_demand_mw,
+                forecast_demand_mw=(
+                    direct_by_display_timestamp[point.timestamp].forecast_demand_mw
+                    if point.timestamp in direct_by_display_timestamp
+                    else point.forecast_demand_mw
+                ),
                 historical_average_mw=point.historical_average_mw,
                 actual_demand_mw=point.actual_demand_mw,
-                uncertainty_mw=point.uncertainty_mw,
+                uncertainty_mw=(
+                    direct_by_display_timestamp[point.timestamp].forecast_uncertainty_mw
+                    if point.timestamp in direct_by_display_timestamp
+                    else point.uncertainty_mw
+                ),
                 weather_impact_mw=point.weather_impact_mw,
                 weather_confidence=point.weather_confidence,
                 weather_source_count=point.weather_source_count,
@@ -534,8 +792,16 @@ class DemoReplayService:
         historical_count = len(historical)
         average = sum(row.demand_mw for row in historical) / historical_count
         peak = max(row.demand_mw for row in historical)
+        replay_status = self._status(session, state)
+        if scada_overlay:
+            replay_status = replay_status.model_copy(
+                update={
+                    "dataset_label": "June historical SCADA + Open-Meteo simulated replay",
+                    "source": SCADA_REPLAY_SOURCE,
+                }
+            )
         return ReplayDashboardResponse(
-            status=self._status(session, state),
+            status=replay_status,
             operational_history=[
                 OperationalTrendPointResponse(
                     timestamp=row.timestamp,
@@ -564,12 +830,35 @@ class DemoReplayService:
                 current_day_peak_forecast_mw=round(
                     max(point.forecast_demand_mw for point in forecast), 2
                 ),
-                forecast_model=forecast_result.model_name,
-                forecast_mode=forecast_result.model_mode,
-                forecast_mae_mw=forecast_result.mae_mw,
-                baseline_mae_mw=forecast_result.baseline_mae_mw,
-                residual_std_mw=forecast_result.residual_std_mw,
-                training_rows=forecast_result.training_rows,
+                forecast_model=_replay_forecast_model_label(
+                    replay_forecasts,
+                    forecast_result.model_name,
+                ),
+                forecast_mode=(
+                    replay_forecasts[0].quality_status
+                    if replay_forecasts
+                    else forecast_result.model_mode
+                ),
+                forecast_mae_mw=(
+                    round(mean(row.mae for row in replay_forecasts), 2)
+                    if replay_forecasts
+                    else forecast_result.mae_mw
+                ),
+                baseline_mae_mw=(
+                    round(mean(row.baseline_mae for row in replay_forecasts), 2)
+                    if replay_forecasts
+                    else forecast_result.baseline_mae_mw
+                ),
+                residual_std_mw=(
+                    round(max(row.residual_std for row in replay_forecasts), 2)
+                    if replay_forecasts
+                    else forecast_result.residual_std_mw
+                ),
+                training_rows=(
+                    min(row.training_rows for row in replay_forecasts)
+                    if replay_forecasts
+                    else forecast_result.training_rows
+                ),
                 weather_features=list(forecast_result.weather_features),
             ),
         )
@@ -957,6 +1246,48 @@ def _dashboard_grid_quality(value: str) -> str:
     if normalized == "USABLE_WITH_WARNING":
         return "UNCERTAIN"
     return "BAD"
+
+
+def _has_missing_operating_capacity(missing_fields: str) -> bool:
+    normalized = {
+        field.strip().lower()
+        for field in missing_fields.split(",")
+        if field.strip()
+    }
+    return bool(
+        normalized
+        & {
+            "available_capacity_mw",
+            "online_capacity_mw",
+            "gsys system_avail_total",
+            "gsys system_onln_total",
+        }
+    )
+
+
+def _replay_forecast_confidence(row: ScadaReplayForecastResult) -> float:
+    confidence = 0.9 if row.validation_status == "VALIDATED" else 0.78
+    if "DEGRADED" in row.quality_status:
+        confidence -= 0.15
+    return max(0.45, min(0.95, confidence))
+
+
+def _replay_forecast_model_label(
+    rows: list[ScadaReplayForecastResult],
+    fallback: str,
+) -> str:
+    if not rows:
+        return fallback
+    names = list(dict.fromkeys(row.model_name for row in rows))
+    return names[0] if len(names) == 1 else "Per-horizon: " + ", ".join(names)
+
+
+def _json_object(value: str) -> dict[str, object]:
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _utc_now_naive() -> datetime:

@@ -197,9 +197,16 @@ class DashboardService:
             recommendation=probability_payload["recommendation"],
             **self._dispatch_evidence(probability_payload),
         )
-        demand_forecast = self.model_status_service.get_demand_forecast_bundle()
-        model_status = self.model_status_service.get_model_status()
-        scada_status = self.model_status_service.get_scada_status()
+        if replay_context is not None:
+            # Replay artifacts must match the simulated source cursor exactly.
+            # Never substitute a model trained through a later historical row.
+            demand_forecast = replay_context.get("demand_forecast")
+            model_status = replay_context.get("model_status")
+            scada_status = replay_context.get("scada_status")
+        else:
+            demand_forecast = self.model_status_service.get_demand_forecast_bundle()
+            model_status = self.model_status_service.get_model_status()
+            scada_status = self.model_status_service.get_scada_status()
 
         snapshot = DashboardSnapshotResponse(
             weather=weather_response,

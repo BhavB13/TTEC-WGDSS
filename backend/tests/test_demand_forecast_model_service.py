@@ -99,7 +99,7 @@ def test_demand_forecast_model_service_uses_chronological_baseline_and_persists(
     assert stored.horizon_hours == 1
     assert stored.forecast_demand_mw == horizon.forecast_demand_mw
     assert stored.forecast_uncertainty_mw == horizon.forecast_uncertainty_mw
-    assert stored.feature_profile == "demand_weather_v2"
+    assert stored.feature_profile == "demand_weather_v2_1"
     assert stored.validation_status == "PROTOTYPE"
     assert stored.train_row_count == horizon.train_rows
     assert stored.test_row_count == horizon.test_rows
@@ -497,3 +497,30 @@ def test_ml_feature_vector_excludes_scada_generation_context(tmp_path):
 
     assert len(with_generation_context) == len(without_generation_context)
     assert with_generation_context == without_generation_context
+
+
+def test_ml_feature_vector_responds_to_known_and_forecast_weather(tmp_path):
+    session_factory = _session_factory(tmp_path)
+    _seed_training_rows(session_factory, count=3)
+    with session_factory() as session:
+        rows = list(
+            session.scalars(
+                select(ForecastTrainingRow).order_by(
+                    ForecastTrainingRow.feature_timestamp
+                )
+            )
+        )
+
+    fill_values = _feature_fill_values(rows)
+    normal_weather = _feature_vector(rows[0], fill_values)
+    rows[0].temperature_c = 34
+    rows[0].humidity_percent = 90
+    rows[0].rainfall_mm_hr = 8
+    rows[0].forecast_temperature_c = 35
+    rows[0].forecast_humidity_percent = 92
+    rows[0].forecast_rainfall_mm_hr = 12
+    rows[0].forecast_cloud_cover_percent = 100
+    adverse_weather = _feature_vector(rows[0], fill_values)
+
+    assert len(normal_weather) == len(adverse_weather)
+    assert normal_weather != adverse_weather

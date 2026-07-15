@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.models.base import Base
 from app.models.demo_replay import DemoObservation, DemoReplayState
+from app.models.demand_forecast import ScadaReplayForecastResult
 from app.models.scada import ScadaGridSnapshot
 from app.models.weather import Weather
 from app.schemas.replay import ReplayControlRequest
@@ -70,6 +71,10 @@ def test_replay_dashboard_exposes_history_forecast_and_no_future_actuals(replay_
     assert replay.summary.training_rows > 3000
     assert replay.summary.forecast_mae_mw <= replay.summary.baseline_mae_mw
     assert context["grid"]["source_provider"] == "SimulatedLiveScadaReplay"
+    assert [
+        row.horizon_hours for row in context["demand_forecast"].horizons
+    ] == [1, 2, 6]
+    assert context["model_status"].feature_profile == "replay_weather_features"
 
 
 def test_replay_control_steps_configures_and_resets_cursor(replay_service):
@@ -158,6 +163,66 @@ def test_june_scada_overlay_maps_completed_interval_without_future_leakage(tmp_p
                     created_at=available_at,
                 )
             )
+        source_cursor = datetime(2026, 6, 15, 10)
+        for horizon, demand in ((1, 1111.0), (2, 1122.0), (6, 1166.0)):
+            session.add(
+                ScadaReplayForecastResult(
+                    source_cursor_at=source_cursor,
+                    feature_timestamp=source_cursor,
+                    forecast_timestamp=source_cursor + timedelta(hours=horizon),
+                    horizon_hours=horizon,
+                    forecast_demand_mw=demand,
+                    forecast_uncertainty_mw=20.0 + horizon,
+                    model_name="HistGradientBoostingRegressor",
+                    model_version="demand-forecast-v2.0",
+                    baseline_name="persistence",
+                    baseline_forecast_mw=demand - 10,
+                    quality_status="ML_ACTIVE_DEGRADED",
+                    mae=12.5,
+                    rmse=16.0,
+                    mape=1.1,
+                    residual_std=15.0,
+                    baseline_mae=20.0,
+                    ml_beats_baseline=True,
+                    feature_profile="demand_weather_v2",
+                    validation_status="PROTOTYPE",
+                    training_span_hours=335,
+                    train_row_count=250,
+                    test_row_count=63,
+                    candidate_metrics='{"active": {"model": "HistGradientBoostingRegressor"}}',
+                    training_rows=313,
+                    generated_at=datetime(2026, 7, 15, tzinfo=timezone.utc),
+                )
+            )
+        session.add(
+            ScadaReplayForecastResult(
+                source_cursor_at=source_cursor + timedelta(hours=1),
+                feature_timestamp=source_cursor + timedelta(hours=1),
+                forecast_timestamp=source_cursor + timedelta(hours=2),
+                horizon_hours=1,
+                forecast_demand_mw=9999,
+                forecast_uncertainty_mw=1,
+                model_name="future-model",
+                model_version="future",
+                baseline_name="future",
+                baseline_forecast_mw=9999,
+                quality_status="ML_ACTIVE",
+                mae=1,
+                rmse=1,
+                mape=1,
+                residual_std=1,
+                baseline_mae=2,
+                ml_beats_baseline=True,
+                feature_profile="future",
+                validation_status="VALIDATED",
+                training_span_hours=9999,
+                train_row_count=9999,
+                test_row_count=1,
+                candidate_metrics="{}",
+                training_rows=10000,
+                generated_at=datetime(2026, 7, 15, tzinfo=timezone.utc),
+            )
+        )
         session.commit()
 
     context = service.get_dashboard_context()
@@ -176,3 +241,17 @@ def test_june_scada_overlay_maps_completed_interval_without_future_leakage(tmp_p
         point.forecast_demand_mw
         for point in context["replay"].full_day_load_forecast[11:]
     ) < 2000
+    chart_by_hour = {
+        point.timestamp.hour: point
+        for point in context["replay"].full_day_load_forecast
+    }
+    assert chart_by_hour[11].forecast_demand_mw == 1111
+    assert chart_by_hour[12].forecast_demand_mw == 1122
+    assert chart_by_hour[16].forecast_demand_mw == 1166
+    assert context["risk_payload"]["forecast_demand_60m"] == 1111
+    assert [
+        item.horizon_hours for item in context["demand_forecast"].horizons
+    ] == [1, 2, 6]
+    assert context["model_status"].active_model == "HistGradientBoostingRegressor"
+    assert context["model_status"].baseline_comparison.ml_beats_baseline is True
+    assert context["scada_status"].latest_snapshot == datetime(2025, 6, 15, 10)

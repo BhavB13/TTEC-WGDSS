@@ -124,8 +124,17 @@ status but do not interrupt the operator snapshot.
 ## Historical SCADA Replay And Forecast Refresh
 
 The SCADA CSV path is a historical-export prototype workflow, not a live SCADA
-integration. Before the replay pipeline imports data it verifies all required
-tags, Good-quality samples, and timestamp overlap. Run it with all source CSVs:
+integration. Before mutation, the replay pipeline verifies all required tags,
+conditionally usable quality, and timestamp overlap. Run one ZIP archive with
+optional Open-Meteo historical weather:
+
+```powershell
+cd backend
+venv\Scripts\python.exe scripts\run_scada_replay_pipeline.py `
+  --backfill-weather C:\exports\scada-history.zip
+```
+
+Or run all separate source CSVs:
 
 ```powershell
 cd backend
@@ -135,7 +144,10 @@ venv\Scripts\python.exe scripts\run_scada_replay_pipeline.py C:\exports\*.csv
 The supported tags are `PTL132 GENERATION TOTALS`, `MHO132 AVERAGE AMBIENT
 TEMPERATURE`, `GSYS SYSTEM_CORRECTED_SPIN_TOTAL`, `GSYS SYSTEM_AVAIL_TOTAL`, and
 `GSYS SYSTEM_ONLN_TOTAL`. The pipeline requires at least eight aligned hours;
-short history may replay but is not a trusted production-training set.
+short history may replay but is not a trusted production-training set. `Other`
+quality remains visible as `USABLE_WITH_WARNING`; it is not converted to
+`Good`. The command stores direct forecasts only for the exact mapped replay
+cursor and reports which chronological baseline/model won each horizon.
 
 Run supervised refresh outside the API process after new Good-quality SCADA data
 arrives:

@@ -422,6 +422,92 @@ def test_historical_backtest_result_cannot_drive_live_operating_risk(tmp_path):
     assert payload is None
 
 
+def test_model_status_uses_one_generation_cohort_and_all_valid_risk_horizons(
+    tmp_path,
+):
+    session_factory = _model_session_factory(tmp_path)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    feature_time = now - timedelta(minutes=5)
+    with session_factory() as session:
+        session.add(
+            ScadaGridSnapshot(
+                timestamp=feature_time,
+                available_at=feature_time,
+                current_demand_mw=900,
+                temperature_c=30,
+                spinning_reserve_mw=100,
+                available_capacity_mw=1320,
+                online_capacity_mw=1100,
+                reserve_margin_mw=420,
+                reserve_margin_percent=46.7,
+                online_spare_mw=200,
+                quality_status="GOOD",
+                missing_fields="",
+                source="scada.csv",
+            )
+        )
+        for horizon, demand in ((1, 920), (6, 1250)):
+            session.add(
+                _forecast_result(
+                    generated_at=now,
+                    feature_time=feature_time,
+                    horizon=horizon,
+                    demand=demand,
+                )
+            )
+        session.add(
+            _forecast_result(
+                generated_at=now - timedelta(minutes=1),
+                feature_time=feature_time,
+                horizon=2,
+                demand=9999,
+            )
+        )
+        session.commit()
+
+    service = ModelStatusService(session_factory=session_factory)
+    bundle = service.get_demand_forecast_bundle()
+    payload = service.get_operating_risk_payload(reference_time=now)
+
+    assert bundle is not None
+    assert [row.horizon_hours for row in bundle.horizons] == [1, 6]
+    assert payload is not None
+    assert payload["forecast_demand_60m"] == 920
+    assert payload["expected_rise_minutes"] == 360
+    assert payload["expected_load_rise_mw"] == 350
+
+
+def _forecast_result(
+    generated_at: datetime,
+    feature_time: datetime,
+    horizon: int,
+    demand: float,
+) -> DemandForecastResult:
+    return DemandForecastResult(
+        forecast_timestamp=feature_time + timedelta(hours=horizon),
+        generated_at=generated_at,
+        horizon_hours=horizon,
+        forecast_demand_mw=demand,
+        forecast_uncertainty_mw=25,
+        model_name="persistence",
+        model_version="demand-forecast-v2.0",
+        baseline_name="persistence",
+        baseline_forecast_mw=demand - 5,
+        mae=10,
+        rmse=12,
+        mape=1,
+        residual_std=20,
+        ml_beats_baseline=False,
+        quality_status="BASELINE_ACTIVE",
+        feature_profile="demand_weather_v2",
+        validation_status="PROTOTYPE",
+        training_span_hours=500,
+        train_row_count=400,
+        test_row_count=100,
+        candidate_metrics="{}",
+    )
+
+
 def test_dashboard_selects_weather_nearest_requested_forecast_horizon():
     reference = "2026-07-10T12:10:00-04:00"
     items = [

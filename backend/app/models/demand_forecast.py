@@ -187,7 +187,20 @@ class ScadaReplayForecastResult(Base):
     quality_status: Mapped[str] = mapped_column(String(32), nullable=False)
     mae: Mapped[float] = mapped_column(Float, nullable=False)
     rmse: Mapped[float] = mapped_column(Float, nullable=False)
+    mape: Mapped[float] = mapped_column(Float, nullable=False)
     residual_std: Mapped[float] = mapped_column(Float, nullable=False)
+    baseline_mae: Mapped[float] = mapped_column(Float, nullable=False)
+    ml_beats_baseline: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
+    feature_profile: Mapped[str] = mapped_column(String(64), nullable=False)
+    validation_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    training_span_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    train_row_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    test_row_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    candidate_metrics: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     training_rows: Mapped[int] = mapped_column(Integer, nullable=False)
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

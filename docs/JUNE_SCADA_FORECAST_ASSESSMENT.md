@@ -9,9 +9,9 @@ They do not authorize live dispatch.
 
 ## Supplied Dataset
 
-The two supplied `junescadadata` ZIP files have different archive hashes but
-contain byte-identical CSV members. Deduplication must therefore occur at the
-member-content level as well as the archive level.
+The inspected `junescadadata.zip` contains five independent CSV members. The
+pipeline hashes each member payload, so repackaging or renaming the ZIP does not
+duplicate previously imported measurements.
 
 | CSV | Normalized field | Rows | Source interval | Time coverage | Quality |
 |---|---|---:|---|---|---|
@@ -31,9 +31,10 @@ the pre-upgrade parser does not accept. Tag names also contain trailing spaces.
 - Demand, TA, and TRA each contain one exact duplicate final interval.
 - The five series are not row-aligned and do not share a cadence. Joining by row
   number or start-hour would be mathematically wrong.
-- Interval-overlap resampling at a 90% hourly coverage threshold produces 577
-  complete hours from Jun 3 00:00 through Jun 27 00:00. Excluding
-  `Questionable` portions leaves 571 model-eligible hours through Jun 26 23:00.
+- The implemented interval-overlap resampler emits 722 hourly buckets across
+  the union of all source ranges. Of these, 569 have all five required fields
+  at or above 90% coverage and are conditionally usable; 153 are degraded by
+  missing coverage, excluded `Questionable` portions, or boundary mismatch.
 - `Other` cannot be silently presented as `Good`. It is conditionally usable
   for this export with a warning because all demand and spin rows carry that
   label; `Questionable` remains excluded.
@@ -67,22 +68,38 @@ can teach a demand model an operational response rather than a causal demand
 driver. TA, TRA, and Spin are therefore retained as timestamped context and as
 explicit risk inputs, but are not in the default demand feature profile.
 
-Historical Open-Meteo observations may enrich current-time features. They must
-not be relabelled as archived forecasts. If no provider forecast with
-`created_at <= t` exists, target-weather features remain missing and the model
-uses missingness indicators. This avoids perfect-weather leakage.
+All three horizons use the same availability-safe source fields but train and
+select independently. The target clock and target-weather baseline are computed
+for each horizon. The vector includes short/long demand lags and rates,
+current/forecast cooling degree, temperature-humidity interaction, explicit
+cooling-degree x current-load interaction, and temperature-rate x demand-rate
+interaction. At 1h the recent trajectory can dominate; at 2h/6h each separate
+model can rely more on target-hour cycle and weather. No feature is accepted
+merely from correlation, and future TA/TRA/Spin remain forbidden.
+
+Historical Open-Meteo observations enrich current-time features. They are never
+relabelled as archived provider forecasts. If no provider forecast with
+`created_at <= t` exists, target-weather fields use an explicitly labelled
+same-hour historical baseline built only from observations at or before `t`.
+Those rows are down-weighted and retain a distinct quality code. Future observed
+weather is never copied into a forecast feature.
 
 ## Exploratory Chronological Benchmark
 
-The final pipeline must repeat model selection with nested walk-forward
-validation. An initial 80/20 chronological holdout over the 571 eligible hours
-showed the following direction:
+The implemented pipeline performs nested expanding-window candidate selection
+inside the training partition and evaluates the selected candidate once on an
+untouched chronological 20% holdout. The July 15, 2026 replay build produced:
 
-| Horizon | Strongest demand/weather model | MAE | RMSE | Persistence MAE | Ops-context result |
-|---:|---|---:|---:|---:|---|
-| 1h | Ridge | 14.04 MW | 20.06 MW | 30.72 MW | Worse than demand/weather-only |
-| 2h | HistGradientBoosting | 22.16 MW | 27.83 MW | 57.33 MW | Worse than demand/weather-only |
-| 6h | RandomForest | 33.33 MW | 42.16 MW | 130.14 MW | Worse than demand/weather-only |
+| Horizon | Active method | MAE | RMSE | MAPE | Best baseline | Baseline MAE |
+|---:|---|---:|---:|---:|---|---:|
+| 1h | Ridge | 15.40 MW | 20.25 MW | 1.29% | Trend-adjusted persistence | 18.70 MW |
+| 2h | HistGradientBoosting | 24.10 MW | 28.71 MW | 1.99% | Hourly average | 44.52 MW |
+| 6h | HistGradientBoosting | 30.75 MW | 40.64 MW | 2.53% | Hourly average | 44.91 MW |
+
+At the mapped Jun 15 14:00 source cursor, the cutoff-only artifact selected
+trend-adjusted persistence at 1h and RandomForest at both 2h and 6h. This
+difference is expected: model selection is repeated using only the
+history available at the simulated cursor rather than later June rows.
 
 This is a prototype result from less than one month, not a production claim.
 The active model for each horizon must beat the selected chronological baseline
@@ -115,7 +132,8 @@ on both MAE and RMSE before replacing it.
   keep them out of the default demand feature profile.
 - Add current external humidity, rain, cloud, wind, and pressure.
 - Add target-hour provider forecast fields only when their issuance timestamp
-  proves availability at feature time.
+  proves availability at feature time. Otherwise use the past-only weather
+  baseline with explicit provenance and reduced quality weight.
 - Store feature provenance and quality state.
 
 ### 3. Horizon Model Selection
@@ -153,15 +171,38 @@ at or before that simulated cursor for model fitting and feature generation.
 Future June demand, TA, TRA, Spin, and observed weather remain hidden. The
 dashboard must label this source as historical SCADA replay/simulation.
 
+The offline pipeline stores direct 1h, 2h, and 6h results keyed by
+`source_cursor_at`. The dashboard mounts those results only on an exact cursor
+match, maps their target times into the display replay year, and uses the same
+profile for operating risk. A mismatched future artifact is ignored.
+
+## Implemented Pipeline Evidence
+
+Running:
+
+```powershell
+venv\Scripts\python.exe scripts\run_scada_replay_pipeline.py `
+  --backfill-weather C:\path\to\junescadadata.zip
+```
+
+produced 2,157 direct-horizon training rows (721 at 1h, 720 at 2h, and
+716 at 6h), 744 Open-Meteo historical weather rows, and three cutoff-safe replay
+forecast artifacts. The validation report marked operating risk ready from
+`CUTOFF_SAFE_REPLAY`, while retaining `PROTOTYPE` validation status.
+
+Open-Meteo archive data is used under its CC BY 4.0 terms. Endpoint reference:
+<https://open-meteo.com/en/docs/historical-weather-api>.
+
 ## Limitations
 
 - The common TA/TRA window is only about 24 days and has limited weekday and
   weather-regime diversity.
 - No outage schedule, holiday calendar, unit commitment plan, or archived
   provider-issuance snapshots were supplied.
+- The past-only weather baseline is leakage-safe but is less informative than a
+  genuine archived forecast run and must not be described as one.
 - `Other` quality requires engineering confirmation before production use.
 - Model accuracy from this archive is prototype evidence only. A 12-month
   export is needed for seasonal, holiday, outage, and regime validation.
 - Production integration still requires a read-only historian, automated CSV
   export, PI/OSIsoft connector, OPC-UA connection, or approved SCADA API.
-

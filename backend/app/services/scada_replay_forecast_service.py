@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from calendar import monthrange
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -78,7 +79,23 @@ class ScadaReplayForecastService:
                         quality_status=result.mode,
                         mae=result.metrics.mae,
                         rmse=result.metrics.rmse,
+                        mape=result.metrics.mape,
                         residual_std=result.metrics.residual_std,
+                        baseline_mae=float(
+                            (result.candidate_metrics or {})
+                            .get("baseline", {})
+                            .get("mae", result.metrics.mae)
+                        ),
+                        ml_beats_baseline=result.ml_beats_baseline,
+                        feature_profile=result.feature_profile,
+                        validation_status=result.validation_status,
+                        training_span_hours=result.training_span_hours,
+                        train_row_count=result.train_rows,
+                        test_row_count=result.test_rows,
+                        candidate_metrics=json.dumps(
+                            result.candidate_metrics or {},
+                            sort_keys=True,
+                        ),
                         training_rows=result.train_rows + result.test_rows,
                         generated_at=generated_at,
                     )

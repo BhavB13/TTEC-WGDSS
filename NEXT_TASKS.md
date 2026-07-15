@@ -2,20 +2,23 @@
 
 ## Recommended Order
 
-1. Obtain historical CSV exports for all five required SCADA tags, with `Avg
-   Value`, `Quality`, and overlapping timestamps.
-2. Run the SCADA replay pipeline and review its preflight warnings, normalized
-   snapshot coverage, baseline comparison, uncertainty, and risk-readiness
-   report. Do not treat a short replay as production validation.
-3. Configure an external supervised refresh schedule only after replay data is
+1. Obtain at least twelve months of exports for the same five tags, including
+   seasonal demand, holidays, outages, maintenance, and dispatch changes.
+2. Have SCADA/control engineering define the operational meaning of `Other`,
+   `Questionable`, and any future quality codes before changing quality gates.
+3. Obtain archived weather forecast runs with genuine issuance timestamps if
+   available; until then retain the explicitly degraded past-observation
+   weather baseline.
+4. Re-run the ZIP replay pipeline, compare every horizon to chronological
+   baselines, inspect residual calibration by horizon/regime, and require an
+   engineering model-approval record before promoting `PROTOTYPE` results.
+5. Configure an external supervised refresh schedule only after replay data is
    adequate and the active model has been reviewed by engineering.
-4. Add a real grid provider only through a controlled historian/API/OPC-UA/CSV
+6. Add a real grid provider only through a controlled historian/API/OPC-UA/CSV
    export integration. Keep `MockGridProvider` available for demo and testing.
-5. Add operational observability before production: structured logs, import and
+7. Add operational observability before production: structured logs, import and
    refresh job monitoring, alert routing, backup/restore checks, and access
    control.
-6. Expand model validation with multiple seasons, public holidays, outages,
-   dispatch constraints, and more weather regimes before relying on ML output.
 
 ## Do Not Do Yet
 
@@ -23,4 +26,6 @@
 - Do not auto-train inside the FastAPI request process.
 - Do not activate ML merely because it runs; it must beat chronological
   baselines and be reviewed with enough representative data.
-- Do not import the calibration Excel archive as raw SCADA CSV telemetry.
+- Do not treat the June historical exports as a live feed or a production model.
+- Do not substitute future actual weather, TA, TRA, Spin, or demand for data
+  that would have been known at forecast issuance time.

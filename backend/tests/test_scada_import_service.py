@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -250,3 +251,25 @@ def test_scada_import_parses_excel_serial_timestamps(tmp_path):
     assert measurement is not None
     assert measurement.start_time.year == 2026
     assert measurement.avg_value == 850
+
+
+def test_scada_import_parses_two_digit_year_and_trims_tag_whitespace(tmp_path):
+    session_factory = _session_factory(tmp_path)
+    csv_path = tmp_path / "future_archive_member.csv"
+    row = list(KNOWN_SCADA_ROWS[0])
+    row[1] = "  PTL132 GENERATION TOTALS  "
+    row[2] = " 06/01/26 12:00 AM "
+    row[3] = "06/01/26 01:18 AM"
+    row[4] = "06/01/26 12:10 AM"
+    row[6] = "06/01/26 01:05 AM"
+    _write_csv(csv_path, rows=[row])
+
+    result = ScadaImportService(session_factory=session_factory).import_csv(csv_path)
+
+    assert result.row_count == 1
+    with session_factory() as session:
+        measurement = session.scalar(select(ScadaRawMeasurement))
+    assert measurement is not None
+    assert measurement.tag_name == "PTL132 GENERATION TOTALS"
+    assert measurement.start_time == datetime(2026, 6, 1, 0, 0)
+    assert measurement.end_time == datetime(2026, 6, 1, 1, 18)

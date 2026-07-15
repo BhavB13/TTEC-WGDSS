@@ -54,15 +54,18 @@ def _write_scada_csv(
     path: Path,
     missing_online_hour: int | None = None,
     excluded_tag: str | None = None,
+    start_at: datetime | None = None,
+    hour_count: int = 9,
 ) -> None:
     rows: list[list[str]] = []
-    for hour in range(9):
+    start = start_at or _ts(0)
+    for hour in range(hour_count):
         for pen_index, tag_name in reversed(SCADA_TAGS):
             if tag_name == excluded_tag:
                 continue
             if tag_name == "GSYS SYSTEM_ONLN_TOTAL" and hour == missing_online_hour:
                 continue
-            timestamp = _ts(hour)
+            timestamp = start + timedelta(hours=hour)
             value = _value_for_tag(tag_name, hour)
             rows.append(
                 [
@@ -177,7 +180,7 @@ def test_full_scada_replay_pipeline_handles_duplicates_and_reports_quality(tmp_p
 
     summary = format_summary(result)
     assert "files imported: 1" in summary
-    assert "preflight aligned Good-quality hours: 8" in summary
+    assert "preflight aligned usable hours: 8" in summary
     assert "duplicates skipped: 1" in summary
     assert "model horizons evaluated: 3" in summary
     assert "1h ML beats baseline: false" in summary
@@ -213,3 +216,30 @@ def test_scada_replay_pipeline_accepts_filename_agnostic_zip_archive(tmp_path):
     assert result.snapshot_result.snapshots_created == 9
     assert result.dataset_result.rows_created == 18
     assert [item.horizon_hours for item in result.training_result.results] == [1, 2, 6]
+
+
+def test_future_archive_pipeline_crosses_year_boundary_without_filename_logic(
+    tmp_path,
+):
+    session_factory = _session_factory(tmp_path)
+    csv_path = tmp_path / "opaque_member.csv"
+    archive_path = tmp_path / "twelve_month_historian_bundle.zip"
+    start = datetime(2031, 12, 31, 20)
+    _write_scada_csv(csv_path, start_at=start, hour_count=9)
+    with ZipFile(archive_path, "w") as archive:
+        archive.write(csv_path, arcname="year-two/telemetry-part-027.csv")
+
+    result = run_pipeline([archive_path], session_factory=session_factory)
+
+    assert result.preflight_report.ready is True
+    assert result.snapshot_result.snapshots_created == 9
+    with session_factory() as session:
+        timestamps = list(
+            session.scalars(
+                select(ScadaGridSnapshot.timestamp).order_by(
+                    ScadaGridSnapshot.timestamp
+                )
+            )
+        )
+    assert timestamps[0] == start
+    assert timestamps[-1] == datetime(2032, 1, 1, 4)

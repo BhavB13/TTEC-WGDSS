@@ -112,6 +112,11 @@ export interface DemandForecastHorizon {
   baseline_name: string;
   baseline_forecast_mw: number;
   quality_status: string;
+  feature_timestamp?: string | null;
+  generated_at?: string | null;
+  feature_profile?: string | null;
+  validation_status?: string | null;
+  training_rows?: number | null;
 }
 
 export interface DemandForecastBundle {
@@ -123,6 +128,13 @@ export interface ModelStatus {
   model_version?: string | null;
   mode: string;
   trained_through?: string | null;
+  generated_at?: string | null;
+  feature_profile?: string | null;
+  validation_status?: string | null;
+  training_span_hours?: number | null;
+  train_row_count?: number | null;
+  test_row_count?: number | null;
+  candidate_metrics?: Record<string, unknown>;
   metrics: {
     mae?: number | null;
     rmse?: number | null;
@@ -138,6 +150,7 @@ export interface ModelStatus {
 export interface ScadaStatus {
   source: string;
   latest_snapshot?: string | null;
+  available_at?: string | null;
   quality_status: string;
   missing_fields: string;
 }

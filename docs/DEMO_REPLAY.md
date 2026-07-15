@@ -66,9 +66,19 @@ June and advances at real-time speed. Step size is configurable as one hour, six
 hours, or one day. Automatic playback also supports one simulated minute, ten
 simulated minutes, one simulated hour, or one simulated day per real second.
 
-The archived outlook passes through synchronized Open-Meteo Best Match, MET
-Norway, and Open-Meteo NOAA GFS source snapshots. See
-`docs/FORECAST_DISPATCH_UPGRADE.md` for merge and dispatch mathematics.
+Synthetic replay weather is derived only from rows revealed by the replay
+cursor. When the historical June SCADA archive is present, Open-Meteo Archive
+observations provide humidity, rainfall, cloud, wind, and pressure; SCADA
+temperature remains authoritative. Future weather uses a same-hour historical
+baseline built only from observations at or before the cursor. It is explicitly
+labelled as a one-source replay baseline, not as a live or archived issued
+forecast.
+
+The offline pipeline may store exact-cursor 1h/2h/6h forecast artifacts. The
+dashboard uses them only when `source_cursor_at` matches the simulated SCADA
+cursor and all feature/target timestamps are valid. Otherwise it falls back to
+the cutoff-safe replay forecast; it never uses a later artifact. See
+`docs/JUNE_SCADA_FORECAST_ASSESSMENT.md` for the evidence and limitations.
 
 API:
 

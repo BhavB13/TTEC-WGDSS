@@ -148,7 +148,9 @@ def test_forecast_dataset_uses_requested_horizons_and_replaces_rows(tmp_path):
         assert session.scalar(select(func.count(ForecastTrainingRow.id))) == 7
 
 
-def test_forecast_dataset_marks_missing_weather_or_forecast_degraded(tmp_path):
+def test_forecast_dataset_uses_past_only_weather_baseline_when_issued_forecast_missing(
+    tmp_path,
+):
     session_factory = _session_factory(tmp_path)
     _seed_snapshots(session_factory, range(0, 3))
     _seed_weather_and_forecast(session_factory, range(0, 2))
@@ -164,9 +166,57 @@ def test_forecast_dataset_marks_missing_weather_or_forecast_degraded(tmp_path):
         ).all()
 
     assert rows[0].source_quality_status == "GOOD"
-    assert rows[1].source_quality_status == "WEATHER_DEGRADED"
+    assert rows[1].source_quality_status == "WEATHER_BASELINE"
     assert rows[1].humidity_percent == 71
-    assert rows[1].forecast_temperature_c is None
+    assert rows[1].forecast_temperature_c == 28.1
+    assert (
+        rows[1].forecast_weather_source
+        == "Historical Weather Baseline (past observations only)"
+    )
+    assert rows[1].forecast_weather_issued_at == _ts(1)
+
+
+def test_historical_weather_baseline_never_reads_observation_after_feature_time(
+    tmp_path,
+):
+    session_factory = _session_factory(tmp_path)
+    _seed_snapshots(session_factory, range(0, 4))
+    _seed_weather_and_forecast(session_factory, range(0, 2))
+    with session_factory() as session:
+        session.add(
+            Weather(
+                timestamp=_ts(3),
+                temperature_c=99,
+                humidity_percent=99,
+                wind_speed_kph=99,
+                wind_direction_deg=90,
+                pressure_hpa=999,
+                precipitation_mm=99,
+                rainfall_mm_hr=99,
+                cloud_cover_percent=99,
+                weather_condition="Future observation",
+                heat_index_c=99,
+                rain_severity="SEVERE",
+                provider_name="FutureWeather",
+            )
+        )
+        session.commit()
+
+    ForecastDatasetService(session_factory=session_factory).build_training_rows(
+        horizons_hours=(1,)
+    )
+
+    with session_factory() as session:
+        row = session.scalar(
+            select(ForecastTrainingRow).where(
+                ForecastTrainingRow.feature_timestamp == _ts(2),
+                ForecastTrainingRow.horizon_hours == 1,
+            )
+        )
+    assert row is not None
+    assert row.forecast_temperature_c < 40
+    assert row.forecast_rainfall_mm_hr < 10
+    assert row.forecast_weather_issued_at == _ts(2)
 
 
 def test_forecast_dataset_rejects_forecasts_created_after_feature_time(tmp_path):
@@ -280,6 +330,27 @@ def test_forecast_dataset_marks_bad_target_snapshot_degraded(tmp_path):
 
     assert row is not None
     assert row.source_quality_status == "SCADA_DEGRADED"
+
+
+def test_conditional_scada_does_not_hide_missing_current_weather(tmp_path):
+    session_factory = _session_factory(tmp_path)
+    _seed_snapshots(session_factory, range(0, 3))
+    with session_factory() as session:
+        for snapshot in session.scalars(select(ScadaGridSnapshot)):
+            snapshot.quality_status = "USABLE_WITH_WARNING"
+        session.commit()
+
+    ForecastDatasetService(session_factory=session_factory).build_training_rows(
+        horizons_hours=(1,)
+    )
+
+    with session_factory() as session:
+        rows = list(session.scalars(select(ForecastTrainingRow)))
+    assert rows
+    assert all(
+        row.source_quality_status == "SCADA_ACCEPTED_WEATHER_DEGRADED"
+        for row in rows
+    )
 
 
 def test_forecast_dataset_builds_future_inference_from_latest_snapshot(tmp_path):

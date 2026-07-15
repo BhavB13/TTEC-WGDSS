@@ -43,7 +43,17 @@ npm run build
 ## Historical SCADA Replay
 
 Historical exports are a prototype/replay input, not a live SCADA feed. Supply
-CSV files containing the five required tags and overlapping timestamps:
+one filename-independent ZIP archive or CSV files containing the five required
+tags and overlapping timestamps. For the supplied June archive:
+
+```powershell
+cd backend
+venv\Scripts\python.exe -m alembic upgrade head
+venv\Scripts\python.exe scripts\run_scada_replay_pipeline.py `
+  --backfill-weather C:\Users\<user>\Downloads\junescadadata.zip
+```
+
+For separate CSV exports:
 
 ```powershell
 cd backend
@@ -54,9 +64,22 @@ venv\Scripts\python.exe scripts\run_scada_replay_pipeline.py `
 ```
 
 The pipeline performs a preflight before database mutation. It rejects missing
-required tags, missing Good-quality samples, or fewer than eight aligned hourly
-samples. Review its baseline/ML metrics and risk-readiness output before using
-the resulting model status in an operational discussion.
+required tags or fewer than eight interval-aligned usable hourly samples. It
+normalizes two-digit timestamps and tag whitespace, deduplicates CSV content,
+resamples by interval overlap, preserves quality, builds 1h/2h/6h datasets,
+compares chronological baselines and ML candidates, and stores a forecast for
+the exact current June replay cursor. `Other` remains conditionally usable and
+never becomes `Good`.
+
+`--backfill-weather` makes one free Open-Meteo Archive API request for the SCADA
+date range and stores observed feature-time weather. It does not fabricate
+issued historical forecasts. When no archived forecast run is available, the
+dataset builds a past-observation hourly weather baseline and marks its quality.
+
+Re-run the pipeline after the simulated replay cursor changes if direct
+per-horizon artifacts are required at that exact cursor. If none matches, the
+dashboard uses its cutoff-safe replay forecast and never substitutes a model
+trained through a later source row.
 
 ## Supervised Forecast Refresh
 

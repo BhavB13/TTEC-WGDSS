@@ -22,8 +22,8 @@ from app.services.demand_forecast_baselines import (
 )
 from app.services.forecast_dataset_service import ForecastDatasetService
 
-MODEL_VERSION = "demand-forecast-v2.0"
-FEATURE_PROFILE = "demand_weather_v2"
+MODEL_VERSION = "demand-forecast-v2.1"
+FEATURE_PROFILE = "demand_weather_v2_1"
 MIN_FORECAST_UNCERTAINTY_MW = 5.0
 MIN_FORECAST_UNCERTAINTY_DEMAND_RATIO = 0.015
 MIN_ML_TRAIN_ROWS = 48
@@ -759,6 +759,8 @@ def _feature_vector(
         vector.append(float(value) if value is not None else fill_values[column])
     target_hour_angle = 2.0 * math.pi * row.target_timestamp.hour / 24.0
     target_day_angle = 2.0 * math.pi * row.target_timestamp.weekday() / 7.0
+    current_demand = max(0.0, float(row.current_demand_mw))
+    demand_scale = current_demand / 1000.0
     temperature = _filled(row.temperature_c, fill_values["temperature_c"])
     humidity = _filled(row.humidity_percent, fill_values["humidity_percent"])
     forecast_temperature = _filled(row.forecast_temperature_c, temperature)
@@ -778,6 +780,10 @@ def _feature_vector(
     )
     rainfall = max(0.0, _filled(row.rainfall_mm_hr, 0.0))
     forecast_rainfall = max(0.0, _filled(row.forecast_rainfall_mm_hr, 0.0))
+    cooling_degree = max(0.0, temperature - 24.0)
+    forecast_cooling_degree = max(0.0, forecast_temperature - 24.0)
+    demand_rate = _filled(row.demand_rate_1h_mw, 0.0)
+    temperature_rate = _filled(row.temperature_rate_1h_c, 0.0)
     vector.extend(
         (
             math.sin(target_hour_angle),
@@ -785,9 +791,12 @@ def _feature_vector(
             math.sin(target_day_angle),
             math.cos(target_day_angle),
             1.0 if row.target_timestamp.weekday() >= 5 else 0.0,
-            max(0.0, temperature - 24.0),
-            max(0.0, forecast_temperature - 24.0),
-            max(0.0, temperature - 24.0) * humidity / 100.0,
+            cooling_degree,
+            forecast_cooling_degree,
+            cooling_degree * humidity / 100.0,
+            cooling_degree * demand_scale,
+            forecast_cooling_degree * demand_scale,
+            temperature_rate * demand_rate / 100.0,
             forecast_temperature - temperature,
             forecast_humidity - humidity,
             forecast_wind_speed - wind_speed,
@@ -851,6 +860,8 @@ def _training_sample_weights(rows: list[ForecastTrainingRow]) -> list[float]:
         elif quality in {
             "WEATHER_DEGRADED",
             "SCADA_ACCEPTED_WEATHER_DEGRADED",
+            "WEATHER_BASELINE",
+            "SCADA_ACCEPTED_WEATHER_BASELINE",
         }:
             quality_weight = WEATHER_DEGRADED_WEIGHT
         else:

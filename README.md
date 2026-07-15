@@ -79,6 +79,12 @@ historical SCADA CSV pipeline, calibration profiles, forecasting services, and
 risk engine remain available. See `docs/DEMO_REPLAY.md` for replay architecture,
 provenance, forecast leakage controls, and the production replacement path.
 
+The SCADA pipeline now accepts a filename-independent ZIP containing Demand,
+Temperature, Spin, TA, and TRA exports. It resamples irregular intervals by
+timestamp overlap, compares chronological baselines with three ML families for
+1h/2h/6h demand, and can overlay the historical June source at the simulated
+cursor. This remains prototype replay data and is never labelled live SCADA.
+
 The six-hour pipeline now reconciles Open-Meteo Best Match, MET Norway, and
 Open-Meteo NOAA GFS by timestamp and field. June synchronizes to the current
 Trinidad clock, demand forecasts use validated weather features, and dispatch

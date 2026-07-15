@@ -162,7 +162,7 @@ def _archive_preflight_report(
 def format_summary(result: ScadaReplayPipelineResult) -> str:
     lines = [
         "SCADA Replay Pipeline Summary",
-        f"preflight aligned Good-quality hours: {result.preflight_report.aligned_hour_count}",
+        f"preflight aligned usable hours: {result.preflight_report.aligned_hour_count}",
         f"files imported: {result.files_imported}",
         f"duplicates skipped: {result.duplicates_skipped}",
         f"raw rows stored: {result.raw_rows_stored}",
@@ -213,7 +213,8 @@ def format_summary(result: ScadaReplayPipelineResult) -> str:
             (
                 "risk-engine readiness: "
                 f"{report.risk_readiness.status} "
-                f"(ready={str(report.risk_readiness.ready).lower()})"
+                f"(ready={str(report.risk_readiness.ready).lower()}, "
+                f"source={report.risk_readiness.forecast_source})"
             ),
         ]
     )

@@ -27,9 +27,15 @@ The response contains:
   },
   "model_status": {
     "active_model": "persistence",
-    "model_version": "demand-forecast-v1.3",
+    "model_version": "demand-forecast-v2.1",
     "mode": "BASELINE_ACTIVE",
     "trained_through": "2026-06-30T09:00:00Z",
+    "feature_profile": "demand_weather_v2_1",
+    "validation_status": "PROTOTYPE",
+    "training_span_hours": 550,
+    "train_row_count": 440,
+    "test_row_count": 110,
+    "candidate_metrics": {},
     "metrics": {
       "mae": 10,
       "rmse": 12,
@@ -44,6 +50,7 @@ The response contains:
   "scada_status": {
     "source": "historical_csv",
     "latest_snapshot": "2026-06-30T08:00:00Z",
+    "available_at": "2026-06-30T09:00:00Z",
     "quality_status": "GOOD",
     "missing_fields": ""
   },
@@ -104,13 +111,15 @@ After the replay-clock migration, the initial `cursor_at` maps the current
 Trinidad day/hour into June, `clock_aligned` is true, and playback starts at
 real-time speed. `reset` is presented as **Sync Now** and repeats this mapping.
 
-Each hourly forecast item includes `source_count`, `source_names`,
+Each normal/live hourly forecast item includes `source_count`, `source_names`,
 `temperature_spread_c`, and `cloud_cover_spread_percent`. The normal operating
 path reconciles Open-Meteo Best Match, MET Norway Locationforecast, and NOAA GFS
 by timestamp. `source_sync_status` is `COMPLETE` only when all three sources are
 present for that hour, and `field_source_counts` shows per-field coverage.
-`confidence_score` is reduced when sources disagree or are unavailable. Imported SCADA temperature remains calibration
-metadata; it does not replace a live weather observation.
+`confidence_score` is reduced when sources disagree or are unavailable.
+Historical SCADA replay instead exposes a one-source, past-only weather baseline
+and uses imported SCADA temperature as the measured replay temperature. It does
+not replace a live weather observation outside replay.
 
 Probability and recommendation objects retain their original fields and also
 expose `decision_action`, `generator_set`, `recommended_capacity_mw`,
@@ -119,17 +128,17 @@ expose `decision_action`, `generator_set`, `recommended_capacity_mw`,
 `weather_effect_mw`. These fields explain generator startup guidance; they do
 not execute dispatch.
 
-`demand_forecast`, `model_status`, and `scada_status` are optional. They appear
-after historical SCADA CSVs have been imported, normalized into grid snapshots,
-converted into forecast training rows, and evaluated by the demand-forecast
-service. If these model outputs are unavailable, existing weather/grid/mock
-dashboard behavior remains unchanged.
+`demand_forecast`, `model_status`, and `scada_status` remain optional for normal
+provider mode. Replay returns cursor-consistent status and forecast values. If
+an offline 1h/2h/6h artifact matches the historical source cursor exactly, the
+API exposes that artifact and its audit metadata; otherwise it uses the
+cutoff-safe replay forecast and never substitutes a later historical model.
 
-When a latest 1-hour demand forecast and latest SCADA grid snapshot are present,
+When a coherent forecast generation cohort and latest SCADA grid snapshot are present,
 the probability/recommendation block may be produced by the operating-risk
 engine. That engine compares forecast demand and uncertainty against safe online
-capacity. It is still a historical-export modeling foundation, not a live SCADA
-stream.
+capacity across all valid 1h/2h/6h horizons. It is still a historical-export
+modeling foundation, not a live SCADA stream.
 
 ## Health
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -48,14 +48,16 @@ def _add_measurement(
     avg_value: float,
     quality: str = "Good",
     pen_index: int = 1,
+    end_time: datetime | None = None,
 ) -> None:
+    interval_end = end_time or start_time
     session.add(
         ScadaRawMeasurement(
             import_run_id=import_run_id,
             pen_index=pen_index,
             tag_name=tag_name,
             start_time=start_time,
-            end_time=start_time,
+            end_time=interval_end,
             min_time=start_time,
             min_value=avg_value,
             max_time=start_time,
@@ -249,3 +251,97 @@ def test_non_good_quality_creates_degraded_snapshot(tmp_path):
         snapshot = session.scalar(select(ScadaGridSnapshot))
     assert snapshot is not None
     assert snapshot.quality_status == "DEGRADED"
+
+
+def test_interval_overlap_resampling_weights_irregular_exports_by_timestamp(tmp_path):
+    session_factory = _session_factory(tmp_path)
+    import_run_id = _seed_import_run(session_factory)
+    with session_factory() as session:
+        _add_measurement(
+            session,
+            import_run_id,
+            "PTL132 GENERATION TOTALS",
+            _dt(8, 30),
+            800,
+            end_time=_dt(9, 30),
+        )
+        _add_measurement(
+            session,
+            import_run_id,
+            "PTL132 GENERATION TOTALS",
+            _dt(9, 30),
+            1000,
+            end_time=_dt(10, 30),
+            pen_index=2,
+        )
+        for pen_index, (tag, value) in enumerate(
+            (
+                ("MHO132 AVERAGE AMBIENT TEMPERATURE", 30),
+                ("GSYS SYSTEM_CORRECTED_SPIN_TOTAL", 120),
+                ("GSYS SYSTEM_AVAIL_TOTAL", 1500),
+                ("GSYS SYSTEM_ONLN_TOTAL", 1250),
+            ),
+            start=3,
+        ):
+            _add_measurement(
+                session,
+                import_run_id,
+                tag,
+                _dt(9),
+                value,
+                end_time=_dt(9) + timedelta(hours=1),
+                pen_index=pen_index,
+            )
+        session.commit()
+
+    ScadaSnapshotService(session_factory=session_factory).build_hourly_snapshots(
+        import_run_id=import_run_id
+    )
+
+    with session_factory() as session:
+        snapshot = session.scalar(
+            select(ScadaGridSnapshot).where(
+                ScadaGridSnapshot.timestamp == _dt(9).replace(tzinfo=None)
+            )
+        )
+    assert snapshot is not None
+    assert snapshot.current_demand_mw == 900
+    assert snapshot.quality_status == "GOOD"
+    assert snapshot.coverage_percent == 100
+    assert snapshot.resampling_method == "interval_overlap_hourly"
+
+
+def test_other_quality_is_preserved_as_conditionally_usable_not_good(tmp_path):
+    session_factory = _session_factory(tmp_path)
+    import_run_id = _seed_import_run(session_factory)
+    values = (
+        ("PTL132 GENERATION TOTALS", 900),
+        ("MHO132 AVERAGE AMBIENT TEMPERATURE", 30),
+        ("GSYS SYSTEM_CORRECTED_SPIN_TOTAL", 100),
+        ("GSYS SYSTEM_AVAIL_TOTAL", 1450),
+        ("GSYS SYSTEM_ONLN_TOTAL", 1250),
+    )
+    with session_factory() as session:
+        for pen_index, (tag, value) in enumerate(values, start=1):
+            _add_measurement(
+                session,
+                import_run_id,
+                tag,
+                _dt(9),
+                value,
+                quality="Other",
+                pen_index=pen_index,
+            )
+        session.commit()
+
+    result = ScadaSnapshotService(
+        session_factory=session_factory
+    ).build_hourly_snapshots(import_run_id=import_run_id)
+
+    assert result.degraded_snapshots == 0
+    assert result.conditional_snapshots == 1
+    with session_factory() as session:
+        snapshot = session.scalar(select(ScadaGridSnapshot))
+    assert snapshot is not None
+    assert snapshot.quality_status == "USABLE_WITH_WARNING"
+    assert "Conditionally accepted 'Other' quality" in snapshot.quality_notes

@@ -6,7 +6,8 @@ This upgrade moves WGDSS from mostly rule-based, mock-grid decision support towa
 
 ### Implemented Mathematical Hardening
 
-The current `v1.4` forecasting implementation and `v1.3` operating-risk implementation add these integrity controls:
+The current `demand-forecast-v2.1` implementation and
+`operating-risk-v2.0` engine add these integrity controls:
 
 - Baseline and ML evaluation use chronological outer holdout data.
 - Baseline choice and ML parameter choice use expanding-window walk-forward validation inside the training period, leaving the outer holdout untouched until final evaluation.
@@ -14,8 +15,10 @@ The current `v1.4` forecasting implementation and `v1.3` operating-risk implemen
 - Daily and weekly cycles use sine/cosine encoding so midnight and adjacent days remain mathematically close.
 - Model features retain target-hour forecast humidity, wind speed, precipitation probability, and current pressure instead of discarding fields already supplied by the weather providers.
 - Contemporaneous SCADA spinning reserve, available capacity, online capacity,
-  reserve margin, and online spare values are retained as operating-context
-  features without using future dispatch data.
+  reserve margin, and online spare values are retained in the auditable dataset
+  and used by operating risk. June benchmarks showed that these dispatch-response
+  variables worsened demand generalization, so the default demand-model vector
+  excludes them.
 - Cooling-degree, temperature/humidity interaction, forecast-temperature delta, transformed rainfall, source-quality, and missing-value indicators are generated without changing the stored training schema.
 - Forecast weather is eligible for a training row only when its `created_at` timestamp proves it was available at the feature timestamp.
 - Bad SCADA feature/target rows are excluded from model fitting; weather-degraded rows remain usable with explicit missingness indicators.
@@ -24,7 +27,13 @@ The current `v1.4` forecasting implementation and `v1.3` operating-risk implemen
 - Forecast uncertainty is calibrated from residual standard deviation, MAE/RMSE floors, demand/horizon floors, and the empirical 90th-percentile absolute error.
 - Historical replay/backtest forecasts cannot drive the live dashboard recommendation. Live use requires fresh generation time, fresh SCADA, good quality, and a forecast target strictly after the latest SCADA timestamp.
 - After model/baseline selection, the active method is refit on all eligible historical rows and applied to a separate inference row built from the newest good SCADA snapshot. The stored timestamp is therefore a genuine future 1h, 2h, or 6h target when current inference inputs exist.
-- Inference without complete target-hour weather is marked degraded and receives a 25% uncertainty expansion; degraded inference cannot silently drive live operating guidance.
+- When no archived provider-issued forecast is available, target-hour weather
+  uses an explicitly labelled baseline built only from past observations. It is
+  down-weighted and receives degraded uncertainty treatment; future observed
+  weather is never used.
+- The offline replay pipeline stores exact-cursor 1h/2h/6h results. Dashboard
+  replay uses them only when the artifact cursor matches the simulated source
+  cursor; later artifacts cannot drive an earlier replay decision.
 - The rule-based fallback now estimates demand transparently and sends it through the operating-risk probability engine; it no longer presents an arbitrary additive score as a probability.
 
 Current SCADA files are historical exports, not a live SCADA stream. The first implementation should support prototype modeling, replay, validation, and calibration. Production SCADA integration should later use automated CSV export, historian database access, PI/OSIsoft, OPC-UA, or a formal SCADA API.
@@ -926,13 +935,25 @@ Low.
 
 The backend now supports the following offline/prototype SCADA math pipeline:
 
-1. Import historical SCADA CSV exports with `backend/scripts/import_scada_csv.py`.
-2. Build normalized hourly SCADA grid snapshots with `backend/scripts/build_scada_snapshots.py`.
-3. Build model-ready training rows with `backend/scripts/build_forecast_training_rows.py`.
-4. Train/evaluate baselines and optional ML with `backend/scripts/train_demand_forecast_model.py`.
-5. Expose optional model and SCADA status through `/api/dashboard/snapshot`.
+1. Import separate CSVs or a filename-independent ZIP archive with content-hash
+   deduplication, two-digit timestamp support, and quality preservation.
+2. Resample irregular source intervals into hourly snapshots by timestamp
+   overlap, recording coverage, missing fields, and conditional quality.
+3. Optionally backfill observed Open-Meteo historical weather for the SCADA
+   range without presenting it as an archived issued forecast.
+4. Build leakage-safe 1h/2h/6h training and inference rows using each snapshot's
+   explicit availability time.
+5. Compare five chronological baselines plus Ridge,
+   HistGradientBoostingRegressor, and RandomForestRegressor per horizon.
+6. Persist model metrics, uncertainty, feature profile, candidate metrics, and
+   exact-cursor replay artifacts outside API requests.
+7. Expose cursor-consistent forecast/model/SCADA status through
+   `/api/dashboard/snapshot` and evaluate the full horizon profile with TA, TRA,
+   Spin, reserve, uncertainty, and startup constraints.
 
-The current pipeline is still a historical-export modeling foundation. It is not a live SCADA stream.
+Phases 1-7 are implemented as a historical-export prototype. This is not a live
+SCADA stream, the June model remains `PROTOTYPE`, and engineering review plus a
+representative 12-month dataset are required before operational trust.
 
 ## Dashboard Snapshot Additions
 
@@ -948,7 +969,7 @@ The dashboard snapshot may now include these optional objects:
         "forecast_demand_mw": 1040,
         "forecast_uncertainty_mw": 30,
         "model_name": "persistence",
-        "model_version": "demand-forecast-v1.4",
+        "model_version": "demand-forecast-v2.1",
         "baseline_name": "persistence",
         "baseline_forecast_mw": 1030,
         "quality_status": "BASELINE_ACTIVE"
@@ -957,7 +978,7 @@ The dashboard snapshot may now include these optional objects:
   },
   "model_status": {
     "active_model": "persistence",
-    "model_version": "demand-forecast-v1.4",
+    "model_version": "demand-forecast-v2.1",
     "mode": "BASELINE_ACTIVE",
     "trained_through": "2026-06-30T09:00:00Z",
     "metrics": {
