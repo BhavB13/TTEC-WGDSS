@@ -58,6 +58,7 @@ def test_replay_dashboard_exposes_history_forecast_and_no_future_actuals(replay_
         for point in replay.full_day_load_forecast[11:]
     )
     assert len(context["forecast"]) == 24
+    assert context["forecast"][0]["forecast_timestamp"] == "2025-06-15T11:00:00-04:00"
     assert all(item["source_count"] == 3 for item in context["forecast"][:6])
     assert all(item["source_sync_status"] == "COMPLETE" for item in context["forecast"][:6])
     assert replay.summary.training_rows > 3000
