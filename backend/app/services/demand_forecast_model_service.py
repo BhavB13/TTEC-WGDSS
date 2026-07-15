@@ -110,7 +110,25 @@ class HorizonModelResult:
     feature_profile: str = FEATURE_PROFILE
     validation_status: str = "PROTOTYPE"
     training_span_hours: int = 0
-    candidate_metrics: dict[str, dict[str, float | str]] | None = None
+    candidate_metrics: dict[str, dict[str, float | str | bool | int]] | None = None
+
+
+@dataclass(frozen=True)
+class _ModelCandidate:
+    candidate_id: str
+    model_name: str
+    family: str
+    params: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class _MLPredictionResult:
+    predictions: list[float]
+    latest_prediction: float
+    selected_candidate: _ModelCandidate
+    validation_metrics: ForecastMetrics
+    validation_bias_mw: float
+    candidate_metrics: dict[str, dict[str, float | str | bool | int]]
 
 
 @dataclass(frozen=True)
@@ -237,10 +255,22 @@ class DemandForecastModelService:
         active_metrics = baseline_metrics
         ml_metrics = None
         ml_beats_baseline = False
+        selected_candidate: _ModelCandidate | None = None
+        candidate_metrics: dict[str, dict[str, float | str | bool | int]] = {}
 
         ml_prediction_result = self._try_ml_model(train_rows, test_rows)
         if ml_prediction_result is not None:
-            ml_predictions, latest_prediction = ml_prediction_result
+            if isinstance(ml_prediction_result, _MLPredictionResult):
+                ml_predictions = ml_prediction_result.predictions
+                latest_prediction = ml_prediction_result.latest_prediction
+                selected_candidate = ml_prediction_result.selected_candidate
+                candidate_metrics = ml_prediction_result.candidate_metrics
+                selected_model_name = selected_candidate.model_name
+            else:
+                # Backwards-compatible path for small test doubles and callers
+                # that used the former private tuple return value.
+                ml_predictions, latest_prediction = ml_prediction_result
+                selected_model_name = "HistGradientBoostingRegressor"
             ml_metrics = _metrics(_targets(test_rows), ml_predictions)
             improvement_threshold = 1.0 - MIN_ML_IMPROVEMENT_RATIO
             ml_beats_baseline = (
@@ -248,7 +278,7 @@ class DemandForecastModelService:
                 and ml_metrics.rmse < baseline_metrics.rmse * improvement_threshold
             )
             if ml_beats_baseline:
-                active_model = "HistGradientBoostingRegressor"
+                active_model = selected_model_name
                 mode = "ML_ACTIVE"
                 forecast_prediction = latest_prediction
                 active_predictions = ml_predictions
@@ -273,9 +303,20 @@ class DemandForecastModelService:
             )
             forecast_prediction = baseline_forecast
             if ml_beats_baseline:
-                inference_result = self._try_ml_model(rows, [inference_row])
-                if inference_result is not None:
-                    forecast_prediction = inference_result[0][0]
+                if selected_candidate is not None:
+                    forecast_prediction = self._candidate_inference_prediction(
+                        selected_candidate,
+                        rows,
+                        inference_row,
+                    )
+                else:
+                    inference_result = self._try_ml_model(rows, [inference_row])
+                    if inference_result is not None:
+                        forecast_prediction = (
+                            inference_result.predictions[0]
+                            if isinstance(inference_result, _MLPredictionResult)
+                            else inference_result[0][0]
+                        )
             if inference_row.source_quality_status != "GOOD":
                 mode = f"{mode}_DEGRADED"
 
@@ -325,6 +366,7 @@ class DemandForecastModelService:
             training_span_hours=training_span_hours,
             validation_status=validation_status,
             candidate_metrics={
+                **candidate_metrics,
                 "active": {
                     "model": active_model,
                     "mae": active_metrics.mae,
@@ -423,99 +465,141 @@ class DemandForecastModelService:
         self,
         train_rows: list[ForecastTrainingRow],
         test_rows: list[ForecastTrainingRow],
-    ) -> tuple[list[float], float] | None:
+    ) -> _MLPredictionResult | tuple[list[float], float] | None:
         if len(train_rows) < MIN_ML_TRAIN_ROWS:
             return None
         try:
-            from sklearn.ensemble import HistGradientBoostingRegressor
+            import sklearn  # noqa: F401
         except Exception:
             return None
 
         validation_folds = _walk_forward_splits(train_rows)
         smallest_fold = min(len(fold_train) for fold_train, _ in validation_folds)
         min_samples_leaf = max(5, min(20, smallest_fold // 12))
-        candidates = (
-            {
-                "loss": "absolute_error",
-                "learning_rate": 0.05,
-                "max_iter": 250,
-                "max_leaf_nodes": 15,
-                "min_samples_leaf": min_samples_leaf,
-                "l2_regularization": 1.0,
-            },
-            {
-                "loss": "squared_error",
-                "learning_rate": 0.05,
-                "max_iter": 250,
-                "max_leaf_nodes": 15,
-                "min_samples_leaf": min_samples_leaf,
-                "l2_regularization": 2.0,
-            },
-        )
-        selected_params = min(
-            candidates,
-            key=lambda params: self._walk_forward_ml_score(
-                HistGradientBoostingRegressor,
+        candidates = self._model_candidates(min_samples_leaf)
+        scored: list[
+            tuple[_ModelCandidate, ForecastMetrics, float, list[float], list[float]]
+        ] = []
+        for candidate in candidates:
+            actual, raw_predictions = self._walk_forward_candidate_predictions(
+                candidate,
                 validation_folds,
-                params,
+            )
+            bias = _median_residual(actual, raw_predictions)
+            corrected = _apply_bias(raw_predictions, bias)
+            scored.append(
+                (candidate, _metrics(actual, corrected), bias, actual, corrected)
+            )
+        selected_candidate, validation_metrics, bias, _, _ = min(
+            scored,
+            key=lambda item: (
+                item[1].mae,
+                item[1].rmse,
+                item[1].mape,
+                item[0].candidate_id,
             ),
         )
-        validation_actual, validation_predictions = self._walk_forward_ml_predictions(
-            HistGradientBoostingRegressor,
-            validation_folds,
-            selected_params,
-        )
-        bias = _median_residual(validation_actual, validation_predictions)
-        predictions = self._fit_ml_predictions(
-            HistGradientBoostingRegressor,
+        predictions = self._fit_candidate_predictions(
+            selected_candidate,
             train_rows,
             test_rows,
-            selected_params,
         )
         corrected = _apply_bias(predictions, bias)
-        return corrected, corrected[-1]
-
-    def _walk_forward_ml_score(
-        self,
-        model_class: Any,
-        folds: list[tuple[list[ForecastTrainingRow], list[ForecastTrainingRow]]],
-        params: dict[str, Any],
-    ) -> tuple[float, float, float]:
-        actual, predicted = self._walk_forward_ml_predictions(
-            model_class,
-            folds,
-            params,
+        candidate_metrics = {
+            candidate.candidate_id: {
+                "model": candidate.model_name,
+                "family": candidate.family,
+                "validation_mae": metrics.mae,
+                "validation_rmse": metrics.rmse,
+                "validation_mape": metrics.mape,
+                "validation_residual_std": metrics.residual_std,
+                "selected": candidate.candidate_id == selected_candidate.candidate_id,
+            }
+            for candidate, metrics, _, _, _ in scored
+        }
+        return _MLPredictionResult(
+            predictions=corrected,
+            latest_prediction=corrected[-1],
+            selected_candidate=selected_candidate,
+            validation_metrics=validation_metrics,
+            validation_bias_mw=bias,
+            candidate_metrics=candidate_metrics,
         )
-        corrected = _apply_bias(predicted, _median_residual(actual, predicted))
-        metrics = _metrics(actual, corrected)
-        return metrics.mae, metrics.rmse, metrics.mape
 
-    def _walk_forward_ml_predictions(
+    @staticmethod
+    def _model_candidates(min_samples_leaf: int) -> tuple[_ModelCandidate, ...]:
+        return (
+            _ModelCandidate(
+                candidate_id="ridge_alpha_10",
+                model_name="Ridge",
+                family="ridge",
+                params={"alpha": 10.0},
+            ),
+            _ModelCandidate(
+                candidate_id="hist_gradient_boosting",
+                model_name="HistGradientBoostingRegressor",
+                family="hist_gradient_boosting",
+                params={
+                    "loss": "absolute_error",
+                    "learning_rate": 0.05,
+                    "max_iter": 250,
+                    "max_leaf_nodes": 15,
+                    "min_samples_leaf": min_samples_leaf,
+                    "l2_regularization": 1.0,
+                },
+            ),
+            _ModelCandidate(
+                candidate_id="random_forest",
+                model_name="RandomForestRegressor",
+                family="random_forest",
+                params={
+                    "n_estimators": 160,
+                    "max_depth": 10,
+                    "min_samples_leaf": max(2, min_samples_leaf // 2),
+                    "max_features": 0.75,
+                    "n_jobs": 1,
+                },
+            ),
+        )
+
+    def _candidate_inference_prediction(
         self,
-        model_class: Any,
+        candidate: _ModelCandidate,
+        rows: list[ForecastTrainingRow],
+        inference_row: ForecastTrainingRow,
+    ) -> float:
+        folds = _walk_forward_splits(rows)
+        actual, predicted = self._walk_forward_candidate_predictions(
+            candidate,
+            folds,
+        )
+        bias = _median_residual(actual, predicted)
+        raw = self._fit_candidate_predictions(candidate, rows, [inference_row])[0]
+        return max(0.0, raw + bias)
+
+    def _walk_forward_candidate_predictions(
+        self,
+        candidate: _ModelCandidate,
         folds: list[tuple[list[ForecastTrainingRow], list[ForecastTrainingRow]]],
-        params: dict[str, Any],
     ) -> tuple[list[float], list[float]]:
         actual: list[float] = []
         predicted: list[float] = []
         for fold_train, fold_validation in folds:
             actual.extend(_targets(fold_validation))
             predicted.extend(
-                self._fit_ml_predictions(
-                    model_class,
+                self._fit_candidate_predictions(
+                    candidate,
                     fold_train,
                     fold_validation,
-                    params,
                 )
             )
         return actual, predicted
 
     @staticmethod
-    def _fit_ml_predictions(
-        model_class: Any,
+    def _fit_candidate_predictions(
+        candidate: _ModelCandidate,
         train_rows: list[ForecastTrainingRow],
         test_rows: list[ForecastTrainingRow],
-        params: dict[str, Any],
     ) -> list[float]:
         fill_values = _feature_fill_values(train_rows)
         x_train = [_feature_vector(row, fill_values) for row in train_rows]
@@ -523,9 +607,37 @@ class DemandForecastModelService:
         x_test = [_feature_vector(row, fill_values) for row in test_rows]
         sample_weights = _training_sample_weights(train_rows)
 
-        model = model_class(random_state=42, **params)
-        model.fit(x_train, y_train, sample_weight=sample_weights)
-        return [max(0.0, float(value)) for value in model.predict(x_test)]
+        if candidate.family == "ridge":
+            from sklearn.linear_model import Ridge
+            from sklearn.preprocessing import StandardScaler
+
+            scaler = StandardScaler()
+            scaled_train = scaler.fit_transform(x_train)
+            scaled_test = scaler.transform(x_test)
+            model = Ridge(**candidate.params)
+            model.fit(scaled_train, y_train, sample_weight=sample_weights)
+            predicted = model.predict(scaled_test)
+        elif candidate.family == "hist_gradient_boosting":
+            from sklearn.ensemble import HistGradientBoostingRegressor
+
+            model = HistGradientBoostingRegressor(
+                random_state=42,
+                **candidate.params,
+            )
+            model.fit(x_train, y_train, sample_weight=sample_weights)
+            predicted = model.predict(x_test)
+        elif candidate.family == "random_forest":
+            from sklearn.ensemble import RandomForestRegressor
+
+            model = RandomForestRegressor(
+                random_state=42,
+                **candidate.params,
+            )
+            model.fit(x_train, y_train, sample_weight=sample_weights)
+            predicted = model.predict(x_test)
+        else:
+            raise ValueError(f"Unsupported model family: {candidate.family}")
+        return [max(0.0, float(value)) for value in predicted]
 
 
 def _targets(rows: list[ForecastTrainingRow]) -> list[float]:

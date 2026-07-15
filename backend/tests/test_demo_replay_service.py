@@ -7,6 +7,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.models.base import Base
 from app.models.demo_replay import DemoObservation, DemoReplayState
+from app.models.scada import ScadaGridSnapshot
+from app.models.weather import Weather
 from app.schemas.replay import ReplayControlRequest
 from app.services.demo_replay_service import DemoReplayService
 
@@ -59,7 +61,11 @@ def test_replay_dashboard_exposes_history_forecast_and_no_future_actuals(replay_
     )
     assert len(context["forecast"]) == 24
     assert context["forecast"][0]["forecast_timestamp"] == "2025-06-15T11:00:00-04:00"
-    assert all(item["source_count"] == 3 for item in context["forecast"][:6])
+    assert all(item["source_count"] == 1 for item in context["forecast"][:6])
+    assert all(
+        item["source_names"] == ["Replay Historical Weather Baseline"]
+        for item in context["forecast"][:6]
+    )
     assert all(item["source_sync_status"] == "COMPLETE" for item in context["forecast"][:6])
     assert replay.summary.training_rows > 3000
     assert replay.summary.forecast_mae_mw <= replay.summary.baseline_mae_mw
@@ -90,3 +96,83 @@ def test_replay_control_steps_configures_and_resets_cursor(replay_service):
     assert reset.cursor_at == datetime(2025, 6, 15, 10)
     assert reset.is_playing is True
     assert reset.speed_multiplier == 1
+
+
+def test_june_scada_overlay_maps_completed_interval_without_future_leakage(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'scada-replay.db'}")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    clock = lambda: datetime(
+        2026,
+        7,
+        15,
+        10,
+        42,
+        tzinfo=ZoneInfo("America/Port_of_Spain"),
+    )
+    service = DemoReplayService(session_factory=session_factory, clock=clock)
+    service.ensure_seeded()
+    start = datetime(2026, 6, 1)
+    with session_factory() as session:
+        for offset in range(15 * 24):
+            timestamp = start + timedelta(hours=offset)
+            available_at = timestamp + timedelta(hours=1)
+            demand = 900 + timestamp.day * 10 + timestamp.hour
+            if timestamp == datetime(2026, 6, 15, 10):
+                demand = 9999
+            session.add(
+                ScadaGridSnapshot(
+                    timestamp=timestamp,
+                    available_at=available_at,
+                    current_demand_mw=demand,
+                    temperature_c=29 + timestamp.hour * 0.05,
+                    spinning_reserve_mw=200,
+                    available_capacity_mw=1450,
+                    online_capacity_mw=1300,
+                    reserve_margin_mw=1450 - demand,
+                    reserve_margin_percent=(1450 - demand) / demand * 100,
+                    online_spare_mw=1300 - demand,
+                    quality_status="USABLE_WITH_WARNING",
+                    missing_fields="",
+                    coverage_percent=100,
+                    quality_notes="Conditionally accepted Other quality",
+                    resampling_method="interval_overlap_hourly",
+                    source="future-filename.csv",
+                )
+            )
+            session.add(
+                Weather(
+                    timestamp=available_at,
+                    temperature_c=28,
+                    humidity_percent=78,
+                    wind_speed_kph=14,
+                    wind_direction_deg=85,
+                    pressure_hpa=1013,
+                    precipitation_mm=0.1,
+                    rainfall_mm_hr=0.1,
+                    cloud_cover_percent=60,
+                    weather_condition="Partly cloudy",
+                    heat_index_c=30,
+                    rain_severity="LIGHT",
+                    provider_name="Open-Meteo Historical Weather",
+                    created_at=available_at,
+                )
+            )
+        session.commit()
+
+    context = service.get_dashboard_context()
+
+    assert context is not None
+    assert context["grid"]["current_demand_mw"] == 1059
+    assert context["grid"]["source_provider"] == "HistoricalScadaSimulatedReplay"
+    assert context["grid"]["quality_status"] == "UNCERTAIN"
+    assert context["weather"]["temperature_c"] == 29.45
+    assert context["weather"]["humidity_percent"] == 78
+    assert all(
+        point.actual_demand_mw is None
+        for point in context["replay"].full_day_load_forecast[11:]
+    )
+    assert max(
+        point.forecast_demand_mw
+        for point in context["replay"].full_day_load_forecast[11:]
+    ) < 2000

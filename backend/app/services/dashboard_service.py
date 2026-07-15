@@ -144,10 +144,13 @@ class DashboardService:
             weather_age_seconds is not None
             and weather_age_seconds > settings.DATA_STALE_AFTER_SECONDS
         )
+        acceptable_grid_quality = (
+            {"GOOD", "UNCERTAIN"} if replay_active else {"GOOD"}
+        )
         decision_inhibited = (
             weather_is_stale
             or grid_is_stale
-            or grid_quality != "GOOD"
+            or grid_quality not in acceptable_grid_quality
             or bool(grid_missing_fields)
         )
         if decision_inhibited:
@@ -240,6 +243,8 @@ class DashboardService:
             "startup_time_minutes",
             "decision_confidence",
             "weather_effect_mw",
+            "available_start_capacity_mw",
+            "residual_shortfall_mw",
         )
         return {field: payload[field] for field in fields if field in payload}
 
@@ -377,7 +382,13 @@ class DashboardService:
         simulated_grid = "Mock" in grid.source_provider or replay_active
         decision_status = (
             "INHIBITED"
-            if stale or grid_stale or grid_quality != "GOOD" or grid.missing_fields
+            if (
+                stale
+                or grid_stale
+                or grid_quality
+                not in ({"GOOD", "UNCERTAIN"} if replay_active else {"GOOD"})
+                or grid.missing_fields
+            )
             else ("SIMULATION" if simulated_grid else "AVAILABLE")
         )
         if grid_fallback_used:

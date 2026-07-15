@@ -158,6 +158,18 @@ class ModelStatusService:
             "recommendation": _dashboard_recommendation(result.recommendation),
             "factors": result.reasons,
             "reason": "; ".join(result.reasons),
+            "decision_action": result.decision_action,
+            "generator_set": result.generator_set,
+            "recommended_capacity_mw": result.recommended_capacity_mw,
+            "projected_shortfall_mw": result.projected_shortfall_mw,
+            "expected_shortfall_mw": result.expected_shortfall_mw,
+            "expected_load_rise_mw": result.expected_load_rise_mw,
+            "expected_rise_minutes": result.expected_rise_minutes,
+            "startup_time_minutes": result.startup_time_minutes,
+            "decision_confidence": result.decision_confidence,
+            "weather_effect_mw": result.weather_effect_mw,
+            "available_start_capacity_mw": result.available_start_capacity_mw,
+            "residual_shortfall_mw": result.residual_shortfall_mw,
         }
 
     @staticmethod

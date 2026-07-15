@@ -19,3 +19,5 @@ class ProbabilityResponse(BaseModel):
     startup_time_minutes: int = 0
     decision_confidence: float = 0.0
     weather_effect_mw: float = 0.0
+    available_start_capacity_mw: float | None = None
+    residual_shortfall_mw: float = 0.0

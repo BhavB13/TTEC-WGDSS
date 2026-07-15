@@ -24,6 +24,7 @@ class OperatingRiskInput:
     reserve_margin_threshold: float = 0.15
     fallback_uncertainty_mw: float | None = None
     forecast_profile: tuple[OperatingForecastPoint, ...] = ()
+    available_capacity_is_verified: bool = True
 
 
 @dataclass(frozen=True)
@@ -48,12 +49,15 @@ class OperatingRiskResult:
     startup_time_minutes: int = 0
     decision_confidence: float = 0.0
     weather_effect_mw: float = 0.0
+    available_start_capacity_mw: float | None = None
+    residual_shortfall_mw: float = 0.0
     engine_version: str = "operating-risk-v2"
 
 
 class RiskProbabilityEngine:
     ENGINE_VERSION = "operating-risk-v2.0"
-    SMALL_SET_CAPACITY_MW = 30.0
+    SMALL_SET_UNIT_CAPACITY_MW = 15.0
+    SMALL_SET_MAX_CAPACITY_MW = 30.0
     SMALL_SET_STARTUP_MINUTES = 20
     HEAVY_SET_MIN_CAPACITY_MW = 60.0
     HEAVY_SET_MAX_CAPACITY_MW = 120.0
@@ -138,7 +142,7 @@ class RiskProbabilityEngine:
         )
 
         risk_level = self._risk_level(probability_score)
-        dispatch = self._dispatch_decision(selected, risk_level)
+        dispatch = self._dispatch_decision(selected, risk_level, risk_input)
         recommendation = dispatch["recommendation"]
         selected_input = replace(
             risk_input,
@@ -166,6 +170,16 @@ class RiskProbabilityEngine:
             reasons.append(
                 f"{dispatch['generator_set']} requires {dispatch['startup_time_minutes']} minutes to start"
             )
+        available_start_capacity = dispatch["available_start_capacity_mw"]
+        if available_start_capacity is not None:
+            reasons.append(
+                f"TA provides {available_start_capacity:.1f} MW above current TRA for startup"
+            )
+        if dispatch["residual_shortfall_mw"] > 0:
+            reasons.append(
+                f"Recommended start capacity leaves {dispatch['residual_shortfall_mw']:.1f} MW "
+                "requiring further operator action"
+            )
 
         return OperatingRiskResult(
             probability_score=probability_score,
@@ -188,6 +202,8 @@ class RiskProbabilityEngine:
             startup_time_minutes=dispatch["startup_time_minutes"],
             decision_confidence=round(selected_point.confidence, 2),
             weather_effect_mw=round(selected_point.weather_effect_mw, 2),
+            available_start_capacity_mw=_round_or_none(available_start_capacity),
+            residual_shortfall_mw=round(dispatch["residual_shortfall_mw"], 2),
             engine_version=self.ENGINE_VERSION,
         )
 
@@ -248,42 +264,81 @@ class RiskProbabilityEngine:
         self,
         assessment: dict[str, object],
         risk_level: str,
+        risk_input: OperatingRiskInput,
     ) -> dict[str, object]:
         point = assessment["point"]
         assert isinstance(point, OperatingForecastPoint)
         shortfall = float(assessment["projected_shortfall_mw"])
+        available_start_capacity = (
+            max(
+                0.0,
+                risk_input.available_capacity_mw - risk_input.online_capacity_mw,
+            )
+            if risk_input.available_capacity_mw is not None
+            and risk_input.online_capacity_mw is not None
+            and risk_input.available_capacity_is_verified
+            else None
+        )
         if risk_level == "LOW" or shortfall <= 0:
-            return {
-                "recommendation": "NO ACTION REQUIRED",
-                "decision_action": "NO ACTION",
-                "generator_set": "NONE",
-                "recommended_capacity_mw": 0.0,
-                "startup_time_minutes": 0,
-            }
+            return self._dispatch_payload(
+                recommendation="NO ACTION REQUIRED",
+                decision_action="NO ACTION",
+                available_start_capacity_mw=available_start_capacity,
+                projected_shortfall_mw=shortfall,
+            )
         if risk_level == "MEDIUM":
-            return {
-                "recommendation": "MONITOR CONDITIONS",
-                "decision_action": "MONITOR",
-                "generator_set": "NONE",
-                "recommended_capacity_mw": 0.0,
-                "startup_time_minutes": 0,
-            }
-        if shortfall <= self.SMALL_SET_CAPACITY_MW:
-            if point.horizon_minutes <= self.SMALL_SET_STARTUP_MINUTES:
-                return {
-                    "recommendation": "START SMALL GENERATOR SET",
-                    "decision_action": "START SMALL SET",
-                    "generator_set": "2 x 15 MW FAST-START",
-                    "recommended_capacity_mw": self.SMALL_SET_CAPACITY_MW,
-                    "startup_time_minutes": self.SMALL_SET_STARTUP_MINUTES,
-                }
-            return {
-                "recommendation": "MONITOR CONDITIONS",
-                "decision_action": "MONITOR SMALL-SET WINDOW",
-                "generator_set": "2 x 15 MW FAST-START",
-                "recommended_capacity_mw": self.SMALL_SET_CAPACITY_MW,
-                "startup_time_minutes": self.SMALL_SET_STARTUP_MINUTES,
-            }
+            return self._dispatch_payload(
+                recommendation="MONITOR CONDITIONS",
+                decision_action="MONITOR",
+                available_start_capacity_mw=available_start_capacity,
+                projected_shortfall_mw=shortfall,
+            )
+        if shortfall <= self.SMALL_SET_MAX_CAPACITY_MW:
+            requested_capacity = (
+                self.SMALL_SET_UNIT_CAPACITY_MW
+                if shortfall <= self.SMALL_SET_UNIT_CAPACITY_MW
+                else self.SMALL_SET_MAX_CAPACITY_MW
+            )
+            startable_capacity = self._startable_capacity(
+                requested_capacity,
+                available_start_capacity,
+                self.SMALL_SET_UNIT_CAPACITY_MW,
+            )
+            if startable_capacity < self.SMALL_SET_UNIT_CAPACITY_MW:
+                return self._dispatch_payload(
+                    recommendation="MONITOR CONDITIONS",
+                    decision_action="ESCALATE CAPACITY AVAILABILITY",
+                    available_start_capacity_mw=available_start_capacity,
+                    projected_shortfall_mw=shortfall,
+                )
+            one_set = startable_capacity < self.SMALL_SET_MAX_CAPACITY_MW
+            generator_set = (
+                "1 x 15 MW FAST-START"
+                if one_set
+                else "2 x 15 MW FAST-START"
+            )
+            start_now = point.horizon_minutes <= self.SMALL_SET_STARTUP_MINUTES
+            return self._dispatch_payload(
+                recommendation=(
+                    "START ONE 15 MW SMALL SET"
+                    if start_now and one_set
+                    else "START BOTH 15 MW SMALL SETS"
+                    if start_now
+                    else "MONITOR CONDITIONS"
+                ),
+                decision_action=(
+                    "START ONE SMALL SET"
+                    if start_now and one_set
+                    else "START BOTH SMALL SETS"
+                    if start_now
+                    else "MONITOR SMALL-SET WINDOW"
+                ),
+                generator_set=generator_set,
+                recommended_capacity_mw=startable_capacity,
+                startup_time_minutes=self.SMALL_SET_STARTUP_MINUTES,
+                available_start_capacity_mw=available_start_capacity,
+                projected_shortfall_mw=shortfall,
+            )
 
         heavy_capacity = min(
             self.HEAVY_SET_MAX_CAPACITY_MW,
@@ -292,20 +347,99 @@ class RiskProbabilityEngine:
                 math.ceil(shortfall / 30.0) * 30.0,
             ),
         )
-        if point.horizon_minutes <= self.HEAVY_SET_STARTUP_MINUTES:
-            return {
-                "recommendation": "START HEAVY GENERATOR SET",
-                "decision_action": "START HEAVY SET",
-                "generator_set": "HEAVY 60-120 MW SET",
-                "recommended_capacity_mw": heavy_capacity,
-                "startup_time_minutes": self.HEAVY_SET_STARTUP_MINUTES,
-            }
+        startable_heavy = self._startable_capacity(
+            heavy_capacity,
+            available_start_capacity,
+            30.0,
+        )
+        if startable_heavy < self.HEAVY_SET_MIN_CAPACITY_MW:
+            startable_small = self._startable_capacity(
+                self.SMALL_SET_MAX_CAPACITY_MW,
+                available_start_capacity,
+                self.SMALL_SET_UNIT_CAPACITY_MW,
+            )
+            if startable_small >= self.SMALL_SET_UNIT_CAPACITY_MW:
+                start_now = point.horizon_minutes <= self.SMALL_SET_STARTUP_MINUTES
+                return self._dispatch_payload(
+                    recommendation=(
+                        "START ONE 15 MW SMALL SET"
+                        if start_now and startable_small < self.SMALL_SET_MAX_CAPACITY_MW
+                        else "START BOTH 15 MW SMALL SETS"
+                        if start_now
+                        else "MONITOR CONDITIONS"
+                    ),
+                    decision_action=(
+                        "START AVAILABLE SMALL SETS AND ESCALATE"
+                        if start_now
+                        else "ESCALATE CAPACITY AVAILABILITY"
+                    ),
+                    generator_set=(
+                        "1 x 15 MW FAST-START"
+                        if startable_small < self.SMALL_SET_MAX_CAPACITY_MW
+                        else "2 x 15 MW FAST-START"
+                    ),
+                    recommended_capacity_mw=startable_small,
+                    startup_time_minutes=self.SMALL_SET_STARTUP_MINUTES,
+                    available_start_capacity_mw=available_start_capacity,
+                    projected_shortfall_mw=shortfall,
+                )
+            return self._dispatch_payload(
+                recommendation="MONITOR CONDITIONS",
+                decision_action="ESCALATE CAPACITY AVAILABILITY",
+                available_start_capacity_mw=available_start_capacity,
+                projected_shortfall_mw=shortfall,
+            )
+        start_now = point.horizon_minutes <= self.HEAVY_SET_STARTUP_MINUTES
+        return self._dispatch_payload(
+            recommendation=(
+                "START HEAVY GENERATOR SET"
+                if start_now
+                else "MONITOR CONDITIONS"
+            ),
+            decision_action=(
+                "START HEAVY SET"
+                if start_now
+                else "MONITOR HEAVY-SET WINDOW"
+            ),
+            generator_set="HEAVY 60-120 MW SET",
+            recommended_capacity_mw=startable_heavy,
+            startup_time_minutes=self.HEAVY_SET_STARTUP_MINUTES,
+            available_start_capacity_mw=available_start_capacity,
+            projected_shortfall_mw=shortfall,
+        )
+
+    @staticmethod
+    def _startable_capacity(
+        requested_capacity_mw: float,
+        available_start_capacity_mw: float | None,
+        unit_increment_mw: float,
+    ) -> float:
+        if available_start_capacity_mw is None:
+            return requested_capacity_mw
+        bounded = min(requested_capacity_mw, available_start_capacity_mw)
+        return max(0.0, math.floor(bounded / unit_increment_mw) * unit_increment_mw)
+
+    @staticmethod
+    def _dispatch_payload(
+        recommendation: str,
+        decision_action: str,
+        available_start_capacity_mw: float | None,
+        projected_shortfall_mw: float,
+        generator_set: str = "NONE",
+        recommended_capacity_mw: float = 0.0,
+        startup_time_minutes: int = 0,
+    ) -> dict[str, object]:
         return {
-            "recommendation": "MONITOR CONDITIONS",
-            "decision_action": "MONITOR HEAVY-SET WINDOW",
-            "generator_set": "HEAVY 60-120 MW SET",
-            "recommended_capacity_mw": heavy_capacity,
-            "startup_time_minutes": self.HEAVY_SET_STARTUP_MINUTES,
+            "recommendation": recommendation,
+            "decision_action": decision_action,
+            "generator_set": generator_set,
+            "recommended_capacity_mw": recommended_capacity_mw,
+            "startup_time_minutes": startup_time_minutes,
+            "available_start_capacity_mw": available_start_capacity_mw,
+            "residual_shortfall_mw": max(
+                0.0,
+                projected_shortfall_mw - recommended_capacity_mw,
+            ),
         }
 
     @staticmethod

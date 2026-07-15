@@ -13,10 +13,19 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.database.session import SessionLocal
 from app.services.demand_forecast_model_service import DemandForecastTrainingResult
 from app.services.forecast_dataset_service import ForecastDatasetBuildResult
+from app.services.historical_weather_backfill_service import (
+    HistoricalWeatherBackfillResult,
+    HistoricalWeatherBackfillService,
+)
 from app.services.scada_import_service import ScadaImportResult, ScadaImportService
+from app.services.scada_archive_service import ScadaArchiveReport, ScadaArchiveService
 from app.services.scada_replay_validation_service import (
     ScadaReplayValidationReport,
     ScadaReplayValidationService,
+)
+from app.services.scada_replay_forecast_service import (
+    ScadaReplayForecastRefreshResult,
+    ScadaReplayForecastService,
 )
 from app.services.scada_replay_preflight_service import (
     ScadaReplayPreflightReport,
@@ -35,6 +44,8 @@ class ScadaReplayPipelineResult:
     dataset_result: ForecastDatasetBuildResult
     training_result: DemandForecastTrainingResult
     validation_report: ScadaReplayValidationReport
+    weather_backfill_result: HistoricalWeatherBackfillResult | None = None
+    replay_forecast_result: ScadaReplayForecastRefreshResult | None = None
 
     @property
     def files_imported(self) -> int:
@@ -50,28 +61,55 @@ class ScadaReplayPipelineResult:
 
 
 def run_pipeline(
-    csv_paths: list[str | Path],
+    source_paths: list[str | Path],
     session_factory=SessionLocal,
+    backfill_weather: bool = False,
 ) -> ScadaReplayPipelineResult:
     import_service = ScadaImportService(session_factory=session_factory)
-    preflight_report = ScadaReplayPreflightService(import_service=import_service).inspect(
-        csv_paths
-    )
+    paths = [Path(path) for path in source_paths]
+    zip_paths = [path for path in paths if path.suffix.lower() == ".zip"]
+    if zip_paths and (len(paths) != 1 or len(zip_paths) != 1):
+        raise ValueError("Provide one SCADA ZIP archive or one or more CSV files")
+
+    archive_service = ScadaArchiveService(session_factory=session_factory)
+    archive_report: ScadaArchiveReport | None = None
+    if zip_paths:
+        archive_report = archive_service.inspect_archive(zip_paths[0])
+        preflight_report = _archive_preflight_report(archive_report)
+    else:
+        preflight_report = ScadaReplayPreflightService(
+            import_service=import_service
+        ).inspect(paths)
     if not preflight_report.ready:
         raise ValueError(
             "SCADA replay preflight failed: " + "; ".join(preflight_report.blockers)
         )
-    import_results = [import_service.import_csv(path) for path in csv_paths]
+    if archive_report is not None:
+        import_results = list(
+            archive_service.import_archive(paths[0]).import_results
+        )
+    else:
+        import_results = [import_service.import_csv(path) for path in paths]
 
     snapshot_result = ScadaSnapshotService(
         session_factory=session_factory
     ).build_hourly_snapshots(import_run_id=None, replace_existing=True)
+    weather_backfill_result = (
+        HistoricalWeatherBackfillService(
+            session_factory=session_factory
+        ).backfill_scada_range()
+        if backfill_weather
+        else None
+    )
     dataset_result = ForecastDatasetService(
         session_factory=session_factory
     ).build_training_rows(replace_existing=True)
     training_result = DemandForecastModelService(
         session_factory=session_factory
     ).train_and_store(replace_existing=True)
+    replay_forecast_result = ScadaReplayForecastService(
+        session_factory=session_factory
+    ).refresh_for_current_clock()
     validation_report = ScadaReplayValidationService(
         session_factory=session_factory
     ).build_report()
@@ -83,6 +121,41 @@ def run_pipeline(
         dataset_result=dataset_result,
         training_result=training_result,
         validation_report=validation_report,
+        weather_backfill_result=weather_backfill_result,
+        replay_forecast_result=replay_forecast_result,
+    )
+
+
+def _archive_preflight_report(
+    report: ScadaArchiveReport,
+) -> ScadaReplayPreflightReport:
+    quality_counts: dict[str, int] = {}
+    for member in report.member_reports:
+        for quality, count in member.quality_counts.items():
+            key = quality.strip().lower()
+            quality_counts[key] = quality_counts.get(key, 0) + count
+    blockers: list[str] = []
+    if report.missing_tags:
+        blockers.append(
+            "missing required SCADA tag(s): " + ", ".join(report.missing_tags)
+        )
+    if report.aligned_hour_count < 8:
+        blockers.append(
+            "fewer than 8 interval-aligned usable hourly snapshots are available"
+        )
+    return ScadaReplayPreflightReport(
+        files_checked=len(report.member_reports),
+        rows_checked=report.total_rows,
+        required_tags=tuple(sorted(report.observed_tags + report.missing_tags)),
+        observed_tags=report.observed_tags,
+        missing_tags=report.missing_tags,
+        aligned_hour_count=report.aligned_hour_count,
+        ready=not blockers,
+        blockers=tuple(blockers),
+        warnings=report.warnings,
+        quality_counts=dict(sorted(quality_counts.items())),
+        conditional_hour_count=report.conditional_hour_count,
+        degraded_hour_count=report.degraded_hour_count,
     )
 
 
@@ -101,6 +174,16 @@ def format_summary(result: ScadaReplayPipelineResult) -> str:
     ]
     if result.preflight_report.warnings:
         lines.append("preflight warnings: " + "; ".join(result.preflight_report.warnings))
+    if result.weather_backfill_result is not None:
+        lines.append(
+            "historical weather rows stored: "
+            f"{result.weather_backfill_result.rows_stored}"
+        )
+    if result.replay_forecast_result is not None:
+        lines.append(
+            "cutoff-safe replay forecasts stored: "
+            f"{result.replay_forecast_result.rows_stored}"
+        )
     for item in result.training_result.results:
         lines.extend(
             [
@@ -146,13 +229,21 @@ def main() -> int:
         description="Run the historical SCADA replay, forecast, and risk validation pipeline."
     )
     parser.add_argument(
-        "csv_paths",
+        "source_paths",
         nargs="+",
-        help="One or more historical SCADA CSV exports",
+        help="One SCADA ZIP archive or one or more historical SCADA CSV exports",
+    )
+    parser.add_argument(
+        "--backfill-weather",
+        action="store_true",
+        help="Backfill Open-Meteo historical feature-time weather for the SCADA range",
     )
     args = parser.parse_args()
 
-    result = run_pipeline(args.csv_paths)
+    result = run_pipeline(
+        args.source_paths,
+        backfill_weather=args.backfill_weather,
+    )
     print(format_summary(result))
     return 0
 

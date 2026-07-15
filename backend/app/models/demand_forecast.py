@@ -158,3 +158,47 @@ class DemandForecastResult(Base):
         ),
         Index("idx_demand_forecast_results_quality", "quality_status"),
     )
+
+
+class ScadaReplayForecastResult(Base):
+    __tablename__ = "scada_replay_forecast_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_cursor_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+    )
+    feature_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    forecast_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    horizon_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    forecast_demand_mw: Mapped[float] = mapped_column(Float, nullable=False)
+    forecast_uncertainty_mw: Mapped[float] = mapped_column(Float, nullable=False)
+    model_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    baseline_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    baseline_forecast_mw: Mapped[float] = mapped_column(Float, nullable=False)
+    quality_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    mae: Mapped[float] = mapped_column(Float, nullable=False)
+    rmse: Mapped[float] = mapped_column(Float, nullable=False)
+    residual_std: Mapped[float] = mapped_column(Float, nullable=False)
+    training_rows: Mapped[int] = mapped_column(Integer, nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index(
+            "idx_scada_replay_forecast_cursor_horizon",
+            "source_cursor_at",
+            "horizon_hours",
+            unique=True,
+        ),
+    )

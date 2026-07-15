@@ -129,6 +129,7 @@ class RecommendationEngine:
                 online_capacity_mw=available_capacity_mw,
                 available_capacity_mw=available_capacity_mw,
                 spinning_reserve_mw=None,
+                available_capacity_is_verified=False,
             )
         )
         if risk.risk_level == "UNAVAILABLE":

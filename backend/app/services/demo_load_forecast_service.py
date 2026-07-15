@@ -9,7 +9,10 @@ from typing import Any, Protocol, Sequence
 import numpy as np
 
 
-MIN_TRAIN_ROWS = 24 * 30
+# June replay is a prototype with less than one full month available at many
+# cursor positions. Seven completed days are enough to evaluate Ridge, but the
+# model is still activated only when it beats the chronological baseline.
+MIN_TRAIN_ROWS = 24 * 7
 MIN_MODEL_IMPROVEMENT = 0.02
 MIN_UNCERTAINTY_MW = 12.0
 

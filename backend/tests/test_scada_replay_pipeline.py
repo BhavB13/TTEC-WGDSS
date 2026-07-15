@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from datetime import datetime, timedelta
 from pathlib import Path
+from zipfile import ZipFile
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -192,3 +193,23 @@ def test_scada_replay_pipeline_rejects_missing_required_tag_before_import(tmp_pa
 
     with session_factory() as session:
         assert session.scalar(select(ScadaGridSnapshot)) is None
+
+
+def test_scada_replay_pipeline_accepts_filename_agnostic_zip_archive(tmp_path):
+    session_factory = _session_factory(tmp_path)
+    _seed_weather_and_forecast(session_factory)
+    csv_path = tmp_path / "future_export_unknown_name.csv"
+    archive_path = tmp_path / "historian_export_2027.zip"
+    _write_scada_csv(csv_path)
+    with ZipFile(archive_path, "w") as archive:
+        archive.write(csv_path, arcname="nested/arbitrary-name.csv")
+
+    result = run_pipeline([archive_path], session_factory=session_factory)
+
+    assert result.preflight_report.ready is True
+    assert result.preflight_report.files_checked == 1
+    assert result.preflight_report.aligned_hour_count == 9
+    assert result.files_imported == 1
+    assert result.snapshot_result.snapshots_created == 9
+    assert result.dataset_result.rows_created == 18
+    assert [item.horizon_hours for item in result.training_result.results] == [1, 2, 6]

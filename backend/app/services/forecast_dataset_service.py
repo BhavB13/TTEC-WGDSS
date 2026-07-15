@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, select
 
@@ -14,6 +15,7 @@ from app.models.scada import ScadaGridSnapshot
 from app.models.weather import Weather
 
 FORECAST_HORIZONS_HOURS = (1, 2, 6)
+TRINIDAD_TZ = ZoneInfo("America/Port_of_Spain")
 
 
 @dataclass(frozen=True)
@@ -21,6 +23,15 @@ class ForecastDatasetBuildResult:
     rows_created: int
     source_snapshots: int
     skipped_rows: int
+
+
+@dataclass(frozen=True)
+class ForecastEvaluationDataset:
+    rows: list[ForecastTrainingRow]
+    inference_rows: dict[int, ForecastTrainingRow]
+    source_snapshots: int
+    skipped_rows: int
+    as_of: datetime
 
 
 class ForecastDatasetService:
@@ -103,22 +114,92 @@ class ForecastDatasetService:
             ):
                 forecasts_by_hour[_hour_key(row.forecast_timestamp)].append(row)
 
-        if not snapshots:
+        available_at = _local_naive(as_of or datetime.now(timezone.utc))
+        return self._inference_rows_from_collections(
+            snapshots=snapshots,
+            weather_by_hour=weather_by_hour,
+            forecasts_by_hour=forecasts_by_hour,
+            horizons_hours=horizons_hours,
+            available_at=available_at,
+        )
+
+    def build_evaluation_dataset(
+        self,
+        as_of: datetime,
+        horizons_hours: tuple[int, ...] = FORECAST_HORIZONS_HOURS,
+    ) -> ForecastEvaluationDataset:
+        """Build transient model rows using only intervals available by a replay cutoff."""
+        cutoff = _local_naive(as_of)
+        with self.session_factory() as session:
+            snapshots = [
+                snapshot
+                for snapshot in session.scalars(
+                    select(ScadaGridSnapshot).order_by(ScadaGridSnapshot.timestamp)
+                )
+                if _snapshot_available_at(snapshot) <= cutoff
+            ]
+            weather_by_hour = {
+                _hour_key(row.timestamp): row
+                for row in session.scalars(select(Weather).order_by(Weather.timestamp))
+                if _hour_key(row.timestamp) <= cutoff
+            }
+            forecasts_by_hour: dict[datetime, list[Forecast]] = defaultdict(list)
+            for row in session.scalars(
+                select(Forecast).order_by(
+                    Forecast.forecast_timestamp,
+                    Forecast.created_at,
+                )
+            ):
+                forecasts_by_hour[_hour_key(row.forecast_timestamp)].append(row)
+
+        rows, skipped = self._build_rows(
+            snapshots=snapshots,
+            weather_by_hour=weather_by_hour,
+            forecasts_by_hour=forecasts_by_hour,
+            horizons_hours=horizons_hours,
+        )
+        inference_rows = self._inference_rows_from_collections(
+            snapshots=snapshots,
+            weather_by_hour=weather_by_hour,
+            forecasts_by_hour=forecasts_by_hour,
+            horizons_hours=horizons_hours,
+            available_at=cutoff,
+        )
+        return ForecastEvaluationDataset(
+            rows=rows,
+            inference_rows=inference_rows,
+            source_snapshots=len(snapshots),
+            skipped_rows=skipped,
+            as_of=cutoff,
+        )
+
+    def _inference_rows_from_collections(
+        self,
+        snapshots: list[ScadaGridSnapshot],
+        weather_by_hour: dict[datetime, Weather],
+        forecasts_by_hour: dict[datetime, list[Forecast]],
+        horizons_hours: tuple[int, ...],
+        available_at: datetime,
+    ) -> dict[int, ForecastTrainingRow]:
+        available = [
+            snapshot
+            for snapshot in snapshots
+            if _snapshot_available_at(snapshot) <= available_at
+        ]
+        if not available:
             return {}
-        latest_snapshot = snapshots[-1]
+        latest_snapshot = available[-1]
         if (
             latest_snapshot.current_demand_mw is None
             or latest_snapshot.quality_status not in {"GOOD", "USABLE_WITH_WARNING"}
             or bool(latest_snapshot.missing_fields.strip())
         ):
             return {}
-
-        feature_timestamp = _hour_key(latest_snapshot.timestamp)
+        feature_timestamp = _snapshot_available_at(latest_snapshot)
         snapshot_by_hour = {
-            _hour_key(snapshot.timestamp): snapshot for snapshot in snapshots
+            _snapshot_available_at(snapshot): snapshot for snapshot in snapshots
         }
         weather = weather_by_hour.get(feature_timestamp)
-        available_at = _naive_utc(as_of or datetime.now(timezone.utc))
         rows: dict[int, ForecastTrainingRow] = {}
         for horizon_hours in horizons_hours:
             target_timestamp = feature_timestamp + timedelta(hours=horizon_hours)
@@ -144,12 +225,14 @@ class ForecastDatasetService:
         forecasts_by_hour: dict[datetime, list[Forecast]],
         horizons_hours: tuple[int, ...],
     ) -> tuple[list[ForecastTrainingRow], int]:
-        snapshot_by_hour = {_hour_key(snapshot.timestamp): snapshot for snapshot in snapshots}
+        snapshot_by_hour = {
+            _snapshot_available_at(snapshot): snapshot for snapshot in snapshots
+        }
         rows: list[ForecastTrainingRow] = []
         skipped = 0
 
         for snapshot in snapshots:
-            feature_timestamp = _hour_key(snapshot.timestamp)
+            feature_timestamp = _snapshot_available_at(snapshot)
             if snapshot.current_demand_mw is None:
                 skipped += len(horizons_hours)
                 continue
@@ -247,9 +330,11 @@ class ForecastDatasetService:
             hour_of_day=feature_timestamp.hour,
             day_of_week=feature_timestamp.weekday(),
             temperature_c=(
-                weather.temperature_c
+                snapshot.temperature_c
+                if snapshot.temperature_c is not None
+                else weather.temperature_c
                 if weather is not None
-                else snapshot.temperature_c
+                else None
             ),
             scada_temperature_c=snapshot.temperature_c,
             temperature_lag_1h_c=self._lag_value(
@@ -390,7 +475,11 @@ class ForecastDatasetService:
             hour_of_day=feature_timestamp.hour,
             day_of_week=feature_timestamp.weekday(),
             temperature_c=(
-                weather.temperature_c if weather is not None else snapshot.temperature_c
+                snapshot.temperature_c
+                if snapshot.temperature_c is not None
+                else weather.temperature_c
+                if weather is not None
+                else None
             ),
             scada_temperature_c=snapshot.temperature_c,
             temperature_lag_1h_c=self._lag_value(
@@ -442,11 +531,11 @@ class ForecastDatasetService:
         available = [
             forecast
             for forecast in forecasts
-            if _naive_utc(forecast.created_at) <= feature_timestamp
+            if _local_naive(forecast.created_at) <= feature_timestamp
         ]
         if not available:
             return None
-        return max(available, key=lambda row: _naive_utc(row.created_at))
+        return max(available, key=lambda row: _local_naive(row.created_at))
 
     @staticmethod
     def _lag_demand(
@@ -561,10 +650,14 @@ class ForecastDatasetService:
 
 
 def _hour_key(value: datetime) -> datetime:
-    return value.replace(minute=0, second=0, microsecond=0, tzinfo=None)
+    return _local_naive(value).replace(minute=0, second=0, microsecond=0)
 
 
-def _naive_utc(value: datetime) -> datetime:
+def _local_naive(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.astimezone(TRINIDAD_TZ).replace(tzinfo=None)
+
+
+def _snapshot_available_at(snapshot: ScadaGridSnapshot) -> datetime:
+    return _hour_key(snapshot.available_at or snapshot.timestamp)

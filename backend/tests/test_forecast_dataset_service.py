@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import create_engine, func, select
@@ -115,7 +115,8 @@ def test_forecast_dataset_builds_rows_without_future_leakage(tmp_path):
     assert row.rolling_3h_demand_mw == 810
     assert row.hour_of_day == 2
     assert row.day_of_week == 1
-    assert row.temperature_c == 28.4
+    assert row.temperature_c == 27.2
+    assert row.scada_temperature_c == 27.2
     assert row.humidity_percent == 72
     assert row.forecast_temperature_c == 29.75
     assert row.forecast_humidity_percent == 75
@@ -210,6 +211,49 @@ def test_forecast_dataset_rejects_forecasts_created_after_feature_time(tmp_path)
     assert row.forecast_temperature_c == 29.5
 
 
+def test_forecast_availability_normalizes_utc_issuance_to_trinidad_time():
+    target = _ts(2)
+    available = Forecast(
+        forecast_timestamp=target,
+        temperature_c=30,
+        humidity_percent=75,
+        rainfall_mm_hr=0,
+        cloud_cover_percent=40,
+        wind_speed_kph=12,
+        wind_direction_deg=90,
+        precipitation_probability_percent=10,
+        weather_condition="Available",
+        heat_index_c=31,
+        rain_severity="DRY",
+        confidence_score=0.8,
+        provider_name="Archived run",
+        created_at=datetime(2026, 6, 30, 4, 30, tzinfo=timezone.utc),
+    )
+    future_revision = Forecast(
+        forecast_timestamp=target,
+        temperature_c=99,
+        humidity_percent=75,
+        rainfall_mm_hr=0,
+        cloud_cover_percent=40,
+        wind_speed_kph=12,
+        wind_direction_deg=90,
+        precipitation_probability_percent=10,
+        weather_condition="Future",
+        heat_index_c=31,
+        rain_severity="DRY",
+        confidence_score=0.8,
+        provider_name="Archived run",
+        created_at=datetime(2026, 6, 30, 5, 30, tzinfo=timezone.utc),
+    )
+
+    selected = ForecastDatasetService._forecast_available_at(
+        [available, future_revision],
+        _ts(1),
+    )
+
+    assert selected is available
+
+
 def test_forecast_dataset_marks_bad_target_snapshot_degraded(tmp_path):
     session_factory = _session_factory(tmp_path)
     _seed_snapshots(session_factory, range(0, 3))
@@ -277,3 +321,29 @@ def test_forecast_dataset_refuses_inference_from_bad_latest_scada(tmp_path):
     ).build_inference_rows(horizons_hours=(1,))
 
     assert rows == {}
+
+
+def test_replay_evaluation_uses_only_completed_intervals_at_cutoff(tmp_path):
+    session_factory = _session_factory(tmp_path)
+    _seed_snapshots(session_factory, range(0, 8))
+    _seed_weather_and_forecast(session_factory, range(0, 10))
+    with session_factory() as session:
+        snapshots = list(
+            session.scalars(
+                select(ScadaGridSnapshot).order_by(ScadaGridSnapshot.timestamp)
+            )
+        )
+        for snapshot in snapshots:
+            snapshot.available_at = snapshot.timestamp + timedelta(hours=1)
+        snapshots[-1].current_demand_mw = 9999
+        session.commit()
+
+    dataset = ForecastDatasetService(
+        session_factory=session_factory
+    ).build_evaluation_dataset(as_of=_ts(4) + timedelta(minutes=30))
+
+    assert dataset.source_snapshots == 4
+    assert dataset.inference_rows[1].feature_timestamp == _ts(4)
+    assert dataset.inference_rows[1].current_demand_mw == 830
+    assert all(row.target_timestamp <= _ts(4) for row in dataset.rows)
+    assert all(row.current_demand_mw < 9999 for row in dataset.rows)

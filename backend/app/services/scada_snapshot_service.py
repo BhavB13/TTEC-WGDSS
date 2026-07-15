@@ -273,6 +273,7 @@ class ScadaSnapshotService:
 
         return ScadaGridSnapshot(
             timestamp=timestamp,
+            available_at=timestamp + timedelta(hours=1),
             current_demand_mw=_round_or_none(current_demand_mw),
             temperature_c=_round_or_none(field_values.get("temperature_c")),
             spinning_reserve_mw=_round_or_none(field_values.get("spinning_reserve_mw")),

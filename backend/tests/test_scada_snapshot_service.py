@@ -139,6 +139,7 @@ def test_build_hourly_snapshot_aligns_by_timestamp_and_calculates_formulas(tmp_p
 
     assert snapshot is not None
     assert snapshot.timestamp == _dt(8).replace(tzinfo=None)
+    assert snapshot.available_at == _dt(9).replace(tzinfo=None)
     assert snapshot.current_demand_mw == 850
     assert snapshot.temperature_c == 27.8
     assert snapshot.spinning_reserve_mw == 148

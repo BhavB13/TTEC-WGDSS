@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE_SECONDS: int = 1800
 
     OPEN_METEO_BASE_URL: str = "https://api.open-meteo.com/v1/forecast"
+    OPEN_METEO_ARCHIVE_URL: str = "https://archive-api.open-meteo.com/v1/archive"
     MET_NORWAY_BASE_URL: str = (
         "https://api.met.no/weatherapi/locationforecast/2.0/compact"
     )
@@ -53,6 +54,8 @@ class Settings(BaseSettings):
     DEMO_REPLAY_AUTO_SEED: bool = True
     DEMO_DATASET_YEAR: int = 2025
     DEMO_REPLAY_MONTH: int = 6
+    SCADA_REPLAY_ARCHIVE_PATH: str = ""
+    SCADA_HISTORICAL_WEATHER_BACKFILL: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",

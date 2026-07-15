@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -98,6 +99,11 @@ def test_demand_forecast_model_service_uses_chronological_baseline_and_persists(
     assert stored.horizon_hours == 1
     assert stored.forecast_demand_mw == horizon.forecast_demand_mw
     assert stored.forecast_uncertainty_mw == horizon.forecast_uncertainty_mw
+    assert stored.feature_profile == "demand_weather_v2"
+    assert stored.validation_status == "PROTOTYPE"
+    assert stored.train_row_count == horizon.train_rows
+    assert stored.test_row_count == horizon.test_rows
+    assert json.loads(stored.candidate_metrics)["active"]["model"] == horizon.active_model
 
 
 def test_demand_forecast_model_service_replaces_results(tmp_path):
@@ -149,6 +155,39 @@ def test_demand_forecast_model_keeps_baseline_when_ml_loses(monkeypatch, tmp_pat
     assert stored is not None
     assert stored.quality_status == "BASELINE_ACTIVE"
     assert stored.ml_beats_baseline is False
+
+
+def test_model_compares_ridge_boosting_and_forest_chronologically(tmp_path):
+    session_factory = _session_factory(tmp_path)
+    _seed_training_rows(session_factory, count=72, horizon_hours=6)
+
+    result = DemandForecastModelService(
+        session_factory=session_factory
+    ).train_and_store()
+
+    assert len(result.results) == 1
+    horizon = result.results[0]
+    assert horizon.horizon_hours == 6
+    assert horizon.candidate_metrics is not None
+    assert {
+        "ridge_alpha_10",
+        "hist_gradient_boosting",
+        "random_forest",
+    }.issubset(horizon.candidate_metrics)
+    selected = [
+        metrics
+        for name, metrics in horizon.candidate_metrics.items()
+        if name not in {"active", "baseline"} and metrics["selected"] is True
+    ]
+    assert len(selected) == 1
+    assert all(
+        horizon.candidate_metrics[name]["validation_mae"] >= 0
+        for name in (
+            "ridge_alpha_10",
+            "hist_gradient_boosting",
+            "random_forest",
+        )
+    )
 
 
 def test_demand_forecast_model_sorts_rows_chronologically_before_split(tmp_path):

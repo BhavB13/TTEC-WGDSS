@@ -52,7 +52,7 @@ def test_risk_probability_high_when_forecast_exceeds_safe_capacity():
             forecast_uncertainty_mw=30,
             current_demand_mw=900,
             online_capacity_mw=1120,
-            available_capacity_mw=1160,
+            available_capacity_mw=1260,
             spinning_reserve_mw=80,
         )
     )
@@ -65,7 +65,7 @@ def test_risk_probability_high_when_forecast_exceeds_safe_capacity():
     assert "Forecast demand exceeds safe online capacity" in result.reasons
     assert "Spinning reserve is below the planning threshold" in result.reasons
     assert (
-        "Forecast demand exceeds available capacity after reserve requirement"
+        "Available capacity can satisfy forecast demand and reserve requirement"
         in result.reasons
     )
 
@@ -109,11 +109,31 @@ def test_dispatch_selects_small_set_inside_twenty_minute_start_window():
         )
     )
 
-    assert result.recommendation == "START SMALL GENERATOR SET"
+    assert result.recommendation == "START BOTH 15 MW SMALL SETS"
     assert result.recommended_capacity_mw == 30
     assert result.startup_time_minutes == 20
     assert result.expected_rise_minutes == 20
     assert result.weather_effect_mw == 12
+
+
+def test_dispatch_selects_one_fifteen_mw_set_for_small_shortfall():
+    result = RiskProbabilityEngine().evaluate(
+        OperatingRiskInput(
+            forecast_demand_mw=978,
+            forecast_uncertainty_mw=5,
+            current_demand_mw=950,
+            online_capacity_mw=1120,
+            available_capacity_mw=1200,
+            spinning_reserve_mw=170,
+            forecast_profile=(OperatingForecastPoint(20, 978, 5),),
+        )
+    )
+
+    assert result.risk_level == "HIGH"
+    assert result.recommendation == "START ONE 15 MW SMALL SET"
+    assert result.generator_set == "1 x 15 MW FAST-START"
+    assert result.recommended_capacity_mw == 15
+    assert result.startup_time_minutes == 20
 
 
 def test_dispatch_monitors_small_set_until_start_window():
@@ -161,6 +181,26 @@ def test_dispatch_selects_heavy_set_for_large_one_hour_shortfall():
     assert 60 <= result.recommended_capacity_mw <= 120
     assert result.startup_time_minutes == 60
     assert result.projected_shortfall_mw > 30
+
+
+def test_dispatch_does_not_claim_heavy_set_without_ta_headroom():
+    result = RiskProbabilityEngine().evaluate(
+        OperatingRiskInput(
+            forecast_demand_mw=1100,
+            forecast_uncertainty_mw=15,
+            current_demand_mw=950,
+            online_capacity_mw=1100,
+            available_capacity_mw=1120,
+            spinning_reserve_mw=150,
+            forecast_profile=(OperatingForecastPoint(60, 1100, 15),),
+        )
+    )
+
+    assert result.risk_level == "HIGH"
+    assert result.generator_set == "1 x 15 MW FAST-START"
+    assert result.recommended_capacity_mw == 15
+    assert result.residual_shortfall_mw > 0
+    assert result.decision_action == "ESCALATE CAPACITY AVAILABILITY"
 
 
 def test_risk_probability_fails_safely_when_inputs_are_missing():

@@ -78,6 +78,10 @@ class ScadaGridSnapshot(Base):
         nullable=False,
         unique=True,
     )
+    available_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     current_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     temperature_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     spinning_reserve_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -105,5 +109,6 @@ class ScadaGridSnapshot(Base):
 
     __table_args__ = (
         Index("idx_scada_grid_snapshots_timestamp", "timestamp"),
+        Index("idx_scada_grid_snapshots_available_at", "available_at"),
         Index("idx_scada_grid_snapshots_quality", "quality_status"),
     )
