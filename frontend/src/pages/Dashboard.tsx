@@ -307,7 +307,6 @@ export default function Dashboard() {
               {activeTab === "operationalGuidance" ? (
                 <WorkspacePage>
                   <OperationalGuidanceTab
-                    grid={grid}
                     recommendation={recommendation}
                   />
                 </WorkspacePage>
@@ -1142,61 +1141,60 @@ function getRiskDriverDirection(
 }
 
 function OperationalGuidanceTab({
-  grid,
   recommendation,
 }: {
-  grid: DashboardSnapshot["grid"];
   recommendation: DashboardSnapshot["recommendation"];
 }) {
-  const headroom30 =
-    grid.total_available_capacity_mw - recommendation.forecast_demand_30m;
-  const headroom60 =
-    grid.total_available_capacity_mw - recommendation.forecast_demand_60m;
-  const operatorActions = getOperatorActions(recommendation.recommendation);
+  const factors = recommendation.factors.slice(0, 6);
   const decisionAvailable = recommendation.risk_level !== "UNAVAILABLE";
+  const dispatchAction = recommendation.decision_action ?? recommendation.recommendation;
+  const shortfall = recommendation.projected_shortfall_mw ?? 0;
+  const riseMinutes = recommendation.expected_rise_minutes ?? 0;
+  const startupMinutes = recommendation.startup_time_minutes ?? 0;
+  const confidence = recommendation.decision_confidence ?? 0;
 
   return (
     <div className="grid h-full min-h-0 w-full min-w-0 gap-2.5 overflow-hidden xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-      <div className="grid min-h-0 auto-rows-fr gap-2 overflow-auto rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)] sm:grid-cols-2">
-            {operatorActions.map((action, index) => (
-              <div
-                key={action}
-                className="flex min-h-[4rem] items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2.5 shadow-inner shadow-black/20"
-              >
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-emerald-500/25 bg-emerald-500/10 text-xs font-semibold text-emerald-200">
-                  {index + 1}
-                </span>
-                <p className="min-w-0 break-words text-[0.8rem] font-medium leading-snug text-slate-100">
-                  {action}
-                </p>
-              </div>
-            ))}
+      <div className="flex min-h-0 flex-col gap-2 overflow-hidden rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
+        <div className={`rounded-xl border px-4 py-3 text-center ${decisionAvailable ? "border-cyan-400/30 bg-cyan-500/10" : "border-slate-700 bg-slate-950/60"}`}>
+          <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-400">Dispatch Decision</p>
+          <p className="mt-1 break-words text-lg font-semibold text-white">{dispatchAction}</p>
+          <p className="mt-1 text-[10px] text-cyan-100">{recommendation.generator_set ?? "No generator set selected"}</p>
+        </div>
+        <ol className="grid min-h-0 flex-1 auto-rows-fr gap-1.5 overflow-auto sm:grid-cols-2">
+          {factors.map((factor, index) => (
+            <li key={`${factor}-${index}`} className="flex min-h-[3.5rem] items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/60 px-2.5 py-2 text-[0.72rem] leading-snug text-slate-200">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-cyan-500/30 bg-cyan-500/10 text-[9px] font-semibold text-cyan-200">{index + 1}</span>
+              <span className="min-w-0 break-words">{factor}</span>
+            </li>
+          ))}
+        </ol>
       </div>
 
       <div className="grid min-h-0 grid-cols-2 auto-rows-fr gap-2 rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
             <GuidanceThreshold
-              label="Probability"
-              value={formatProbability(recommendation)}
-              context="High-risk trigger 0.70"
-              healthy={decisionAvailable && recommendation.probability_score < 0.7}
+              label="Conservative Shortfall"
+              value={`${shortfall.toFixed(0)} MW`}
+              context="Forecast plus uncertainty above safe capacity"
+              healthy={decisionAvailable && shortfall <= 0}
             />
             <GuidanceThreshold
-              label="Reserve"
-              value={`${grid.reserve_margin_percent.toFixed(1)}%`}
-              context="Planning floor 15%"
-              healthy={grid.reserve_margin_percent >= 15}
+              label="Expected Load Rise"
+              value={`${(recommendation.expected_load_rise_mw ?? 0).toFixed(0)} MW`}
+              context={`Expected in ${riseMinutes} minutes`}
+              healthy={(recommendation.expected_load_rise_mw ?? 0) <= 0}
             />
             <GuidanceThreshold
-              label="30m Headroom"
-              value={formatSignedMegawatts(headroom30)}
-              context="Available capacity less forecast"
-              healthy={headroom30 >= 0}
+              label="Generator Capacity"
+              value={`${(recommendation.recommended_capacity_mw ?? 0).toFixed(0)} MW`}
+              context={startupMinutes > 0 ? `${startupMinutes}-minute startup` : "No startup required"}
+              healthy={(recommendation.recommended_capacity_mw ?? 0) === 0}
             />
             <GuidanceThreshold
-              label="60m Headroom"
-              value={formatSignedMegawatts(headroom60)}
-              context="Available capacity less forecast"
-              healthy={headroom60 >= 0}
+              label="Decision Confidence"
+              value={`${(confidence * 100).toFixed(0)}%`}
+              context={`Weather effect ${(recommendation.weather_effect_mw ?? 0) >= 0 ? "+" : ""}${(recommendation.weather_effect_mw ?? 0).toFixed(1)} MW`}
+              healthy={confidence >= 0.75}
             />
       </div>
     </div>
@@ -1231,42 +1229,6 @@ function GuidanceThreshold({
       </p>
     </div>
   );
-}
-
-function getOperatorActions(recommendation: string): string[] {
-  if (recommendation === "DATA UNAVAILABLE") {
-    return [
-      "Verify weather and grid telemetry health before acting on WGDSS guidance.",
-      "Use the last approved dispatch plan and established control-room procedures.",
-      "Notify the control-room supervisor that automated guidance is inhibited.",
-      "Reassess only after telemetry quality returns to GOOD.",
-    ];
-  }
-
-  if (recommendation === "START ADDITIONAL TURBINE") {
-    return [
-      "Initiate the approved turbine start sequence.",
-      "Confirm synchronization and expected unit output.",
-      "Recalculate reserve margin after the unit is online.",
-      "Notify the control-room supervisor of dispatch completion.",
-    ];
-  }
-
-  if (recommendation === "MONITOR CONDITIONS") {
-    return [
-      "Maintain current dispatch while monitoring demand movement.",
-      "Confirm an additional dispatchable unit remains start-ready.",
-      "Review reserve and forecast headroom at the next update.",
-      "Escalate if probability reaches 0.70 or reserve falls below 15%.",
-    ];
-  }
-
-  return [
-    "Maintain the current generation commitment.",
-    "Continue routine demand and reserve surveillance.",
-    "Verify dispatchable units remain available.",
-    "Reassess when the next dashboard snapshot arrives.",
-  ];
 }
 
 function GuidanceForecastRow({ period }: { period: ForecastData }) {

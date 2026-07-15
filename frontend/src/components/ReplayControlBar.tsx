@@ -60,7 +60,7 @@ export default function ReplayControlBar({
           onClick={() => void onControl({ action: "reset" })}
           className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[10px] font-semibold text-slate-300 disabled:opacity-40"
         >
-          Reset
+          Sync Now
         </button>
       </div>
 
@@ -85,6 +85,7 @@ export default function ReplayControlBar({
           onChange={(event) => void onControl({ action: "configure", speed_multiplier: Number(event.target.value) })}
           className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-1.5 text-slate-100"
         >
+          <option value={1}>Real time</option>
           <option value={60}>1 min/s</option>
           <option value={600}>10 min/s</option>
           <option value={3600}>1 hr/s</option>

@@ -52,6 +52,7 @@ class DemoReplayState(Base):
     step_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     speed_multiplier: Mapped[float] = mapped_column(Float, nullable=False, default=3600.0)
     last_wallclock_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    clock_aligned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )

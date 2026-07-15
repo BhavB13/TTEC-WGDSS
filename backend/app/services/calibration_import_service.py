@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import hashlib
 from collections import defaultdict
 from datetime import datetime, timedelta
 from io import BytesIO
@@ -58,14 +59,24 @@ class CalibrationImportService:
 
         initialize_database()
 
+        source_hash = self._file_hash(archive)
         counts = {
             "workbooks": 0,
             "temperature_samples": 0,
             "scenario_profiles": 0,
             "import_runs": 0,
+            "skipped_duplicate": 0,
         }
 
         with ZipFile(archive) as outer_zip, self.session_factory() as session:
+            existing = session.scalar(
+                select(CalibrationImportRun).where(
+                    CalibrationImportRun.source_hash == source_hash
+                )
+            )
+            if existing is not None:
+                counts["skipped_duplicate"] = 1
+                return counts
             if replace_existing:
                 self._delete_existing_archive_records(session, str(archive.resolve()))
 
@@ -106,6 +117,7 @@ class CalibrationImportService:
                 CalibrationImportRun(
                     source_archive=str(archive.resolve()),
                     source_filename=archive.name,
+                    source_hash=source_hash,
                     import_status="IMPORTED",
                     summary=summary,
                 )
@@ -114,6 +126,14 @@ class CalibrationImportService:
             session.commit()
 
         return counts
+
+    @staticmethod
+    def _file_hash(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     def import_archive_if_present(self, archive_path: str | Path) -> dict[str, int] | None:
         archive = Path(archive_path)

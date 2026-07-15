@@ -158,7 +158,8 @@ class DashboardService:
             )
         else:
             probability_payload = (
-                self.model_status_service.get_operating_risk_payload()
+                (replay_context.get("risk_payload") if replay_context is not None else None)
+                or self.model_status_service.get_operating_risk_payload()
                 or self.recommendation_engine.evaluate(
                     weather,
                     grid_status,
@@ -180,6 +181,7 @@ class DashboardService:
             forecast_demand_60m=probability_payload["forecast_demand_60m"],
             factors=probability_payload["factors"],
             reason=probability_payload["reason"],
+            **self._dispatch_evidence(probability_payload),
         )
         recommendation = RecommendationResponse(
             engine_version=probability_payload["engine_version"],
@@ -190,6 +192,7 @@ class DashboardService:
             factors=probability_payload["factors"],
             reason=probability_payload["reason"],
             recommendation=probability_payload["recommendation"],
+            **self._dispatch_evidence(probability_payload),
         )
         demand_forecast = self.model_status_service.get_demand_forecast_bundle()
         model_status = self.model_status_service.get_model_status()
@@ -210,6 +213,7 @@ class DashboardService:
                 grid_fallback_used=grid_fallback,
                 weather_cache_fallback=weather_fallback,
                 replay_active=replay_active,
+                forecast_items=forecast,
             ),
             demand_forecast=demand_forecast,
             model_status=model_status,
@@ -222,6 +226,22 @@ class DashboardService:
                 snapshot.data_quality.notes.append("Historical persistence unavailable")
                 snapshot.data_quality.overall_status = "DEGRADED"
         return snapshot
+
+    @staticmethod
+    def _dispatch_evidence(payload: dict[str, Any]) -> dict[str, Any]:
+        fields = (
+            "decision_action",
+            "generator_set",
+            "recommended_capacity_mw",
+            "projected_shortfall_mw",
+            "expected_shortfall_mw",
+            "expected_load_rise_mw",
+            "expected_rise_minutes",
+            "startup_time_minutes",
+            "decision_confidence",
+            "weather_effect_mw",
+        )
+        return {field: payload[field] for field in fields if field in payload}
 
     async def get_probability_and_recommendation(
         self,
@@ -277,6 +297,7 @@ class DashboardService:
         grid_fallback_used: bool = False,
         weather_cache_fallback: bool = False,
         replay_active: bool = False,
+        forecast_items: list[dict[str, Any]] | None = None,
     ) -> DataQualityResponse:
         age_seconds = 0 if replay_active else self._age_seconds(weather.timestamp)
         grid_age_seconds = 0 if replay_active else self._age_seconds(grid.timestamp)
@@ -306,6 +327,21 @@ class DashboardService:
             "last_forecast_provider_names",
             [],
         )
+        if replay_active and forecast_items:
+            forecast_source_count = max(
+                int(item.get("source_count", 1)) for item in forecast_items
+            )
+            forecast_provider_names = list(
+                dict.fromkeys(
+                    name
+                    for item in forecast_items
+                    for name in item.get("source_names", [])
+                )
+            )
+            consensus_degraded = any(
+                item.get("source_sync_status") != "COMPLETE"
+                for item in forecast_items[:6]
+            )
         calibrated = "SCADA Calibration" in weather.provider_name
         weather_status = "STALE" if stale else ("FALLBACK" if fallback_used else "LIVE")
         if replay_active:

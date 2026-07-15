@@ -79,6 +79,13 @@ historical SCADA CSV pipeline, calibration profiles, forecasting services, and
 risk engine remain available. See `docs/DEMO_REPLAY.md` for replay architecture,
 provenance, forecast leakage controls, and the production replacement path.
 
+The six-hour pipeline now reconciles Open-Meteo Best Match, MET Norway, and
+Open-Meteo NOAA GFS by timestamp and field. June synchronizes to the current
+Trinidad clock, demand forecasts use validated weather features, and dispatch
+guidance distinguishes the 30 MW fast-start set from 60-120 MW heavy capacity.
+See `docs/FORECAST_DISPATCH_UPGRADE.md` and
+`docs/HISTORICAL_DATA_IMPORTS.md`.
+
 See `docs/OperationsGuide.md` for startup, migration, import, testing, and deployment instructions. See `docs/ExternalServices.md` for the no-cost provider matrix, quotas, licensing boundary, and optional paid alternatives.
 
 Repository Structure

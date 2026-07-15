@@ -40,6 +40,8 @@ export interface ForecastData {
   source_names?: string[];
   temperature_spread_c?: number;
   cloud_cover_spread_percent?: number;
+  source_sync_status?: "COMPLETE" | "DEGRADED";
+  field_source_counts?: Record<string, number>;
 }
 
 export interface ForecastBundle {
@@ -155,6 +157,7 @@ export interface ReplayStatus {
   revealed_records: number;
   total_replay_records: number;
   source: string;
+  clock_aligned: boolean;
 }
 
 export interface OperationalTrendPoint {
@@ -174,6 +177,9 @@ export interface LoadForecastPoint {
   historical_average_mw: number;
   actual_demand_mw?: number | null;
   uncertainty_mw: number;
+  weather_impact_mw: number;
+  weather_confidence: number;
+  weather_source_count: number;
 }
 
 export interface ReplayDashboard {
@@ -195,6 +201,13 @@ export interface ReplayDashboard {
     historical_peak_demand_mw: number;
     replay_month_label: string;
     current_day_peak_forecast_mw: number;
+    forecast_model: string;
+    forecast_mode: string;
+    forecast_mae_mw: number;
+    baseline_mae_mw: number;
+    residual_std_mw: number;
+    training_rows: number;
+    weather_features: string[];
   };
 }
 
@@ -218,6 +231,16 @@ export interface ProbabilityData {
   forecast_demand_60m: number;
   factors: string[];
   reason: string;
+  decision_action?: string;
+  generator_set?: string;
+  recommended_capacity_mw?: number;
+  projected_shortfall_mw?: number;
+  expected_shortfall_mw?: number;
+  expected_load_rise_mw?: number;
+  expected_rise_minutes?: number;
+  startup_time_minutes?: number;
+  decision_confidence?: number;
+  weather_effect_mw?: number;
 }
 
 export interface RecommendationData extends ProbabilityData {

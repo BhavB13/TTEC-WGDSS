@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import math
 import threading
+from calendar import monthrange
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from typing import Callable
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, or_, select
 
@@ -20,10 +23,23 @@ from app.schemas.replay import (
     ReplayStatusResponse,
     ReplaySummaryResponse,
 )
+from app.services.demo_load_forecast_service import DemoLoadForecastService
+from app.services.risk_probability_engine import (
+    OperatingForecastPoint,
+    OperatingRiskInput,
+    RiskProbabilityEngine,
+)
+from app.services.weather_service import WeatherService
 
 
 DEMO_SOURCE = "WGDSS 12-Month Synthetic SCADA/Weather Demonstration"
 STATE_ID = 1
+TRINIDAD_TZ = ZoneInfo("America/Port_of_Spain")
+REPLAY_FORECAST_SOURCES = (
+    "Open-Meteo Best Match",
+    "MET Norway",
+    "Open-Meteo NOAA GFS",
+)
 
 
 class DemoReplayService:
@@ -31,8 +47,16 @@ class DemoReplayService:
 
     _lock = threading.Lock()
 
-    def __init__(self, session_factory=SessionLocal) -> None:
+    def __init__(
+        self,
+        session_factory=SessionLocal,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self.session_factory = session_factory
+        self.clock = clock or (lambda: datetime.now(TRINIDAD_TZ))
+        self.forecast_service = DemoLoadForecastService()
+        self.risk_engine = RiskProbabilityEngine()
+        self._forecast_cache: dict[datetime, object] = {}
 
     def ensure_seeded(self, force: bool = False) -> int:
         if self.session_factory is SessionLocal:
@@ -41,7 +65,9 @@ class DemoReplayService:
             existing = session.scalar(select(func.count(DemoObservation.id))) or 0
             expected = 365 * 24 if not _is_leap_year(settings.DEMO_DATASET_YEAR) else 366 * 24
             if existing == expected and not force:
-                self._ensure_state(session)
+                state = self._ensure_state(session)
+                if not state.clock_aligned:
+                    self._sync_state_to_wallclock(state)
                 session.commit()
                 return int(existing)
             if existing:
@@ -67,14 +93,114 @@ class DemoReplayService:
             )
             if observation is None:
                 return None
-            replay = self._dashboard_bundle(session, state, observation)
+            weather_forecast = self._weather_forecast(state.cursor_at)
+            replay = self._dashboard_bundle(
+                session,
+                state,
+                observation,
+                weather_forecast,
+            )
+            risk_payload = self._operating_risk_payload(observation, replay)
             session.commit()
         return {
             "weather": _weather_payload(observation),
-            "forecast": self._weather_forecast(state.cursor_at),
+            "forecast": weather_forecast,
             "grid": _grid_payload(observation),
             "generation_units": _generation_units(observation),
             "replay": replay,
+            "risk_payload": risk_payload,
+        }
+
+    def _operating_risk_payload(
+        self,
+        observation: DemoObservation,
+        replay: ReplayDashboardResponse,
+    ) -> dict[str, object]:
+        future = [
+            point
+            for point in replay.full_day_load_forecast
+            if point.timestamp > observation.timestamp
+            and point.timestamp <= observation.timestamp + timedelta(hours=6)
+        ]
+        profile: list[OperatingForecastPoint] = []
+        if future:
+            first = future[0]
+            first_horizon = max(
+                1,
+                int((first.timestamp - observation.timestamp).total_seconds() / 60),
+            )
+            for horizon in (20, 30):
+                if horizon < first_horizon:
+                    fraction = horizon / first_horizon
+                    profile.append(
+                        OperatingForecastPoint(
+                            horizon_minutes=horizon,
+                            forecast_demand_mw=(
+                                observation.demand_mw
+                                + (first.forecast_demand_mw - observation.demand_mw) * fraction
+                            ),
+                            forecast_uncertainty_mw=max(
+                                5.0,
+                                first.uncertainty_mw * math.sqrt(fraction),
+                            ),
+                            weather_effect_mw=first.weather_impact_mw * fraction,
+                            confidence=first.weather_confidence,
+                        )
+                    )
+            profile.extend(
+                OperatingForecastPoint(
+                    horizon_minutes=int(
+                        (point.timestamp - observation.timestamp).total_seconds() / 60
+                    ),
+                    forecast_demand_mw=point.forecast_demand_mw,
+                    forecast_uncertainty_mw=point.uncertainty_mw,
+                    weather_effect_mw=point.weather_impact_mw,
+                    confidence=point.weather_confidence,
+                )
+                for point in future
+            )
+        if not profile:
+            profile.append(
+                OperatingForecastPoint(
+                    horizon_minutes=60,
+                    forecast_demand_mw=observation.demand_mw,
+                    forecast_uncertainty_mw=15.0,
+                    confidence=0.5,
+                )
+            )
+
+        risk = self.risk_engine.evaluate(
+            OperatingRiskInput(
+                forecast_demand_mw=profile[0].forecast_demand_mw,
+                forecast_uncertainty_mw=profile[0].forecast_uncertainty_mw,
+                current_demand_mw=observation.demand_mw,
+                online_capacity_mw=observation.online_capacity_mw,
+                available_capacity_mw=observation.available_capacity_mw,
+                spinning_reserve_mw=observation.spinning_reserve_mw,
+                forecast_profile=tuple(profile),
+            )
+        )
+        forecast_30 = min(profile, key=lambda point: abs(point.horizon_minutes - 30))
+        forecast_60 = min(profile, key=lambda point: abs(point.horizon_minutes - 60))
+        return {
+            "engine_version": risk.engine_version,
+            "probability_score": risk.probability_score,
+            "risk_level": risk.risk_level,
+            "forecast_demand_30m": round(forecast_30.forecast_demand_mw, 2),
+            "forecast_demand_60m": round(forecast_60.forecast_demand_mw, 2),
+            "recommendation": risk.recommendation,
+            "factors": risk.reasons,
+            "reason": "; ".join(risk.reasons),
+            "decision_action": risk.decision_action,
+            "generator_set": risk.generator_set,
+            "recommended_capacity_mw": risk.recommended_capacity_mw,
+            "projected_shortfall_mw": risk.projected_shortfall_mw,
+            "expected_shortfall_mw": risk.expected_shortfall_mw,
+            "expected_load_rise_mw": risk.expected_load_rise_mw,
+            "expected_rise_minutes": risk.expected_rise_minutes,
+            "startup_time_minutes": risk.startup_time_minutes,
+            "decision_confidence": risk.decision_confidence,
+            "weather_effect_mw": risk.weather_effect_mw,
         }
 
     def get_status(self) -> ReplayStatusResponse:
@@ -103,9 +229,7 @@ class DemoReplayService:
                 state.is_playing = False
                 state.last_wallclock_at = None
             elif request.action == "reset":
-                state.cursor_at = state.replay_start
-                state.is_playing = False
-                state.last_wallclock_at = None
+                self._sync_state_to_wallclock(state)
             elif request.action == "step":
                 state.cursor_at = min(
                     state.replay_end,
@@ -130,13 +254,18 @@ class DemoReplayService:
                     .order_by(DemoObservation.timestamp)
                 )
             )
-        return [_forecast_payload(row) for row in rows]
+        source_payloads = [
+            [_forecast_source_payload(row, source_name, source_index) for row in rows]
+            for source_index, source_name in enumerate(REPLAY_FORECAST_SOURCES)
+        ]
+        return WeatherService.reconcile_forecast_sources(source_payloads)
 
     def _dashboard_bundle(
         self,
         session,
         state: DemoReplayState,
         observation: DemoObservation,
+        weather_forecast: list[dict[str, object]],
     ) -> ReplayDashboardResponse:
         history_start = state.cursor_at - timedelta(hours=47)
         history = list(
@@ -149,7 +278,20 @@ class DemoReplayService:
                 .order_by(DemoObservation.timestamp)
             )
         )
-        forecast = self._full_day_forecast(session, state)
+        forecast_result = self._full_day_forecast(session, state, weather_forecast)
+        forecast = [
+            LoadForecastPointResponse(
+                timestamp=point.timestamp,
+                forecast_demand_mw=point.forecast_demand_mw,
+                historical_average_mw=point.historical_average_mw,
+                actual_demand_mw=point.actual_demand_mw,
+                uncertainty_mw=point.uncertainty_mw,
+                weather_impact_mw=point.weather_impact_mw,
+                weather_confidence=point.weather_confidence,
+                weather_source_count=point.weather_source_count,
+            )
+            for point in forecast_result.points
+        ]
         historical = list(
             session.scalars(
                 select(DemoObservation).where(
@@ -193,6 +335,13 @@ class DemoReplayService:
                 current_day_peak_forecast_mw=round(
                     max(point.forecast_demand_mw for point in forecast), 2
                 ),
+                forecast_model=forecast_result.model_name,
+                forecast_mode=forecast_result.model_mode,
+                forecast_mae_mw=forecast_result.mae_mw,
+                baseline_mae_mw=forecast_result.baseline_mae_mw,
+                residual_std_mw=forecast_result.residual_std_mw,
+                training_rows=forecast_result.training_rows,
+                weather_features=list(forecast_result.weather_features),
             ),
         )
 
@@ -221,57 +370,41 @@ class DemoReplayService:
             )
         return result
 
-    def _full_day_forecast(self, session, state: DemoReplayState) -> list[LoadForecastPointResponse]:
+    def _full_day_forecast(
+        self,
+        session,
+        state: DemoReplayState,
+        weather_forecast: list[dict[str, object]],
+    ):
+        cached = self._forecast_cache.get(state.cursor_at)
+        if cached is not None:
+            return cached
         day_start = state.cursor_at.replace(hour=0, minute=0, second=0, microsecond=0)
         day_end = day_start + timedelta(hours=23)
-        prior_start = state.cursor_at - timedelta(days=84)
         history = list(
             session.scalars(
                 select(DemoObservation).where(
-                    DemoObservation.timestamp >= prior_start,
-                    DemoObservation.timestamp < state.cursor_at,
+                    DemoObservation.timestamp >= state.dataset_start,
+                    DemoObservation.timestamp <= state.cursor_at,
                 )
             )
         )
-        day_rows = {
-            row.timestamp: row
-            for row in session.scalars(
+        day_rows = list(
+            session.scalars(
                 select(DemoObservation).where(
                     DemoObservation.timestamp >= day_start,
                     DemoObservation.timestamp <= day_end,
-                )
+                ).order_by(DemoObservation.timestamp)
             )
-        }
-        by_hour: dict[int, list[DemoObservation]] = defaultdict(list)
-        for row in history:
-            by_hour[row.timestamp.hour].append(row)
-        points: list[LoadForecastPointResponse] = []
-        for hour in range(24):
-            target = day_start + timedelta(hours=hour)
-            target_weather = day_rows[target]
-            candidates = by_hour.get(hour) or history
-            baseline = sum(row.demand_mw for row in candidates) / len(candidates)
-            average_temp = sum(row.temperature_c for row in candidates) / len(candidates)
-            average_humidity = sum(row.humidity_percent for row in candidates) / len(candidates)
-            weather_adjustment = (
-                (target_weather.temperature_c - average_temp) * 10.5
-                + (target_weather.humidity_percent - average_humidity) * 0.8
-                - min(22.0, target_weather.rainfall_mm_hr * 4.0)
-            )
-            estimate = max(650.0, baseline + weather_adjustment)
-            spread = max(12.0, 18.0 + abs(weather_adjustment) * 0.35)
-            points.append(
-                LoadForecastPointResponse(
-                    timestamp=target,
-                    forecast_demand_mw=round(estimate, 2),
-                    historical_average_mw=round(baseline, 2),
-                    actual_demand_mw=(
-                        target_weather.demand_mw if target <= state.cursor_at else None
-                    ),
-                    uncertainty_mw=round(spread, 2),
-                )
-            )
-        return points
+        )
+        result = self.forecast_service.forecast_day(
+            history=history,
+            day_rows=day_rows,
+            weather_forecast=weather_forecast,
+            cursor_at=state.cursor_at,
+        )
+        self._forecast_cache = {state.cursor_at: result}
+        return result
 
     def _status(self, session, state: DemoReplayState) -> ReplayStatusResponse:
         total = session.scalar(
@@ -302,6 +435,7 @@ class DemoReplayService:
             revealed_records=int(revealed),
             total_replay_records=int(total),
             source=DEMO_SOURCE,
+            clock_aligned=state.clock_aligned,
         )
 
     @staticmethod
@@ -333,8 +467,7 @@ class DemoReplayService:
             raise RuntimeError("Demo replay state is not initialized")
         return state
 
-    @staticmethod
-    def _ensure_state(session) -> DemoReplayState:
+    def _ensure_state(self, session) -> DemoReplayState:
         state = session.get(DemoReplayState, STATE_ID)
         if state is not None:
             return state
@@ -355,12 +488,38 @@ class DemoReplayService:
             replay_start=replay_start,
             replay_end=replay_end,
             cursor_at=replay_start,
-            is_playing=False,
+            is_playing=True,
             step_minutes=60,
-            speed_multiplier=600.0,
+            speed_multiplier=1.0,
+            last_wallclock_at=_utc_now_naive(),
+            clock_aligned=True,
         )
+        state.cursor_at = self._mapped_wallclock_cursor(state)
         session.add(state)
         return state
+
+    def _sync_state_to_wallclock(self, state: DemoReplayState) -> None:
+        state.cursor_at = self._mapped_wallclock_cursor(state)
+        state.is_playing = True
+        state.speed_multiplier = 1.0
+        state.last_wallclock_at = _utc_now_naive()
+        state.clock_aligned = True
+
+    def _mapped_wallclock_cursor(self, state: DemoReplayState) -> datetime:
+        now = self.clock()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=TRINIDAD_TZ)
+        else:
+            now = now.astimezone(TRINIDAD_TZ)
+        last_day = monthrange(state.replay_start.year, state.replay_start.month)[1]
+        day = min(max(1, now.day), last_day)
+        mapped = datetime(
+            state.replay_start.year,
+            state.replay_start.month,
+            day,
+            now.hour,
+        )
+        return min(state.replay_end, max(state.replay_start, mapped))
 
 
 def _generate_demo_year(year: int) -> list[DemoObservation]:
@@ -442,16 +601,36 @@ def _weather_payload(row: DemoObservation) -> dict[str, object]:
     }
 
 
-def _forecast_payload(row: DemoObservation) -> dict[str, object]:
-    payload = _weather_payload(row)
+def _forecast_source_payload(
+    row: DemoObservation,
+    provider_name: str,
+    source_index: int,
+) -> dict[str, object]:
+    phase = row.timestamp.timetuple().tm_yday * 24 + row.timestamp.hour
+    temperature_error = (0.45, -0.25, 0.15)[source_index] * math.sin(phase * 0.23 + source_index)
+    humidity_error = (1.8, -1.2, 0.8)[source_index] * math.cos(phase * 0.19 + source_index)
+    rainfall_scale = (1.05, 0.92, 1.12)[source_index]
+    cloud_error = (4.0, -3.0, 2.0)[source_index] * math.sin(phase * 0.17 + source_index)
+    wind_error = (0.8, -0.6, 0.4)[source_index] * math.cos(phase * 0.13 + source_index)
+    temperature = row.temperature_c + temperature_error
+    humidity = max(0.0, min(100.0, row.humidity_percent + humidity_error))
+    rainfall = max(0.0, row.rainfall_mm_hr * rainfall_scale)
+    cloud = max(0.0, min(100.0, row.cloud_cover_percent + cloud_error))
+    wind = max(0.0, row.wind_speed_kmh + wind_error)
     return {
         "forecast_timestamp": row.timestamp,
-        **{key: value for key, value in payload.items() if key not in {"timestamp", "provider_name"}},
-        "precipitation_probability_percent": min(100.0, round(15 + row.cloud_cover_percent * 0.65 + row.rainfall_mm_hr * 8, 1)),
-        "confidence_score": 0.86,
-        "provider_name": "Demo Forecast · Weather-informed replay",
-        "source_count": 1,
-        "source_names": ["WGDSS historical weather demonstration"],
+        "temperature_c": round(temperature, 2),
+        "humidity_percent": round(humidity, 2),
+        "rainfall_mm_hr": round(rainfall, 2),
+        "cloud_cover_percent": round(cloud, 2),
+        "wind_speed_kmh": round(wind, 2),
+        "pressure_hpa": row.pressure_hpa,
+        "weather_condition": _condition(rainfall, cloud),
+        "precipitation_probability_percent": min(
+            100.0,
+            round(12 + cloud * 0.67 + rainfall * 8, 1),
+        ),
+        "provider_name": provider_name,
     }
 
 

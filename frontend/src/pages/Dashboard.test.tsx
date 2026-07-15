@@ -100,7 +100,8 @@ describe("Dashboard", () => {
     expect(screen.getByTestId("probability-gauge")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Operational Guidance" }));
-    expect(screen.getByText("30m Headroom")).toBeInTheDocument();
+    expect(screen.getByText("Conservative Shortfall")).toBeInTheDocument();
+    expect(screen.getByText("Decision Confidence")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Analytics" }));
     expect(screen.getByText("Calibration Summary")).toBeInTheDocument();

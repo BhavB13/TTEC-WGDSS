@@ -60,10 +60,15 @@ after the cursor are excluded from forecast fitting to prevent future leakage.
 
 ## Playback
 
-The dashboard has persistent Play, Pause, Step, and Reset controls. Step size is
-configurable as one hour, six hours, or one day. Automatic playback supports one
-simulated minute, ten simulated minutes, one simulated hour, or one simulated
-day per real second.
+The dashboard has persistent Play, Pause, Step, and Sync Now controls. On first
+startup after migration, the replay maps Trinidad's current day and hour into
+June and advances at real-time speed. Step size is configurable as one hour, six
+hours, or one day. Automatic playback also supports one simulated minute, ten
+simulated minutes, one simulated hour, or one simulated day per real second.
+
+The archived outlook passes through synchronized Open-Meteo Best Match, MET
+Norway, and Open-Meteo NOAA GFS source snapshots. See
+`docs/FORECAST_DISPATCH_UPGRADE.md` for merge and dispatch mathematics.
 
 API:
 

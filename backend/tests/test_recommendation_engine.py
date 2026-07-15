@@ -51,7 +51,7 @@ def test_probability_thresholds_produce_low_medium_and_high_actions():
     assert medium["risk_level"] == "MEDIUM"
     assert medium["recommendation"] == "MONITOR CONDITIONS"
     assert high["risk_level"] == "HIGH"
-    assert high["recommendation"] == "START ADDITIONAL TURBINE"
+    assert high["recommendation"] == "START HEAVY GENERATOR SET"
 
 
 def test_historical_spin_profile_does_not_masquerade_as_live_grid_telemetry():

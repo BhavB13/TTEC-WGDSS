@@ -32,6 +32,25 @@ export default function ReplayLoadChart({
       labels: points.map((point) => formatHour(point.timestamp)),
       datasets: [
         {
+          label: "Forecast lower bound",
+          data: points.map((point) => point.forecast_demand_mw - point.uncertainty_mw),
+          borderColor: "rgba(34,211,238,.2)",
+          backgroundColor: "rgba(34,211,238,.08)",
+          borderWidth: 0.8,
+          pointRadius: 0,
+          tension: 0.3,
+        },
+        {
+          label: "Forecast uncertainty",
+          data: points.map((point) => point.forecast_demand_mw + point.uncertainty_mw),
+          borderColor: "rgba(34,211,238,.2)",
+          backgroundColor: "rgba(34,211,238,.08)",
+          fill: "-1",
+          borderWidth: 0.8,
+          pointRadius: 0,
+          tension: 0.3,
+        },
+        {
           label: "Forecast demand",
           data: points.map((point) => point.forecast_demand_mw),
           borderColor: "#22d3ee",
@@ -71,6 +90,9 @@ export default function ReplayLoadChart({
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">Full-Day Load Forecast</p>
           <h2 className="mt-0.5 text-sm font-semibold text-white">Forecast vs historical baseline and revealed demand</h2>
+          <p className="mt-0.5 text-[9px] text-slate-400">
+            {replay.summary.forecast_model} · MAE {replay.summary.forecast_mae_mw.toFixed(1)} MW · {replay.summary.training_rows} prior rows
+          </p>
         </div>
         <span className="rounded-full border border-cyan-500/25 bg-cyan-500/10 px-2 py-1 text-[9px] font-semibold text-cyan-100">
           Peak {replay.summary.current_day_peak_forecast_mw.toFixed(0)} MW
@@ -85,8 +107,26 @@ export default function ReplayLoadChart({
             animation: false,
             interaction: { mode: "index", intersect: false },
             plugins: {
-              legend: { position: "bottom", labels: { color: text, boxWidth: 12, font: { size: 9 } } },
-              tooltip: { callbacks: { label: (context) => `${context.dataset.label}: ${Number(context.raw).toFixed(0)} MW` } },
+              legend: {
+                position: "bottom",
+                labels: {
+                  color: text,
+                  boxWidth: 12,
+                  font: { size: 9 },
+                  filter: (item) => item.text !== "Forecast lower bound",
+                },
+              },
+              tooltip: {
+                callbacks: {
+                  label: (context) => `${context.dataset.label}: ${Number(context.raw).toFixed(0)} MW`,
+                  afterBody: (items) => {
+                    const point = points[items[0]?.dataIndex ?? 0];
+                    return point
+                      ? [`Weather impact: ${point.weather_impact_mw >= 0 ? "+" : ""}${point.weather_impact_mw.toFixed(1)} MW`, `Weather confidence: ${(point.weather_confidence * 100).toFixed(0)}% (${point.weather_source_count} sources)`]
+                      : [];
+                  },
+                },
+              },
             },
             scales: {
               x: { ticks: { color: text, maxTicksLimit: 12, font: { size: 9 } }, grid: { color: grid } },

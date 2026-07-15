@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import create_engine, func, select
@@ -16,7 +17,8 @@ def replay_service(tmp_path_factory):
     engine = create_engine(f"sqlite:///{database}")
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
-    return DemoReplayService(session_factory=session_factory), session_factory
+    clock = lambda: datetime(2026, 7, 15, 10, 42, tzinfo=ZoneInfo("America/Port_of_Spain"))
+    return DemoReplayService(session_factory=session_factory, clock=clock), session_factory
 
 
 def test_demo_seed_separates_year_archive_from_june_replay(replay_service):
@@ -30,7 +32,10 @@ def test_demo_seed_separates_year_archive_from_june_replay(replay_service):
     assert status.replay_start == datetime(2025, 6, 1)
     assert status.replay_end == datetime(2025, 6, 30, 23)
     assert status.total_replay_records == 720
-    assert status.revealed_records == 1
+    assert status.cursor_at == datetime(2025, 6, 15, 10)
+    assert status.is_playing is True
+    assert status.speed_multiplier == 1
+    assert status.revealed_records == 347
     with session_factory() as session:
         assert session.scalar(select(func.count(DemoObservation.id))) == 8760
 
@@ -47,12 +52,16 @@ def test_replay_dashboard_exposes_history_forecast_and_no_future_actuals(replay_
     assert replay.summary.historical_record_count == 8040
     assert len(replay.operational_history) == 48
     assert len(replay.full_day_load_forecast) == 24
-    assert replay.full_day_load_forecast[0].actual_demand_mw is not None
+    assert replay.full_day_load_forecast[10].actual_demand_mw is not None
     assert all(
         point.actual_demand_mw is None
-        for point in replay.full_day_load_forecast[1:]
+        for point in replay.full_day_load_forecast[11:]
     )
     assert len(context["forecast"]) == 24
+    assert all(item["source_count"] == 3 for item in context["forecast"][:6])
+    assert all(item["source_sync_status"] == "COMPLETE" for item in context["forecast"][:6])
+    assert replay.summary.training_rows > 3000
+    assert replay.summary.forecast_mae_mw <= replay.summary.baseline_mae_mw
     assert context["grid"]["source_provider"] == "SimulatedLiveScadaReplay"
 
 
@@ -62,8 +71,8 @@ def test_replay_control_steps_configures_and_resets_cursor(replay_service):
         ReplayControlRequest(action="configure", step_minutes=1440, speed_multiplier=86400)
     )
     stepped = service.control(ReplayControlRequest(action="step"))
-    assert stepped.cursor_at == datetime(2025, 6, 2)
-    assert stepped.revealed_records == 25
+    assert stepped.cursor_at == datetime(2025, 6, 16, 10)
+    assert stepped.revealed_records == 371
 
     with session_factory() as session:
         state = session.get(DemoReplayState, 1)
@@ -75,7 +84,8 @@ def test_replay_control_steps_configures_and_resets_cursor(replay_service):
         session.commit()
 
     advanced = service.get_status()
-    assert advanced.cursor_at >= datetime(2025, 6, 3)
+    assert advanced.cursor_at >= datetime(2025, 6, 17, 10)
     reset = service.control(ReplayControlRequest(action="reset"))
-    assert reset.cursor_at == datetime(2025, 6, 1)
-    assert reset.is_playing is False
+    assert reset.cursor_at == datetime(2025, 6, 15, 10)
+    assert reset.is_playing is True
+    assert reset.speed_multiplier == 1

@@ -100,12 +100,24 @@ Control actions are `play`, `pause`, `reset`, `step`, and `configure`.
 `step_minutes` accepts 15 through 1,440 minutes and `speed_multiplier` accepts 1
 through 86,400 simulated seconds per real second.
 
+After the replay-clock migration, the initial `cursor_at` maps the current
+Trinidad day/hour into June, `clock_aligned` is true, and playback starts at
+real-time speed. `reset` is presented as **Sync Now** and repeats this mapping.
+
 Each hourly forecast item includes `source_count`, `source_names`,
 `temperature_spread_c`, and `cloud_cover_spread_percent`. The normal operating
 path reconciles Open-Meteo Best Match, MET Norway Locationforecast, and NOAA GFS
-by timestamp. `confidence_score` is reduced when the sources disagree or fewer
-than two sources are available. Imported SCADA temperature remains calibration
+by timestamp. `source_sync_status` is `COMPLETE` only when all three sources are
+present for that hour, and `field_source_counts` shows per-field coverage.
+`confidence_score` is reduced when sources disagree or are unavailable. Imported SCADA temperature remains calibration
 metadata; it does not replace a live weather observation.
+
+Probability and recommendation objects retain their original fields and also
+expose `decision_action`, `generator_set`, `recommended_capacity_mw`,
+`projected_shortfall_mw`, `expected_shortfall_mw`, `expected_load_rise_mw`,
+`expected_rise_minutes`, `startup_time_minutes`, `decision_confidence`, and
+`weather_effect_mw`. These fields explain generator startup guidance; they do
+not execute dispatch.
 
 `demand_forecast`, `model_status`, and `scada_status` are optional. They appear
 after historical SCADA CSVs have been imported, normalized into grid snapshots,

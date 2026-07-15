@@ -37,6 +37,14 @@ only and does not claim a live T&TEC feed.
   persistent progress.
 - Full-day weather-informed load forecast, revealed actuals, historical hourly
   baseline, 48-hour trends, and 12-month analytics.
+- Three-source, per-field hourly weather consensus with timestamp synchronization
+  and explicit degradation when any source is unavailable.
+- Current-clock June alignment with real-time automatic playback and manual
+  accelerated controls.
+- Chronologically validated weather-sensitive replay forecasting and dispatch
+  selection for the 30 MW fast-start set or 60-120 MW heavy set.
+- Registry-based historical imports with schema mapping, validation, SHA-256
+  deduplication, and documented recalibration/retraining steps.
 
 ## Current Data Limitation
 

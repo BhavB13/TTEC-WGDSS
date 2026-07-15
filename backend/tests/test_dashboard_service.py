@@ -397,10 +397,10 @@ async def test_dashboard_snapshot_exposes_model_scada_status_and_operating_risk(
     assert snapshot.model_status.metrics.mae == 10
     assert snapshot.scada_status is not None
     assert snapshot.scada_status.quality_status == "GOOD"
-    assert snapshot.probability.engine_version == "operating-risk-v1.3"
+    assert snapshot.probability.engine_version == "operating-risk-v2.0"
     assert snapshot.probability.risk_level == "HIGH"
     assert snapshot.probability.forecast_demand_30m == 970
-    assert snapshot.recommendation.recommendation == "START ADDITIONAL TURBINE"
+    assert snapshot.recommendation.recommendation == "START HEAVY GENERATOR SET"
     assert snapshot.data_quality.decision_status == "SIMULATION"
 
 

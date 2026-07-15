@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+import math
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -101,7 +102,18 @@ class WeatherService:
                 [self._normalize_forecast_item(item) for item in payload]
                 for payload in source_payloads
             ]
-            normalized = self._reconcile_forecasts(normalized_sources)
+            normalized = self.reconcile_forecast_sources(
+                normalized_sources,
+                expected_source_count=1 + len(self.consensus_providers),
+            )
+            self.last_forecast_consensus_degraded = (
+                self.last_forecast_consensus_degraded
+                or not normalized
+                or any(
+                    item.get("source_sync_status") != "COMPLETE"
+                    for item in normalized[:6]
+                )
+            )
         else:
             raw = await self._fetch_forecast_with_failover(latitude, longitude, days)
             normalized = [self._normalize_forecast_item(item) for item in raw]
@@ -249,7 +261,7 @@ class WeatherService:
 
         self.last_forecast_source_count = len(successful)
         self.last_forecast_provider_names = provider_names
-        self.last_forecast_consensus_degraded = len(successful) < 2
+        self.last_forecast_consensus_degraded = len(successful) < len(providers)
         logger.info(
             "Forecast assembled from %s source(s): %s",
             len(successful),
@@ -257,63 +269,108 @@ class WeatherService:
         )
         return successful
 
-    def _reconcile_forecasts(
-        self,
+    @classmethod
+    def reconcile_forecast_sources(
+        cls,
         sources: list[list[dict[str, Any]]],
+        expected_source_count: int | None = None,
     ) -> list[dict[str, Any]]:
-        periods: dict[datetime, list[dict[str, Any]]] = {}
-        for source in sources:
+        """Merge provider forecasts by UTC hour without inventing missing values."""
+        expected_sources = expected_source_count or len(sources)
+        periods: dict[datetime, dict[str, dict[str, Any]]] = {}
+        for source_index, source in enumerate(sources):
             for item in source:
-                timestamp = self._parse_datetime(item.get("forecast_timestamp"))
+                timestamp = cls._parse_datetime(item.get("forecast_timestamp"))
                 if timestamp is None:
                     continue
-                utc_hour = timestamp.astimezone(timezone.utc).replace(
-                    minute=0,
-                    second=0,
-                    microsecond=0,
+                utc_timestamp = timestamp.astimezone(timezone.utc)
+                utc_hour = (utc_timestamp + timedelta(minutes=30)).replace(
+                    minute=0, second=0, microsecond=0
                 )
-                periods.setdefault(utc_hour, []).append(item)
+                if abs((utc_timestamp - utc_hour).total_seconds()) > 30 * 60:
+                    continue
+                provider_name = str(
+                    item.get("provider_name") or f"source-{source_index + 1}"
+                )
+                existing = periods.setdefault(utc_hour, {}).get(provider_name)
+                if existing is None or abs(
+                    (utc_timestamp - utc_hour).total_seconds()
+                ) < abs(
+                    (
+                        cls._parse_datetime(existing.get("forecast_timestamp"))
+                        .astimezone(timezone.utc)
+                        - utc_hour
+                    ).total_seconds()
+                ):
+                    periods[utc_hour][provider_name] = item
 
         reconciled: list[dict[str, Any]] = []
-        for timestamp, items in sorted(periods.items()):
-            provider_names = list(
-                dict.fromkeys(str(item.get("provider_name", "Unknown")) for item in items)
-            )
-            temperature_values = self._values(items, "temperature_c")
-            humidity_values = self._values(items, "humidity_percent")
-            rainfall_values = self._values(items, "rainfall_mm_hr")
-            cloud_values = self._values(items, "cloud_cover_percent")
-            wind_values = self._values(items, "wind_speed_kmh")
-            probability_values = self._values(
+        operational_fields = (
+            "temperature_c",
+            "humidity_percent",
+            "rainfall_mm_hr",
+            "cloud_cover_percent",
+            "wind_speed_kmh",
+        )
+        for timestamp, provider_items in sorted(periods.items()):
+            items = list(provider_items.values())
+            provider_names = list(provider_items)
+            field_values = {
+                field: cls._values(items, field) for field in operational_fields
+            }
+            missing_fields = [
+                field for field, values in field_values.items() if not values
+            ]
+            if missing_fields:
+                logger.warning(
+                    "Skipping forecast hour %s; no valid source supplied %s",
+                    timestamp.isoformat(),
+                    ", ".join(missing_fields),
+                )
+                continue
+
+            temperature_values = field_values["temperature_c"]
+            rainfall_values = field_values["rainfall_mm_hr"]
+            cloud_values = field_values["cloud_cover_percent"]
+            probability_values = cls._values(
                 items,
                 "precipitation_probability_percent",
             )
 
-            temperature = self._weighted_mean(items, "temperature_c")
-            humidity = self._clamp(
-                self._weighted_mean(items, "humidity_percent"),
+            temperature = cls._weighted_mean(items, "temperature_c")
+            humidity = cls._clamp(
+                cls._weighted_mean(items, "humidity_percent"),
                 0.0,
                 100.0,
             )
-            rainfall = max(0.0, self._weighted_mean(items, "rainfall_mm_hr"))
-            cloud_cover = self._clamp(
-                self._weighted_mean(items, "cloud_cover_percent"),
+            rainfall = max(0.0, cls._weighted_mean(items, "rainfall_mm_hr"))
+            cloud_cover = cls._clamp(
+                cls._weighted_mean(items, "cloud_cover_percent"),
                 0.0,
                 100.0,
             )
-            wind_speed = max(0.0, self._weighted_mean(items, "wind_speed_kmh"))
+            wind_speed = max(0.0, cls._weighted_mean(items, "wind_speed_kmh"))
+            pressure_values = cls._values(items, "pressure_hpa")
+            pressure = (
+                cls._weighted_mean(items, "pressure_hpa")
+                if pressure_values
+                else None
+            )
             precipitation_probability = (
                 max(probability_values)
                 if probability_values
-                else self._rain_probability(rainfall)
+                else cls._rain_probability(rainfall)
             )
-            condition = self._consensus_condition(items, rainfall, cloud_cover)
-            confidence = self._consensus_confidence(
+            condition = cls._consensus_condition(items, rainfall, cloud_cover)
+            confidence = cls._consensus_confidence(
                 len(items),
-                self._spread(temperature_values),
-                self._spread(cloud_values),
-                self._spread(rainfall_values),
+                cls._spread(temperature_values),
+                cls._spread(cloud_values),
+                cls._spread(rainfall_values),
             )
+            field_source_counts = {
+                field: len(values) for field, values in field_values.items()
+            }
 
             reconciled.append(
                 {
@@ -323,14 +380,15 @@ class WeatherService:
                     "rainfall_mm_hr": round(rainfall, 2),
                     "cloud_cover_percent": round(cloud_cover, 1),
                     "wind_speed_kmh": round(wind_speed, 1),
+                    "pressure_hpa": round(pressure, 1) if pressure is not None else None,
                     "weather_condition": condition,
-                    "heat_index_c": self._calculate_heat_index(temperature, humidity),
+                    "heat_index_c": cls._calculate_heat_index(temperature, humidity),
                     "precipitation_probability_percent": round(
-                        self._clamp(precipitation_probability, 0.0, 100.0),
+                        cls._clamp(precipitation_probability, 0.0, 100.0),
                         1,
                     ),
                     "confidence_score": confidence,
-                    "rain_severity": self._rain_severity(rainfall),
+                    "rain_severity": cls._rain_severity(rainfall),
                     "provider_name": (
                         f"Consensus ({' + '.join(provider_names)})"
                         if len(provider_names) > 1
@@ -338,17 +396,28 @@ class WeatherService:
                     ),
                     "source_count": len(provider_names),
                     "source_names": provider_names,
+                    "source_sync_status": (
+                        "COMPLETE" if len(provider_names) == expected_sources else "DEGRADED"
+                    ),
+                    "field_source_counts": field_source_counts,
                     "temperature_spread_c": round(
-                        self._spread(temperature_values),
+                        cls._spread(temperature_values),
                         2,
                     ),
                     "cloud_cover_spread_percent": round(
-                        self._spread(cloud_values),
+                        cls._spread(cloud_values),
                         1,
                     ),
                 }
             )
         return reconciled
+
+    # Backward-compatible alias retained for existing internal callers/tests.
+    def _reconcile_forecasts(
+        self,
+        sources: list[list[dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
+        return self.reconcile_forecast_sources(sources)
 
     @staticmethod
     def _values(items: list[dict[str, Any]], key: str) -> list[float]:
@@ -362,7 +431,8 @@ class WeatherService:
                 continue
         return values
 
-    def _weighted_mean(self, items: list[dict[str, Any]], key: str) -> float:
+    @classmethod
+    def _weighted_mean(cls, items: list[dict[str, Any]], key: str) -> float:
         weighted_total = 0.0
         total_weight = 0.0
         for item in items:
@@ -373,7 +443,7 @@ class WeatherService:
                 numeric_value = float(value)
             except (TypeError, ValueError):
                 continue
-            weight = self._provider_weight(str(item.get("provider_name", "")))
+            weight = cls._provider_weight(str(item.get("provider_name", "")))
             weighted_total += numeric_value * weight
             total_weight += weight
         return weighted_total / total_weight if total_weight else 0.0
@@ -420,12 +490,13 @@ class WeatherService:
     ) -> float:
         if source_count < 2:
             return 0.68
+        base_confidence = 0.97 if source_count >= 3 else 0.91
         disagreement_penalty = (
             min(temperature_spread / 8.0, 1.0) * 0.16
             + min(cloud_spread / 100.0, 1.0) * 0.12
             + min(rainfall_spread / 10.0, 1.0) * 0.10
         )
-        return round(cls._clamp(0.96 - disagreement_penalty, 0.58, 0.96), 2)
+        return round(cls._clamp(base_confidence - disagreement_penalty, 0.58, 0.97), 2)
 
     @staticmethod
     def _consensus_condition(
@@ -522,28 +593,25 @@ class WeatherService:
         }
 
     def _normalize_forecast_item(self, data: dict[str, Any]) -> dict[str, Any]:
-        temperature_c = self._first_number(
+        temperature_c = self._optional_number(
             data,
             ["temperature_c", "temperature_2m", "temp_c"],
         )
-        humidity_percent = self._first_number(
+        humidity_percent = self._optional_number(
             data,
             ["humidity_percent", "relative_humidity_2m", "humidity"],
         )
-        rainfall_mm_hr = self._first_number(
+        rainfall_mm_hr = self._optional_number(
             data,
             ["rainfall_mm_hr", "precipitation", "precip_mm", "rain"],
-            default=0.0,
         )
-        cloud_cover_percent = self._first_number(
+        cloud_cover_percent = self._optional_number(
             data,
             ["cloud_cover_percent", "cloud_cover", "cloud"],
-            default=0.0,
         )
-        wind_speed_kmh = self._first_number(
+        wind_speed_kmh = self._optional_number(
             data,
             ["wind_speed_kmh", "wind_speed_10m", "wind_kph"],
-            default=0.0,
         )
         weather_condition = str(
             data.get("weather_condition")
@@ -551,16 +619,18 @@ class WeatherService:
             or self._describe_weather_code(data.get("weather_code"))
             or "Unknown"
         )
-        heat_index_c = self._first_number(
+        heat_index_c = self._optional_number(
             data,
             ["heat_index_c", "heatindex_c", "apparent_temperature"],
-            default=self._calculate_heat_index(temperature_c, humidity_percent),
         )
-        precipitation_probability = self._first_number(
+        if heat_index_c is None and temperature_c is not None and humidity_percent is not None:
+            heat_index_c = self._calculate_heat_index(temperature_c, humidity_percent)
+        precipitation_probability = self._optional_number(
             data,
             ["precipitation_probability_percent", "chance_of_rain", "precipitation_probability"],
-            default=self._rain_probability(rainfall_mm_hr),
         )
+        if precipitation_probability is None and rainfall_mm_hr is not None:
+            precipitation_probability = self._rain_probability(rainfall_mm_hr)
         timestamp = self._normalize_timestamp(
             data.get("forecast_timestamp") or data.get("time") or data.get("time_epoch")
         )
@@ -578,9 +648,27 @@ class WeatherService:
             "heat_index_c": heat_index_c,
             "precipitation_probability_percent": precipitation_probability,
             "confidence_score": confidence_score,
-            "rain_severity": self._rain_severity(rainfall_mm_hr),
+            "rain_severity": (
+                self._rain_severity(rainfall_mm_hr)
+                if rainfall_mm_hr is not None
+                else "UNKNOWN"
+            ),
             "provider_name": data.get("provider_name", "Unknown"),
         }
+
+    @staticmethod
+    def _optional_number(data: dict[str, Any], keys: list[str]) -> float | None:
+        for key in keys:
+            value = data.get(key)
+            if value is None:
+                continue
+            try:
+                converted = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(converted):
+                return converted
+        return None
 
     def _cache_key(self, *parts: Any) -> str:
         return ":".join(str(part) for part in parts)

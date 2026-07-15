@@ -12,6 +12,7 @@ class CalibrationImportRun(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     source_archive: Mapped[str] = mapped_column(String(255), nullable=False)
     source_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     import_status: Mapped[str] = mapped_column(String(32), nullable=False, default="IMPORTED")
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
@@ -23,6 +24,7 @@ class CalibrationImportRun(Base):
 
     __table_args__ = (
         Index("idx_calibration_import_runs_source_archive", "source_archive"),
+        Index("idx_calibration_import_runs_source_hash", "source_hash", unique=True),
         Index("idx_calibration_import_runs_imported_at", "imported_at"),
     )
 

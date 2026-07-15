@@ -19,6 +19,7 @@ class ReplayStatusResponse(BaseModel):
     revealed_records: int
     total_replay_records: int
     source: str
+    clock_aligned: bool = True
 
 
 class OperationalTrendPointResponse(BaseModel):
@@ -38,6 +39,9 @@ class LoadForecastPointResponse(BaseModel):
     historical_average_mw: float
     actual_demand_mw: float | None = None
     uncertainty_mw: float
+    weather_impact_mw: float = 0.0
+    weather_confidence: float = 1.0
+    weather_source_count: int = 1
 
 
 class ReplaySummaryResponse(BaseModel):
@@ -47,6 +51,13 @@ class ReplaySummaryResponse(BaseModel):
     historical_peak_demand_mw: float
     replay_month_label: str
     current_day_peak_forecast_mw: float
+    forecast_model: str = "HourlyHistoricalAverage"
+    forecast_mode: str = "STATISTICAL_ACTIVE"
+    forecast_mae_mw: float = 0.0
+    baseline_mae_mw: float = 0.0
+    residual_std_mw: float = 0.0
+    training_rows: int = 0
+    weather_features: list[str] = Field(default_factory=list)
 
 
 class MonthlyHistoryPointResponse(BaseModel):
