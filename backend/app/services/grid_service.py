@@ -90,6 +90,24 @@ class GridService:
                 "Current generation exceeds available capacity"
             )
 
+        spin_payload = payload.get("spinning_reserve_mw")
+        if spin_payload is None:
+            # Corrected System Spin is a distinct OSI/OpenCalc quantity. The
+            # TRA/generation gap is useful diagnostic headroom, but it is not a
+            # substitute for the reported corrected-spin tag.
+            spinning_reserve_mw = None
+            spinning_reserve_source = "UNAVAILABLE_NOT_DERIVED"
+            missing_fields.append("spinning_reserve_mw")
+        else:
+            spinning_reserve_mw = self._required_non_negative(
+                payload,
+                "spinning_reserve_mw",
+            )
+            spinning_reserve_source = str(
+                payload.get("spinning_reserve_source")
+                or "GRID_PROVIDER_REPORTED"
+            )
+
         reserve_margin_percent = self._calculate_reserve_margin(
             total_available_capacity_mw,
             current_demand_mw,
@@ -105,6 +123,8 @@ class GridService:
             "current_generation_mw": current_generation_mw,
             "total_available_capacity_mw": total_available_capacity_mw,
             "reserve_margin_percent": reserve_margin_percent,
+            "spinning_reserve_mw": spinning_reserve_mw,
+            "spinning_reserve_source": spinning_reserve_source,
             "grid_status": payload.get("grid_status", "UNKNOWN"),
             "demand_period": payload.get("demand_period", "UNKNOWN"),
             "source_provider": payload.get("source_provider", "Unknown"),

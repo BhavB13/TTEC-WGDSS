@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CircleMarker,
   LayerGroup,
@@ -13,7 +13,7 @@ import {
   useMap,
   useMapEvents,
 } from "react-leaflet";
-import { divIcon } from "leaflet";
+import { divIcon, type TileLayer as LeafletTileLayer } from "leaflet";
 import "leaflet/dist/leaflet.css";
 
 import {
@@ -36,8 +36,8 @@ const DEFAULT_CENTER: [number, number] = [10.6918, -61.2225];
 const WIND_DIRECTION_MARKER_POSITION: [number, number] = [11.28, -61.28];
 const DEFAULT_ZOOM = 8;
 const ATLANTIC_OVERVIEW_MIN_ZOOM = 3;
-const GIBS_GEO_COLOR_LAYER = "GOES-East_ABI_GeoColor";
-const GIBS_GEO_COLOR_TILESET = "GoogleMapsCompatible_Level7";
+const GIBS_CLOUD_SYSTEMS_LAYER = "GOES-East_ABI_Band13_Clean_Infrared";
+const GIBS_CLOUD_SYSTEMS_TILESET = "GoogleMapsCompatible_Level6";
 const GIBS_PRECIP_LAYER = "IMERG_Precipitation_Rate_30min";
 const GIBS_PRECIP_TILESET = "GoogleMapsCompatible_Level6";
 const GIBS_BASE_LAYER = "BlueMarble_ShadedRelief_Bathymetry";
@@ -45,6 +45,7 @@ const GIBS_BASE_TILESET = "GoogleMapsCompatible_Level8";
 const CLOUD_SYSTEMS_LAYER_NAME = "Cloud Systems";
 const CLOUDS_LATEST = "default";
 const RAIN_LATEST = "default";
+const CLOUD_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const BASE_TILE_LAYER_OPTIONS = {
   keepBuffer: 6,
   updateInterval: 100,
@@ -60,8 +61,17 @@ const WEATHER_TILE_LAYER_OPTIONS = {
   detectRetina: false,
   noWrap: true,
 } as const;
-function buildGeoColorUrl(timeToken: string): string {
-  return `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${GIBS_GEO_COLOR_LAYER}/default/${timeToken}/${GIBS_GEO_COLOR_TILESET}/{z}/{y}/{x}.png`;
+const CLOUD_TILE_LAYER_OPTIONS = {
+  keepBuffer: 10,
+  updateInterval: 100,
+  updateWhenIdle: false,
+  updateWhenZooming: true,
+  detectRetina: false,
+  noWrap: true,
+} as const;
+
+function buildCloudSystemsUrl(timeToken: string): string {
+  return `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${GIBS_CLOUD_SYSTEMS_LAYER}/default/${timeToken}/${GIBS_CLOUD_SYSTEMS_TILESET}/{z}/{y}/{x}.png`;
 }
 
 function buildPrecipitationUrl(timeToken: string): string {
@@ -282,9 +292,11 @@ export default function WeatherMap({
 }: WeatherMapProps) {
   const [hurricaneEnabled, setHurricaneEnabled] = useState(false);
   const [windFlowEnabled, setWindFlowEnabled] = useState(false);
-  const [imageryStatus, setImageryStatus] = useState<
+  const [cloudImageryStatus, setCloudImageryStatus] = useState<
     "checking" | "ready" | "degraded"
   >("checking");
+  const cloudLayerRef = useRef<LeafletTileLayer | null>(null);
+  const cloudTilesLoadedRef = useRef(0);
   const [windFlowStatus, setWindFlowStatus] = useState<
     "loading" | "active" | "error"
   >("loading");
@@ -292,7 +304,7 @@ export default function WeatherMap({
   const [stormTrackingFailed, setStormTrackingFailed] = useState(false);
 
   const cloudSystemsTileUrl = useMemo(
-    () => buildGeoColorUrl(CLOUDS_LATEST),
+    () => buildCloudSystemsUrl(CLOUDS_LATEST),
     [],
   );
   const rainfallTileUrl = useMemo(
@@ -305,6 +317,16 @@ export default function WeatherMap({
     Number.isFinite(weather.wind_direction_deg)
       ? weather.wind_direction_deg
       : null;
+  useEffect(() => {
+    const refreshInterval = window.setInterval(() => {
+      setCloudImageryStatus("checking");
+      cloudTilesLoadedRef.current = 0;
+      cloudLayerRef.current?.redraw();
+    }, CLOUD_REFRESH_INTERVAL_MS);
+
+    return () => window.clearInterval(refreshInterval);
+  }, []);
+
   useEffect(() => {
     if (!hurricaneEnabled) {
       return;
@@ -353,15 +375,15 @@ export default function WeatherMap({
           </h2>
         </div>
         <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-semibold ${
-          imageryStatus === "degraded"
+          cloudImageryStatus === "degraded"
             ? "border-amber-400/35 bg-amber-500/10 text-amber-100"
             : "border-cyan-400/25 bg-cyan-500/10 text-cyan-100"
         }`}>
-          {imageryStatus === "degraded"
-            ? "Imagery degraded"
-            : imageryStatus === "checking"
-              ? "Checking imagery"
-              : "Imagery available"}
+          {cloudImageryStatus === "degraded"
+            ? "Cloud imagery degraded"
+            : cloudImageryStatus === "checking"
+              ? "Checking cloud imagery"
+              : "Cloud imagery live"}
         </span>
       </div>
 
@@ -406,22 +428,34 @@ export default function WeatherMap({
               />
             </LayersControl.BaseLayer>
 
-            <LayersControl.Overlay checked name={`${CLOUD_SYSTEMS_LAYER_NAME} (NASA/NOAA)`}>
+            <LayersControl.Overlay checked name={`${CLOUD_SYSTEMS_LAYER_NAME} (GOES-East IR)`}>
               <LayerGroup>
                 {cloudSystemsTileUrl ? (
                   <TileLayer
+                    ref={cloudLayerRef}
                     attribution="Clouds: NASA/NOAA"
                     opacity={0.78}
-                    maxNativeZoom={7}
+                    maxNativeZoom={6}
                     maxZoom={11}
                     zIndex={500}
                     pane="overlayPane"
                     url={cloudSystemsTileUrl}
                     eventHandlers={{
-                      tileload: () => setImageryStatus("ready"),
-                      tileerror: () => setImageryStatus("degraded"),
+                      loading: () => {
+                        cloudTilesLoadedRef.current = 0;
+                        setCloudImageryStatus("checking");
+                      },
+                      tileload: () => {
+                        cloudTilesLoadedRef.current += 1;
+                        setCloudImageryStatus("ready");
+                      },
+                      load: () => {
+                        setCloudImageryStatus(
+                          cloudTilesLoadedRef.current > 0 ? "ready" : "degraded",
+                        );
+                      },
                     }}
-                    {...WEATHER_TILE_LAYER_OPTIONS}
+                    {...CLOUD_TILE_LAYER_OPTIONS}
                   />
                 ) : null}
               </LayerGroup>
@@ -438,10 +472,6 @@ export default function WeatherMap({
                     zIndex={490}
                     pane="overlayPane"
                     url={rainfallTileUrl}
-                    eventHandlers={{
-                      tileload: () => setImageryStatus("ready"),
-                      tileerror: () => setImageryStatus("degraded"),
-                    }}
                     {...WEATHER_TILE_LAYER_OPTIONS}
                   />
                 ) : null}

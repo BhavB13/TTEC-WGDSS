@@ -49,6 +49,8 @@ def test_snapshot_persistence_writes_weather_grid_and_probability(tmp_path):
             current_generation_mw=960,
             total_available_capacity_mw=1200,
             reserve_margin_percent=26,
+            spinning_reserve_mw=80,
+            spinning_reserve_source="GSYS SYSTEM_CORRECTED_SPIN_TOTAL",
             grid_status="NORMAL",
             demand_period="AFTERNOON",
             source_provider="MockGridProvider",
@@ -93,3 +95,10 @@ def test_snapshot_persistence_writes_weather_grid_and_probability(tmp_path):
         assert probability_row is not None
         assert probability_row.snapshot_id == snapshot.snapshot_id
         assert probability_row.engine_version == "unknown"
+        grid_row = session.scalar(select(GridData))
+        assert grid_row is not None
+        assert grid_row.spinning_reserve_mw == 80
+        assert (
+            grid_row.spinning_reserve_source
+            == "GSYS SYSTEM_CORRECTED_SPIN_TOTAL"
+        )

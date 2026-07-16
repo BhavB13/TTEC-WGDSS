@@ -45,6 +45,12 @@ export default function DemandForecastChart({
   const chartTextColor = theme === "light" ? "#334155" : "#cbd5e1";
   const chartGridColor =
     theme === "light" ? "rgba(71, 85, 105, 0.18)" : "rgba(148, 163, 184, 0.14)";
+  const generationSeriesLabel =
+    ["HistoricalScadaReplay", "HistoricalScadaSimulatedReplay"].includes(
+      gridStatus.source_provider,
+    )
+      ? "Generation (TRA)"
+      : "Current Generation Reference";
   const activeScenario = useMemo(() => {
     if (!calibration?.scenarios?.length) {
       return null;
@@ -147,6 +153,20 @@ export default function DemandForecastChart({
             yAxisID: "demand",
           },
           {
+            label: generationSeriesLabel,
+            data: displayedDayEstimate.estimatedDemand.map(
+              () => gridStatus.current_generation_mw,
+            ),
+            borderColor: "rgba(52, 211, 153, 1)",
+            backgroundColor: "rgba(52, 211, 153, 0.12)",
+            borderWidth: 1.8,
+            borderDash: [8, 5],
+            pointRadius: 0,
+            pointHoverRadius: 3,
+            tension: 0,
+            yAxisID: "demand",
+          },
+          {
             label: "Measured Current Demand",
             data: displayedDayEstimate.estimatedDemand.map((_, index) =>
               index === displayedDayEstimate.currentIndex ? gridStatus.current_demand_mw : null,
@@ -205,7 +225,7 @@ export default function DemandForecastChart({
       labels: ["Current", "30m Forecast", "60m Forecast"],
       datasets: [
         {
-          label: "Demand (MW)",
+          label: "Demand Forecast (MW)",
           data: [
             gridStatus.current_demand_mw,
             probability.forecast_demand_30m,
@@ -224,9 +244,35 @@ export default function DemandForecastChart({
           borderWidth: 1,
           yAxisID: "demand",
         },
+        {
+          label: generationSeriesLabel,
+          data: [
+            gridStatus.current_generation_mw,
+            gridStatus.current_generation_mw,
+            gridStatus.current_generation_mw,
+          ],
+          borderColor: "rgba(52, 211, 153, 1)",
+          backgroundColor: "rgba(52, 211, 153, 0.12)",
+          borderWidth: 1.8,
+          borderDash: [8, 5],
+          pointRadius: 0,
+          pointHoverRadius: 3,
+          tension: 0,
+          yAxisID: "demand",
+        },
       ],
     };
-  }, [activeScenario, displayedDayEstimate, gridStatus.current_demand_mw, modelIsActive, modelOverlay, probability.forecast_demand_30m, probability.forecast_demand_60m]);
+  }, [
+    activeScenario,
+    displayedDayEstimate,
+    gridStatus.current_demand_mw,
+    gridStatus.current_generation_mw,
+    generationSeriesLabel,
+    modelIsActive,
+    modelOverlay,
+    probability.forecast_demand_30m,
+    probability.forecast_demand_60m,
+  ]);
 
   const options = useMemo(
     () => ({
@@ -234,11 +280,17 @@ export default function DemandForecastChart({
       maintainAspectRatio: false,
       plugins: {
         legend: {
-          display: Boolean(displayedDayEstimate),
+          display: true,
+          position: "bottom" as const,
           labels: {
             color: chartTextColor,
             usePointStyle: true,
             pointStyle: "line",
+            boxWidth: 14,
+            padding: 8,
+            font: {
+              size: 9,
+            },
           },
         },
       },

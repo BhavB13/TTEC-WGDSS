@@ -1,5 +1,9 @@
 # WGDSS Comprehensive Top-Down Data and Logic Flow
 
+> This visual contains legacy prototype thresholds. The authoritative SCADA
+> and operating-policy context is `docs/SCADA_OSI_CONTEXT.md`; all utility
+> thresholds require confirmation.
+
 This document shows how WGDSS starts, acquires data, normalizes and evaluates
 conditions, persists results, and renders the operator dashboard.
 
@@ -277,7 +281,7 @@ flowchart TD
     subgraph MAP_DATA["8. Independent Map-Visualization Data"]
         direction TB
         MAP_BASE["NASA Blue Marble default base<br/>OpenStreetMap optional"]
-        NASA_CLOUD["NASA GIBS GOES-East GeoColor<br/>cloud-system tiles"]
+        NASA_CLOUD["NASA GIBS GOES-East Clean Infrared<br/>cloud-system tiles"]
         NASA_RAIN["NASA GIBS IMERG<br/>30-minute precipitation tiles"]
         WIND_MARKER["Current wind direction and speed<br/>from dashboard weather"]
         WIND_FIELD["Optional Wind Flow<br/>browser requests Open-Meteo<br/>at a regional coordinate grid"]
@@ -345,7 +349,7 @@ clamped to `0.0-1.0`.
 | Reserve margin below 30% | Add up to 0.30 |
 | Demand above available capacity | Add 0.20 |
 | Selected scenario demand above generation | Add up to 0.22 |
-| Imported spinning reserve below 15% | Add up to 0.12 |
+| Imported spinning reserve below configured prototype threshold | Add a configurable prototype effect |
 
 ### Output thresholds
 
@@ -354,19 +358,18 @@ Risk and recommendation are related but calculated independently:
 | Risk level | Condition |
 |---|---|
 | LOW | Score below 0.45 and reserve at least 25% |
-| MEDIUM | Score 0.45-0.74, or reserve from 15% through 24.99% |
-| HIGH | Score at least 0.75, or reserve below 15% |
+| MEDIUM | Configured prototype probability band |
+| HIGH | Configured prototype probability band |
 
 | Recommendation | Condition |
 |---|---|
-| NO ACTION REQUIRED | Score below 0.45 and reserve at least 15% |
-| MONITOR CONDITIONS | Score from 0.45 through 0.74 and reserve at least 15% |
-| START ADDITIONAL TURBINE | Score at least 0.75, or reserve below 15% |
+| NO ACTION REQUIRED | Configured prototype low-risk policy |
+| MONITOR CONDITIONS | Configured prototype medium-risk policy |
+| START ADDITIONAL TURBINE | Configured prototype high-risk policy |
 
-This means a score below `0.45` with a reserve margin from `15%` through
-`24.99%` produces `MEDIUM` risk but can still produce `NO ACTION REQUIRED`.
-The direct `15%` reserve safeguard always produces `HIGH` risk and
-`START ADDITIONAL TURBINE`.
+These bands are legacy examples only. Current reserve, probability, and action
+policy is configurable, reported as unconfirmed, and must be approved by
+T&TEC before operational use.
 
 ## Source-of-Truth Boundaries
 

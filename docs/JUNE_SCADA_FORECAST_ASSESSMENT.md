@@ -21,6 +21,11 @@ duplicate previously imported measurements.
 | `System TA June.csv` | Total Available (TA) | 551 | 62-63m | Jun 2 23:49 to Jun 27 00:51 | 545 Good, 4 Other, 2 Questionable |
 | `Total Online TRA JUne.csv` | Total Running Availability (TRA) | 551 | 62-63m | Jun 2 23:49 to Jun 27 00:51 | 545 Good, 4 Other, 2 Questionable |
 
+In the historical replay UI, demand remains sourced from `PTL132 GENERATION
+TOTALS`, while the displayed generation value and generation graph are sourced
+from Total Running Availability (TRA). TA remains the separate available
+capacity value.
+
 All files use the existing ten-column SCADA schema and `Avg Value` is the
 interval value. The demand file uses two-digit years and extra whitespace, which
 the pre-upgrade parser does not accept. Tag names also contain trailing spaces.
@@ -44,6 +49,9 @@ the pre-upgrade parser does not accept. Tag names also contain trailing spaces.
 - In the complete window, TA never falls below TRA, TRA never falls below
   demand, and spin is never negative.
 - Mean TA margin is 613.65 MW and mean TRA spare is 105.05 MW.
+- Corrected System Spin averages 97.30 MW. It differs from the raw
+  `TRA - demand` gap by 11.47 MW mean absolute error, so the corrected SCADA tag
+  is authoritative and the raw gap is diagnostic only.
 - Piarco Open-Meteo historical temperature is strongly aligned with SCADA
   temperature (correlation 0.921), but averages 1.91 C lower. SCADA ambient
   temperature remains authoritative for the measured grid site.
@@ -88,13 +96,19 @@ weather is never copied into a forecast feature.
 
 The implemented pipeline performs nested expanding-window candidate selection
 inside the training partition and evaluates the selected candidate once on an
-untouched chronological 20% holdout. The July 15, 2026 replay build produced:
+untouched chronological 20% holdout. The July 16, 2026 v3 build produced:
 
 | Horizon | Active method | MAE | RMSE | MAPE | Best baseline | Baseline MAE |
 |---:|---|---:|---:|---:|---|---:|
-| 1h | Ridge | 15.40 MW | 20.25 MW | 1.29% | Trend-adjusted persistence | 18.70 MW |
-| 2h | HistGradientBoosting | 24.10 MW | 28.71 MW | 1.99% | Hourly average | 44.52 MW |
-| 6h | HistGradientBoosting | 30.75 MW | 40.64 MW | 2.53% | Hourly average | 44.91 MW |
+| 1h | HistGradientBoosting + similar periods | 14.88 MW | 18.92 MW | 1.22% | Trend-adjusted persistence | 18.70 MW |
+| 2h | Similar periods | 19.43 MW | 22.72 MW | 1.62% | Similar periods | 19.43 MW |
+| 6h | Ridge + similar periods | 19.67 MW | 27.73 MW | 1.65% | Similar periods | 24.92 MW |
+
+Compared with v2.1, v3 improves the full-history holdout MAE from 15.40 to
+14.88 MW at 1h, 24.10 to 19.43 MW at 2h, and 30.75 to 19.67 MW at 6h. The 2h
+result remains on the similarity baseline because no ML blend beat it by the
+required MAE and RMSE margin. The 6h blend uses 75% similar-period evidence and
+25% Ridge output.
 
 At the mapped Jun 15 14:00 source cursor, the cutoff-only artifact selected
 trend-adjusted persistence at 1h and RandomForest at both 2h and 6h. This
@@ -124,8 +138,9 @@ on both MAE and RMSE before replacing it.
 ### 2. Leakage-Safe Feature Dataset
 
 - Create direct 1h, 2h, and 6h target rows.
-- Add demand lags (1h, 2h, 3h, 6h, 24h), rolling averages (3h, 6h, 24h), and
-  demand rates (1h, 3h, 6h).
+- Add demand lags (1h, 2h, 3h, 6h, 24h, 48h, 168h), rolling averages (3h, 6h,
+  12h, 24h, 168h), same-hour seven-day history, six-hour volatility, and demand
+  rates (1h, 3h, 6h).
 - Add SCADA-temperature lag, rolling mean, rate, cooling degree, and
   temperature-demand interaction.
 - Retain current and lagged TA/TRA/Spin for audit and challenger evaluation, but
@@ -140,8 +155,12 @@ on both MAE and RMSE before replacing it.
 
 - Keep persistence, trend-adjusted persistence, rolling trend,
   same-hour-yesterday, and hourly-average baselines.
-- Compare Ridge, HistGradientBoostingRegressor, and RandomForestRegressor for
-  each horizon.
+- Compare Ridge, HistGradientBoostingRegressor, RandomForestRegressor, and
+  ExtraTreesRegressor for each horizon.
+- Compare pure similar-period forecasts and 25%, 50%, and 75% similarity blends
+  of every ML family. Similarity uses only already-observed targets and weighs
+  target hour, forecast temperature within a 4 C preferred band, weekday/
+  weekend/holiday class, season, humidity, rain, cloud, load, and recent trend.
 - Select hyperparameters and model family with expanding-window validation on
   the training partition.
 - Evaluate the selected challenger once on an untouched chronological holdout.
@@ -164,10 +183,10 @@ weather effect, expected rise, and startup lead time.
 - If projected shortfall exceeds available startable capacity, escalate and
   report the residual shortfall rather than pretending it is covered.
 
-### 5. Simulated-Live Replay
+### 5. Historical Replay
 
 Map the current Trinidad day and hour to the same June day/hour. Use only rows
-at or before that simulated cursor for model fitting and feature generation.
+at or before that replay cursor for model fitting and feature generation.
 Future June demand, TA, TRA, Spin, and observed weather remain hidden. The
 dashboard must label this source as historical SCADA replay/simulation.
 
@@ -197,8 +216,10 @@ Open-Meteo archive data is used under its CC BY 4.0 terms. Endpoint reference:
 
 - The common TA/TRA window is only about 24 days and has limited weekday and
   weather-regime diversity.
-- No outage schedule, holiday calendar, unit commitment plan, or archived
-  provider-issuance snapshots were supplied.
+- No outage schedule, unit commitment plan, approved variable-holiday calendar,
+  or archived provider-issuance snapshots were supplied. The model includes
+  fixed and Easter-relative Trinidad holidays plus configurable extra dates,
+  but these cannot be validated adequately from one month.
 - The past-only weather baseline is leakage-safe but is less informative than a
   genuine archived forecast run and must not be described as one.
 - `Other` quality requires engineering confirmation before production use.

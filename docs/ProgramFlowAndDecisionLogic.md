@@ -1,5 +1,9 @@
 # WGDSS Program Flow and Decision Logic
 
+> This document includes legacy rule examples. For SCADA semantics, interval
+> quality, reserve policy, replay/live labeling, and OT security, use
+> `docs/SCADA_OSI_CONTEXT.md` and the confirmation register.
+
 ## 1. Document Purpose
 
 This document explains how the T&TEC Weather-Based Generation Decision
@@ -528,4 +532,3 @@ flowchart LR
 The future providers must implement the existing `GridProvider` contract and
 return the normalized fields already used by `GridService`. This preserves the
 API, probability engine, frontend types, and dashboard components.
-

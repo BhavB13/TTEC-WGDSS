@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import math
 import threading
 from calendar import monthrange
@@ -20,6 +22,10 @@ from app.models.demo_replay import DemoObservation, DemoReplayState
 from app.models.demand_forecast import ScadaReplayForecastResult
 from app.models.scada import ScadaGridSnapshot
 from app.models.weather import Weather
+from app.providers.open_meteo_replay_provider import (
+    ArchivedForecastResult,
+    OpenMeteoReplayProvider,
+)
 from app.schemas.model_status import (
     BaselineComparisonResponse,
     DemandForecastBundleResponse,
@@ -42,6 +48,7 @@ from app.services.risk_probability_engine import (
     OperatingForecastPoint,
     OperatingRiskInput,
     RiskProbabilityEngine,
+    risk_result_details,
 )
 from app.services.weather_service import WeatherService
 
@@ -49,7 +56,8 @@ from app.services.weather_service import WeatherService
 DEMO_SOURCE = "WGDSS 12-Month Synthetic SCADA/Weather Demonstration"
 STATE_ID = 1
 TRINIDAD_TZ = ZoneInfo("America/Port_of_Spain")
-SCADA_REPLAY_SOURCE = "Historical SCADA Simulation"
+SCADA_REPLAY_SOURCE = "Historical SCADA Replay — June 2026"
+logger = logging.getLogger(__name__)
 
 
 class _WeatherGridObservation(Protocol):
@@ -70,10 +78,22 @@ class _WeatherGridObservation(Protocol):
     source: str
 
 
+class _ReplayWeatherProvider(Protocol):
+    def get_forecast_sources(
+        self,
+        latitude: float,
+        longitude: float,
+        source_cursor: datetime,
+        hours: int = 24,
+    ) -> ArchivedForecastResult: ...
+
+
 @dataclass(frozen=True)
 class _ScadaReplayObservation:
     timestamp: datetime
+    source_observation_time: datetime
     source_timestamp: datetime
+    source_available_at: datetime
     demand_mw: float
     generation_mw: float
     spinning_reserve_mw: float
@@ -89,6 +109,11 @@ class _ScadaReplayObservation:
     quality_status: str
     source: str
     missing_fields: str = ""
+    coverage_percent: float = 0.0
+    quality_notes: str = ""
+    anomaly_flags: str = "[]"
+    field_provenance: str = "{}"
+    formula_version: str | None = None
 
 
 class DemoReplayService:
@@ -100,12 +125,18 @@ class DemoReplayService:
         self,
         session_factory=SessionLocal,
         clock: Callable[[], datetime] | None = None,
+        replay_weather_provider: _ReplayWeatherProvider | None = None,
+        live_weather_service: WeatherService | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.clock = clock or (lambda: datetime.now(TRINIDAD_TZ))
         self.forecast_service = DemoLoadForecastService()
         self.risk_engine = RiskProbabilityEngine()
-        self._forecast_cache: dict[datetime, object] = {}
+        self.replay_weather_provider = (
+            replay_weather_provider or OpenMeteoReplayProvider()
+        )
+        self.live_weather_service = live_weather_service
+        self._forecast_cache: dict[tuple[datetime, tuple[str, ...]], object] = {}
 
     def ensure_seeded(self, force: bool = False) -> int:
         if self.session_factory is SessionLocal:
@@ -161,25 +192,32 @@ class DemoReplayService:
                 active_observation,
                 scada_overlay,
             )
+            archived_weather_active = _has_multi_source_forecast(weather_forecast)
+            active_replay_forecasts = (
+                [] if archived_weather_active else replay_forecasts
+            )
             replay = self._dashboard_bundle(
                 session,
                 state,
                 active_observation,
                 weather_forecast,
                 scada_overlay,
-                replay_forecasts,
+                active_replay_forecasts,
             )
             risk_payload = self._operating_risk_payload(
                 active_observation,
                 replay,
-                replay_forecasts,
+                active_replay_forecasts,
             )
             demand_forecast = self._replay_demand_forecast_bundle(
                 active_observation,
-                replay_forecasts,
+                active_replay_forecasts,
                 replay,
             )
-            model_status = self._replay_model_status(replay_forecasts, replay)
+            model_status = self._replay_model_status(
+                active_replay_forecasts,
+                replay,
+            )
             scada_status = self._replay_scada_status(active_observation)
             session.commit()
         return {
@@ -233,6 +271,9 @@ class DemoReplayService:
                             ),
                             weather_effect_mw=first.weather_impact_mw * fraction,
                             confidence=first.weather_confidence,
+                            forecast_timestamp=(
+                                observation.timestamp + timedelta(minutes=horizon)
+                            ),
                         )
                     )
             profile.extend(
@@ -244,6 +285,7 @@ class DemoReplayService:
                     forecast_uncertainty_mw=point.uncertainty_mw,
                     weather_effect_mw=point.weather_impact_mw,
                     confidence=point.weather_confidence,
+                    forecast_timestamp=point.timestamp,
                 )
                 for point in future
             )
@@ -254,6 +296,7 @@ class DemoReplayService:
                     forecast_demand_mw=observation.demand_mw,
                     forecast_uncertainty_mw=15.0,
                     confidence=0.5,
+                    forecast_timestamp=observation.timestamp + timedelta(hours=1),
                 )
             )
 
@@ -270,12 +313,24 @@ class DemoReplayService:
                     isinstance(observation, _ScadaReplayObservation)
                     and not _has_missing_operating_capacity(observation.missing_fields)
                 ),
+                data_quality_status=observation.quality_status,
+                data_quality_warnings=tuple(
+                    warning
+                    for warning in (
+                        getattr(observation, "quality_notes", ""),
+                        *_json_string_list(
+                            getattr(observation, "anomaly_flags", "[]")
+                        ),
+                    )
+                    if warning
+                ),
             )
         )
         forecast_30 = min(profile, key=lambda point: abs(point.horizon_minutes - 30))
         forecast_60 = min(profile, key=lambda point: abs(point.horizon_minutes - 60))
         return {
             "engine_version": risk.engine_version,
+            "policy_status": risk.policy_status,
             "probability_score": risk.probability_score,
             "risk_level": risk.risk_level,
             "forecast_demand_30m": round(forecast_30.forecast_demand_mw, 2),
@@ -283,18 +338,7 @@ class DemoReplayService:
             "recommendation": risk.recommendation,
             "factors": risk.reasons,
             "reason": "; ".join(risk.reasons),
-            "decision_action": risk.decision_action,
-            "generator_set": risk.generator_set,
-            "recommended_capacity_mw": risk.recommended_capacity_mw,
-            "projected_shortfall_mw": risk.projected_shortfall_mw,
-            "expected_shortfall_mw": risk.expected_shortfall_mw,
-            "expected_load_rise_mw": risk.expected_load_rise_mw,
-            "expected_rise_minutes": risk.expected_rise_minutes,
-            "startup_time_minutes": risk.startup_time_minutes,
-            "decision_confidence": risk.decision_confidence,
-            "weather_effect_mw": risk.weather_effect_mw,
-            "available_start_capacity_mw": risk.available_start_capacity_mw,
-            "residual_shortfall_mw": risk.residual_shortfall_mw,
+            **risk_result_details(risk),
         }
 
     @staticmethod
@@ -325,6 +369,10 @@ class DemoReplayService:
                         else 0.0
                     ),
                     confidence=_replay_forecast_confidence(row),
+                    forecast_timestamp=display_timestamp,
+                    confidence_lower_mw=row.confidence_lower_mw,
+                    confidence_upper_mw=row.confidence_upper_mw,
+                    confidence_level=row.confidence_level,
                 )
             )
         first = profile[0]
@@ -346,6 +394,9 @@ class DemoReplayService:
                     ),
                     weather_effect_mw=first.weather_effect_mw * fraction,
                     confidence=first.confidence,
+                    forecast_timestamp=(
+                        observation.timestamp + timedelta(minutes=horizon)
+                    ),
                 )
             )
         return sorted(profile, key=lambda point: point.horizon_minutes)
@@ -429,6 +480,21 @@ class DemoReplayService:
                     feature_profile=row.feature_profile,
                     validation_status=row.validation_status,
                     training_rows=row.training_rows,
+                    confidence_lower_mw=row.confidence_lower_mw,
+                    confidence_upper_mw=row.confidence_upper_mw,
+                    confidence_level=row.confidence_level,
+                    temperature_load_correlation=(
+                        row.temperature_load_correlation
+                    ),
+                    similar_period_forecast_mw=row.similar_period_forecast_mw,
+                    similar_examples=_json_list(row.similar_examples),
+                    contributing_factors=_json_string_list(
+                        row.contributing_factors
+                    ),
+                    mae=row.mae,
+                    rmse=row.rmse,
+                    mape=row.mape,
+                    residual_std=row.residual_std,
                 )
                 for row in replay_forecasts
             ]
@@ -490,11 +556,24 @@ class DemoReplayService:
         if not isinstance(observation, _ScadaReplayObservation):
             return None
         return ScadaStatusResponse(
+            mode="historical_replay",
             source=observation.source,
-            latest_snapshot=observation.timestamp,
-            available_at=observation.timestamp,
+            latest_snapshot=observation.source_observation_time,
+            available_at=observation.source_available_at,
             quality_status=observation.quality_status,
             missing_fields=observation.missing_fields,
+            coverage_percent=observation.coverage_percent,
+            quality_notes="; ".join(
+                value
+                for value in (
+                    "Historical interval-aligned SCADA replay; not live telemetry",
+                    observation.quality_notes,
+                )
+                if value
+            ),
+            anomaly_flags=_json_string_list(observation.anomaly_flags),
+            field_provenance=_json_object(observation.field_provenance),
+            formula_version=observation.formula_version,
         )
 
     def get_status(self) -> ReplayStatusResponse:
@@ -551,7 +630,18 @@ class DemoReplayService:
             for snapshot in snapshots
             if (snapshot.available_at or snapshot.timestamp).month
             == settings.DEMO_REPLAY_MONTH
-            and snapshot.current_demand_mw is not None
+            and snapshot.quality_status in {"GOOD", "USABLE_WITH_WARNING"}
+            and not snapshot.missing_fields.strip()
+            and all(
+                value is not None
+                for value in (
+                    snapshot.current_demand_mw,
+                    snapshot.temperature_c,
+                    snapshot.spinning_reserve_mw,
+                    snapshot.available_capacity_mw,
+                    snapshot.online_capacity_mw,
+                )
+            )
         ]
         if not matching:
             return {}
@@ -592,12 +682,9 @@ class DemoReplayService:
 
         overlay: dict[datetime, _ScadaReplayObservation] = {}
         for snapshot in matching:
-            source_timestamp = (snapshot.available_at or snapshot.timestamp).replace(
-                minute=0,
-                second=0,
-                microsecond=0,
-                tzinfo=None,
-            )
+            source_observation_time = snapshot.timestamp.replace(tzinfo=None)
+            source_available_at = snapshot.available_at or snapshot.timestamp
+            source_timestamp = _ceil_hour(source_available_at).replace(tzinfo=None)
             if source_timestamp.month != settings.DEMO_REPLAY_MONTH:
                 continue
             display_timestamp = datetime(
@@ -610,30 +697,24 @@ class DemoReplayService:
             if base is None:
                 continue
             weather = weather_by_hour.get(source_timestamp)
-            demand = _value_or(snapshot.current_demand_mw, base.demand_mw)
-            available = _value_or(
-                snapshot.available_capacity_mw,
-                base.available_capacity_mw,
-            )
-            online = _value_or(
-                snapshot.online_capacity_mw,
-                base.online_capacity_mw,
-            )
+            assert snapshot.current_demand_mw is not None
+            assert snapshot.temperature_c is not None
+            assert snapshot.spinning_reserve_mw is not None
+            assert snapshot.available_capacity_mw is not None
+            assert snapshot.online_capacity_mw is not None
             overlay[display_timestamp] = _ScadaReplayObservation(
                 timestamp=display_timestamp,
+                source_observation_time=source_observation_time,
                 source_timestamp=source_timestamp,
-                demand_mw=demand,
-                generation_mw=demand,
-                spinning_reserve_mw=_value_or(
-                    snapshot.spinning_reserve_mw,
-                    base.spinning_reserve_mw,
-                ),
-                available_capacity_mw=available,
-                online_capacity_mw=online,
-                temperature_c=_value_or(
-                    snapshot.temperature_c,
-                    weather.temperature_c if weather is not None else base.temperature_c,
-                ),
+                source_available_at=source_available_at,
+                demand_mw=snapshot.current_demand_mw,
+                # The project currently maps Total Online TRA to replay
+                # generation; official semantics remain pending confirmation.
+                generation_mw=snapshot.online_capacity_mw,
+                spinning_reserve_mw=snapshot.spinning_reserve_mw,
+                available_capacity_mw=snapshot.available_capacity_mw,
+                online_capacity_mw=snapshot.online_capacity_mw,
+                temperature_c=snapshot.temperature_c,
                 humidity_percent=_value_or(
                     weather.humidity_percent if weather is not None else None,
                     base.humidity_percent,
@@ -661,6 +742,11 @@ class DemoReplayService:
                 quality_status=_dashboard_grid_quality(snapshot.quality_status),
                 source=f"{SCADA_REPLAY_SOURCE} · {snapshot.source}",
                 missing_fields=snapshot.missing_fields,
+                coverage_percent=snapshot.coverage_percent,
+                quality_notes=snapshot.quality_notes,
+                anomaly_flags=snapshot.anomaly_flags,
+                field_provenance=snapshot.field_provenance,
+                formula_version=snapshot.formula_version,
             )
         return overlay
 
@@ -671,6 +757,57 @@ class DemoReplayService:
         observation: _WeatherGridObservation,
         scada_overlay: dict[datetime, _ScadaReplayObservation],
     ) -> list[dict[str, object]]:
+        if isinstance(observation, _ScadaReplayObservation):
+            try:
+                archived = self.replay_weather_provider.get_forecast_sources(
+                    latitude=settings.DEFAULT_LATITUDE,
+                    longitude=settings.DEFAULT_LONGITUDE,
+                    source_cursor=observation.source_timestamp,
+                    hours=24,
+                )
+                reconciled = WeatherService.reconcile_forecast_sources(
+                    archived.source_payloads,
+                    expected_source_count=archived.expected_source_count,
+                )
+                mapped = _map_archived_forecast_to_replay(
+                    reconciled,
+                    source_cursor=observation.source_timestamp,
+                    display_cursor=state.cursor_at,
+                    run_initialized_at=archived.run_initialized_at,
+                    assumed_available_at=archived.assumed_available_at,
+                )
+                if mapped:
+                    return mapped
+            except Exception as exc:  # pragma: no cover - network resilience
+                logger.warning(
+                    "Archived replay weather unavailable; using past-only baseline: %s",
+                    exc,
+                )
+
+        if not scada_overlay and self.live_weather_service is not None:
+            try:
+                live_forecast = _run_coroutine(
+                    self.live_weather_service.get_forecast(
+                        settings.DEFAULT_LATITUDE,
+                        settings.DEFAULT_LONGITUDE,
+                        days=2,
+                        force_refresh=False,
+                    )
+                )
+                mapped = _map_live_forecast_to_simulation(
+                    live_forecast,
+                    display_cursor=state.cursor_at,
+                    live_reference=self.clock(),
+                )
+                if mapped:
+                    return mapped
+            except Exception as exc:  # pragma: no cover - network resilience
+                logger.warning(
+                    "Live weather ensemble unavailable for simulation; using "
+                    "past-only baseline: %s",
+                    exc,
+                )
+
         if scada_overlay:
             history: list[_WeatherGridObservation] = [
                 row
@@ -792,11 +929,19 @@ class DemoReplayService:
         historical_count = len(historical)
         average = sum(row.demand_mw for row in historical) / historical_count
         peak = max(row.demand_mw for row in historical)
+        current_day_forecast = [
+            point
+            for point in forecast
+            if point.timestamp.date() == state.cursor_at.date()
+        ]
         replay_status = self._status(session, state)
         if scada_overlay:
             replay_status = replay_status.model_copy(
                 update={
-                    "dataset_label": "June historical SCADA + Open-Meteo simulated replay",
+                    "mode": "historical_replay",
+                    "dataset_label": (
+                        "Historical replay — June 2026 · OSI trend exports + archived weather"
+                    ),
                     "source": SCADA_REPLAY_SOURCE,
                 }
             )
@@ -807,14 +952,15 @@ class DemoReplayService:
                     timestamp=row.timestamp,
                     demand_mw=row.demand_mw,
                     generation_mw=row.generation_mw,
+                    spinning_reserve_mw=row.spinning_reserve_mw,
                     available_capacity_mw=row.available_capacity_mw,
                     reserve_margin_percent=_reserve_margin_percent(row),
                     temperature_c=row.temperature_c,
                     rainfall_mm_hr=row.rainfall_mm_hr,
                     data_phase=(
-                        "SIMULATED_LIVE"
+                        "REPLAY_REVEALED"
                         if row.timestamp >= state.replay_start
-                        else "HISTORICAL"
+                        else "HISTORICAL_SOURCE"
                     ),
                 )
                 for row in history
@@ -828,7 +974,11 @@ class DemoReplayService:
                 historical_peak_demand_mw=round(peak, 2),
                 replay_month_label=state.replay_start.strftime("%B %Y"),
                 current_day_peak_forecast_mw=round(
-                    max(point.forecast_demand_mw for point in forecast), 2
+                    max(
+                        point.forecast_demand_mw
+                        for point in (current_day_forecast or forecast)
+                    ),
+                    2,
                 ),
                 forecast_model=_replay_forecast_model_label(
                     replay_forecasts,
@@ -895,11 +1045,23 @@ class DemoReplayService:
         weather_forecast: list[dict[str, object]],
         scada_overlay: dict[datetime, _ScadaReplayObservation],
     ):
-        cached = self._forecast_cache.get(state.cursor_at)
+        source_signature = tuple(
+            str(name)
+            for name in (
+                weather_forecast[0].get("source_names", [])
+                if weather_forecast
+                else []
+            )
+        )
+        cache_key = (state.cursor_at, source_signature)
+        cached = self._forecast_cache.get(cache_key)
         if cached is not None:
             return cached
         day_start = state.cursor_at.replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(hours=23)
+        day_end = max(
+            day_start + timedelta(hours=23),
+            state.cursor_at + timedelta(hours=6),
+        )
         history_start = (
             state.replay_start
             if scada_overlay
@@ -933,7 +1095,7 @@ class DemoReplayService:
             weather_forecast=weather_forecast,
             cursor_at=state.cursor_at,
         )
-        self._forecast_cache = {state.cursor_at: result}
+        self._forecast_cache = {cache_key: result}
         return result
 
     def _status(self, session, state: DemoReplayState) -> ReplayStatusResponse:
@@ -952,7 +1114,10 @@ class DemoReplayService:
         duration = max(1.0, (state.replay_end - state.replay_start).total_seconds())
         progress = (state.cursor_at - state.replay_start).total_seconds() / duration * 100
         return ReplayStatusResponse(
-            dataset_label=f"{settings.DEMO_DATASET_YEAR} hourly SCADA + weather demonstration",
+            mode="simulation",
+            dataset_label=(
+                f"Simulation — {settings.DEMO_DATASET_YEAR} synthetic hourly grid + weather"
+            ),
             dataset_start=state.dataset_start,
             dataset_end=state.dataset_end,
             replay_start=state.replay_start,
@@ -1091,12 +1256,24 @@ def _generate_demo_year(year: int) -> list[DemoObservation]:
         available = 1460.0 - (90.0 if day % 53 in {0, 1, 2} else 0.0)
         online = min(available, demand + 170.0 + 25.0 * math.sin(offset * 0.07))
         generation = demand + 8.0 + 4.0 * math.sin(offset * 0.23)
+        online_headroom = max(0.0, online - demand)
+        # Simulation only: mirror the exploratory June archive relationship
+        # without redefining the OSI corrected-spin tag as TRA minus demand.
+        synthetic_spin = max(
+            0.0,
+            min(
+                online_headroom,
+                0.744 * online_headroom
+                + 19.10
+                + 7.5 * math.sin(offset * 0.13),
+            ),
+        )
         rows.append(
             DemoObservation(
                 timestamp=timestamp,
                 demand_mw=round(demand, 2),
                 generation_mw=round(generation, 2),
-                spinning_reserve_mw=round(max(0.0, online - demand), 2),
+                spinning_reserve_mw=round(synthetic_spin, 2),
                 available_capacity_mw=round(available, 2),
                 online_capacity_mw=round(online, 2),
                 temperature_c=round(temperature, 2),
@@ -1128,15 +1305,16 @@ def _weather_payload(row: _WeatherGridObservation) -> dict[str, object]:
         "wind_direction_deg": row.wind_direction_deg,
         "pressure_hpa": row.pressure_hpa,
         "provider_name": (
-            "Simulated Live · June SCADA + Open-Meteo Replay"
+            "Historical replay · June SCADA + archived weather"
             if row.source.startswith(SCADA_REPLAY_SOURCE)
-            else "Simulated Live · Historical Weather Replay"
+            else "Simulation replay · historical weather"
         ),
     }
 
 
 def _grid_payload(row: _WeatherGridObservation) -> dict[str, object]:
     margin = _reserve_margin_percent(row)
+    is_historical_scada = row.source.startswith(SCADA_REPLAY_SOURCE)
     missing_fields = [
         field.strip()
         for field in str(getattr(row, "missing_fields", "")).split(",")
@@ -1148,12 +1326,18 @@ def _grid_payload(row: _WeatherGridObservation) -> dict[str, object]:
         "current_generation_mw": row.generation_mw,
         "total_available_capacity_mw": row.available_capacity_mw,
         "reserve_margin_percent": margin,
+        "spinning_reserve_mw": row.spinning_reserve_mw,
+        "spinning_reserve_source": (
+            "GSYS SYSTEM_CORRECTED_SPIN_TOTAL"
+            if is_historical_scada
+            else "SYNTHETIC_REPLAY_MODEL"
+        ),
         "grid_status": "NORMAL" if margin >= 20 else ("WATCH" if margin >= 10 else "CRITICAL"),
         "demand_period": _demand_period(row.timestamp.hour),
         "source_provider": (
-            "HistoricalScadaSimulatedReplay"
-            if row.source.startswith(SCADA_REPLAY_SOURCE)
-            else "SimulatedLiveScadaReplay"
+            "HistoricalScadaReplay"
+            if is_historical_scada
+            else "SyntheticReplayProvider"
         ),
         "quality_status": row.quality_status,
         "missing_fields": missing_fields,
@@ -1187,6 +1371,127 @@ def _generation_units(row: _WeatherGridObservation) -> list[dict[str, object]]:
         }
         for station, unit, share in stations
     ]
+
+
+def _map_archived_forecast_to_replay(
+    forecast: list[dict[str, object]],
+    source_cursor: datetime,
+    display_cursor: datetime,
+    run_initialized_at: datetime,
+    assumed_available_at: datetime,
+) -> list[dict[str, object]]:
+    source_reference = _trinidad_datetime(source_cursor)
+    display_reference = _trinidad_datetime(display_cursor)
+    mapped: list[dict[str, object]] = []
+    for item in forecast:
+        source_timestamp = _forecast_datetime(item.get("forecast_timestamp"))
+        if source_timestamp is None:
+            continue
+        lead_hours_value = (
+            source_timestamp - source_reference
+        ).total_seconds() / 3600.0
+        lead_hours = int(round(lead_hours_value))
+        if lead_hours < 1 or lead_hours > 24:
+            continue
+        if abs(lead_hours_value - lead_hours) > 0.01:
+            continue
+        mapped.append(
+            {
+                **item,
+                "forecast_timestamp": (
+                    display_reference + timedelta(hours=lead_hours)
+                ).isoformat(),
+                "forecast_mode": "ARCHIVED_ISSUED_MODEL_ENSEMBLE",
+                "source_run_at": run_initialized_at.isoformat(),
+                "forecast_issued_at": assumed_available_at.isoformat(),
+            }
+        )
+    return mapped
+
+
+def _map_live_forecast_to_simulation(
+    forecast: list[dict[str, object]],
+    display_cursor: datetime,
+    live_reference: datetime,
+) -> list[dict[str, object]]:
+    """Map genuine future issue-time forecasts onto the synthetic replay clock.
+
+    This adapter is used only for the simulated-grid dashboard. Historical SCADA
+    replay continues to use archived model runs so future information cannot leak
+    into a replay decision.
+    """
+
+    reference = _trinidad_datetime(live_reference)
+    display_reference = _trinidad_datetime(display_cursor)
+    future: list[tuple[datetime, dict[str, object]]] = []
+    for item in forecast:
+        source_timestamp = _forecast_datetime(item.get("forecast_timestamp"))
+        if source_timestamp is None or source_timestamp <= reference:
+            continue
+        future.append((source_timestamp, item))
+
+    future.sort(key=lambda pair: pair[0])
+    mapped: list[dict[str, object]] = []
+    for index, (source_timestamp, item) in enumerate(future[:24], start=1):
+        mapped.append(
+            {
+                **item,
+                "forecast_timestamp": (
+                    display_reference + timedelta(hours=index)
+                ).isoformat(),
+                "source_forecast_timestamp": source_timestamp.isoformat(),
+                "forecast_mode": "LIVE_ENSEMBLE_MAPPED_TO_SIMULATION",
+            }
+        )
+    return mapped
+
+
+def _run_coroutine(coroutine):
+    """Run an async provider from the synchronous replay service safely."""
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coroutine)
+
+    result: list[object] = []
+    error: list[BaseException] = []
+
+    def runner() -> None:
+        try:
+            result.append(asyncio.run(coroutine))
+        except BaseException as exc:  # pragma: no cover - defensive bridge
+            error.append(exc)
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join()
+    if error:
+        raise error[0]
+    return result[0]
+
+
+def _has_multi_source_forecast(forecast: list[dict[str, object]]) -> bool:
+    return any(int(item.get("source_count", 1) or 1) > 1 for item in forecast)
+
+
+def _trinidad_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=TRINIDAD_TZ)
+    return value.astimezone(TRINIDAD_TZ)
+
+
+def _forecast_datetime(value: object) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return _trinidad_datetime(parsed)
+
+
+def _ceil_hour(value: datetime) -> datetime:
+    floored = value.replace(minute=0, second=0, microsecond=0)
+    return floored if value == floored else floored + timedelta(hours=1)
 
 
 def _reserve_margin_percent(row: _WeatherGridObservation) -> float:
@@ -1288,6 +1593,22 @@ def _json_object(value: str) -> dict[str, object]:
     except (TypeError, ValueError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_list(value: str) -> list[dict[str, object]]:
+    try:
+        parsed = json.loads(value or "[]")
+    except (TypeError, ValueError):
+        return []
+    return [item for item in parsed if isinstance(item, dict)] if isinstance(parsed, list) else []
+
+
+def _json_string_list(value: str) -> list[str]:
+    try:
+        parsed = json.loads(value or "[]")
+    except (TypeError, ValueError):
+        return []
+    return [item for item in parsed if isinstance(item, str)] if isinstance(parsed, list) else []
 
 
 def _utc_now_naive() -> datetime:

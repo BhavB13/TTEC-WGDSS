@@ -68,7 +68,7 @@ Current Project Status
 
 The dashboard now includes a realistic production-system demonstration mode. It
 uses an immutable 12-month hourly SCADA/weather archive, replays June as a
-persisted simulated-live feed, preserves the other eleven months for analytics,
+persisted simulation feed, preserves the other eleven months for analytics,
 and exposes playback controls, full-day demand forecasts, six-hour weather,
 generation, demand, capacity, and reserve measurements. The bundled dataset is
 deterministic synthetic demonstration data and is never presented as live T&TEC
@@ -79,11 +79,17 @@ historical SCADA CSV pipeline, calibration profiles, forecasting services, and
 risk engine remain available. See `docs/DEMO_REPLAY.md` for replay architecture,
 provenance, forecast leakage controls, and the production replacement path.
 
-The SCADA pipeline now accepts a filename-independent ZIP containing Demand,
-Temperature, Spin, TA, and TRA exports. It resamples irregular intervals by
-timestamp overlap, compares chronological baselines with three ML families for
+The SCADA pipeline now accepts a filename-independent ZIP containing the PTL
+generation-total proxy, Temperature, corrected Spin, TA, and TRA exports. It resamples irregular intervals by
+timestamp overlap, compares chronological baselines with four ML families for
 1h/2h/6h demand, and can overlay the historical June source at the simulated
 cursor. This remains prototype replay data and is never labelled live SCADA.
+
+The v3 forecast profile also evaluates Extra Trees, leakage-safe historical
+similar-period matching, and ML/similarity blends. It models Trinidad
+weekday/weekend/holiday and wet/dry-season context, then returns calibrated
+confidence bounds, comparable historical periods, temperature/load
+correlation, contributing factors, and horizon-specific accuracy metrics.
 
 The six-hour pipeline now reconciles Open-Meteo Best Match, MET Norway, and
 Open-Meteo NOAA GFS by timestamp and field. June synchronizes to the current
@@ -92,7 +98,11 @@ guidance distinguishes the 30 MW fast-start set from 60-120 MW heavy capacity.
 See `docs/FORECAST_DISPATCH_UPGRADE.md` and
 `docs/HISTORICAL_DATA_IMPORTS.md`.
 
-See `docs/OperationsGuide.md` for startup, migration, import, testing, and deployment instructions. See `docs/ExternalServices.md` for the no-cost provider matrix, quotas, licensing boundary, and optional paid alternatives.
+See `docs/LAUNCH_AND_DEPLOYMENT.md` for manual, one-command, and button-style
+startup instructions. See `docs/OperationsGuide.md` for migration, import,
+testing, and operational guidance. See `docs/ExternalServices.md` for the
+no-cost provider matrix, quotas, licensing boundary, and optional paid
+alternatives.
 
 Repository Structure
 
@@ -107,6 +117,9 @@ Backend:
 
 Documentation:
 
+- `docs/SCADA_OSI_CONTEXT.md`
+- `docs/SCADA_OSI_CONFIRMATION_REGISTER.md`
+- `docs/SCADA_OSI_READ_ONLY_SECURITY.md`
 - `docs/DatabaseDesign.md`
 - `docs/RecommendationEngine.md`
 - `docs/APIContract.md`
@@ -115,7 +128,7 @@ Documentation:
 
 Future Enhancements
 
-- Real-time SCADA integration
+- Approved read-only historian/SCADA integration
 - Multi-season validation using approved T&TEC historical exports
 - Production model registry and monitored scheduled retraining
 - Generation asset visualization

@@ -30,6 +30,8 @@ class GridStatusResponse(BaseModel):
     current_generation_mw: float
     total_available_capacity_mw: float
     reserve_margin_percent: float
+    spinning_reserve_mw: float | None = None
+    spinning_reserve_source: str | None = None
     grid_status: str
     demand_period: str
     source_provider: str

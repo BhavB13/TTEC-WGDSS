@@ -10,8 +10,92 @@ from app.models.demo_replay import DemoObservation, DemoReplayState
 from app.models.demand_forecast import ScadaReplayForecastResult
 from app.models.scada import ScadaGridSnapshot
 from app.models.weather import Weather
+from app.providers.open_meteo_replay_provider import ArchivedForecastResult
 from app.schemas.replay import ReplayControlRequest
 from app.services.demo_replay_service import DemoReplayService
+
+
+class UnavailableReplayWeatherProvider:
+    def get_forecast_sources(self, **_kwargs):
+        raise RuntimeError("archived forecast unavailable in fallback test")
+
+
+class ThreeModelReplayWeatherProvider:
+    def get_forecast_sources(self, source_cursor, hours=24, **_kwargs):
+        names = (
+            "Open-Meteo ECMWF IFS",
+            "Open-Meteo NOAA GFS",
+            "Open-Meteo DWD ICON",
+        )
+        sources = []
+        for source_index, name in enumerate(names):
+            sources.append(
+                [
+                    {
+                        "forecast_timestamp": source_cursor + timedelta(hours=horizon),
+                        "temperature_c": 32.0 + source_index * 0.3,
+                        "humidity_percent": 78.0 - source_index,
+                        "rainfall_mm_hr": 0.2 + source_index * 0.05,
+                        "cloud_cover_percent": 55.0 + source_index,
+                        "wind_speed_kmh": 18.0 + source_index,
+                        "pressure_hpa": 1011.0,
+                        "weather_condition": "Partly cloudy",
+                        "precipitation_probability_percent": 55.0,
+                        "provider_name": name,
+                    }
+                    for horizon in range(1, hours + 1)
+                ]
+            )
+        return ArchivedForecastResult(
+            source_payloads=sources,
+            run_initialized_at=datetime(2026, 6, 15, 0, tzinfo=timezone.utc),
+            assumed_available_at=datetime(2026, 6, 15, 6, tzinfo=timezone.utc),
+            expected_source_count=3,
+        )
+
+
+class ThreeSourceLiveWeatherService:
+    async def get_forecast(self, *_args, **_kwargs):
+        source_names = [
+            "Open-Meteo Best Match",
+            "MET Norway",
+            "Open-Meteo NOAA GFS",
+        ]
+        start = datetime(
+            2026,
+            7,
+            15,
+            11,
+            tzinfo=ZoneInfo("America/Port_of_Spain"),
+        )
+        return [
+            {
+                "forecast_timestamp": (start + timedelta(hours=index)).isoformat(),
+                "temperature_c": 30.0 + index * 0.1,
+                "humidity_percent": 76.0,
+                "rainfall_mm_hr": 0.4,
+                "cloud_cover_percent": 58.0,
+                "wind_speed_kmh": 18.0,
+                "pressure_hpa": 1011.0,
+                "weather_condition": "Partly cloudy",
+                "heat_index_c": 32.0,
+                "precipitation_probability_percent": 48.0,
+                "confidence_score": 0.86,
+                "rain_severity": "LIGHT",
+                "provider_name": "Consensus (Open-Meteo + MET Norway + GFS)",
+                "source_count": 3,
+                "source_names": source_names,
+                "source_sync_status": "COMPLETE",
+                "field_source_counts": {
+                    "temperature_c": 3,
+                    "humidity_percent": 3,
+                    "rainfall_mm_hr": 3,
+                    "cloud_cover_percent": 3,
+                    "wind_speed_kmh": 3,
+                },
+            }
+            for index in range(24)
+        ]
 
 
 @pytest.fixture(scope="module")
@@ -41,6 +125,17 @@ def test_demo_seed_separates_year_archive_from_june_replay(replay_service):
     assert status.revealed_records == 347
     with session_factory() as session:
         assert session.scalar(select(func.count(DemoObservation.id))) == 8760
+        sample = session.scalars(
+            select(DemoObservation).order_by(DemoObservation.timestamp).limit(48)
+        ).all()
+        assert any(
+            abs(
+                row.spinning_reserve_mw
+                - (row.online_capacity_mw - row.demand_mw)
+            )
+            > 0.1
+            for row in sample
+        )
 
 
 def test_replay_dashboard_exposes_history_forecast_and_no_future_actuals(replay_service):
@@ -70,11 +165,48 @@ def test_replay_dashboard_exposes_history_forecast_and_no_future_actuals(replay_
     assert all(item["source_sync_status"] == "COMPLETE" for item in context["forecast"][:6])
     assert replay.summary.training_rows > 3000
     assert replay.summary.forecast_mae_mw <= replay.summary.baseline_mae_mw
-    assert context["grid"]["source_provider"] == "SimulatedLiveScadaReplay"
+    assert context["grid"]["source_provider"] == "SyntheticReplayProvider"
     assert [
         row.horizon_hours for row in context["demand_forecast"].horizons
     ] == [1, 2, 6]
     assert context["model_status"].feature_profile == "replay_weather_features"
+
+
+def test_simulated_grid_uses_live_three_source_forecast_when_injected(replay_service):
+    _, session_factory = replay_service
+    clock = lambda: datetime(
+        2026,
+        7,
+        15,
+        10,
+        42,
+        tzinfo=ZoneInfo("America/Port_of_Spain"),
+    )
+    service = DemoReplayService(
+        session_factory=session_factory,
+        clock=clock,
+        live_weather_service=ThreeSourceLiveWeatherService(),
+    )
+    service.control(ReplayControlRequest(action="reset"))
+
+    context = service.get_dashboard_context()
+
+    assert context is not None
+    assert all(item["source_count"] == 3 for item in context["forecast"][:6])
+    assert all(
+        item["forecast_mode"] == "LIVE_ENSEMBLE_MAPPED_TO_SIMULATION"
+        for item in context["forecast"][:6]
+    )
+    assert all(
+        item["source_sync_status"] == "COMPLETE"
+        for item in context["forecast"][:6]
+    )
+    upcoming = [
+        point
+        for point in context["replay"].full_day_load_forecast
+        if point.timestamp > context["replay"].status.cursor_at
+    ]
+    assert upcoming[0].weather_source_count == 3
 
 
 def test_replay_control_steps_configures_and_resets_cursor(replay_service):
@@ -115,7 +247,11 @@ def test_june_scada_overlay_maps_completed_interval_without_future_leakage(tmp_p
         42,
         tzinfo=ZoneInfo("America/Port_of_Spain"),
     )
-    service = DemoReplayService(session_factory=session_factory, clock=clock)
+    service = DemoReplayService(
+        session_factory=session_factory,
+        clock=clock,
+        replay_weather_provider=UnavailableReplayWeatherProvider(),
+    )
     service.ensure_seeded()
     start = datetime(2026, 6, 1)
     with session_factory() as session:
@@ -229,10 +365,18 @@ def test_june_scada_overlay_maps_completed_interval_without_future_leakage(tmp_p
 
     assert context is not None
     assert context["grid"]["current_demand_mw"] == 1059
-    assert context["grid"]["source_provider"] == "HistoricalScadaSimulatedReplay"
+    assert context["grid"]["current_generation_mw"] == 1300
+    assert context["grid"]["spinning_reserve_mw"] == 200
+    assert (
+        context["grid"]["spinning_reserve_source"]
+        == "GSYS SYSTEM_CORRECTED_SPIN_TOTAL"
+    )
+    assert context["grid"]["source_provider"] == "HistoricalScadaReplay"
     assert context["grid"]["quality_status"] == "UNCERTAIN"
     assert context["weather"]["temperature_c"] == 29.45
     assert context["weather"]["humidity_percent"] == 78
+    assert context["replay"].operational_history[-1].generation_mw == 1300
+    assert context["replay"].operational_history[-1].spinning_reserve_mw == 200
     assert all(
         point.actual_demand_mw is None
         for point in context["replay"].full_day_load_forecast[11:]
@@ -254,4 +398,35 @@ def test_june_scada_overlay_maps_completed_interval_without_future_leakage(tmp_p
     ] == [1, 2, 6]
     assert context["model_status"].active_model == "HistGradientBoostingRegressor"
     assert context["model_status"].baseline_comparison.ml_beats_baseline is True
-    assert context["scada_status"].latest_snapshot == datetime(2025, 6, 15, 10)
+    assert context["scada_status"].latest_snapshot == datetime(2026, 6, 15, 9)
+    assert context["scada_status"].available_at == datetime(2026, 6, 15, 10)
+    assert context["scada_status"].mode == "historical_replay"
+
+    ensemble_context = DemoReplayService(
+        session_factory=session_factory,
+        clock=clock,
+        replay_weather_provider=ThreeModelReplayWeatherProvider(),
+    ).get_dashboard_context()
+    assert ensemble_context is not None
+    assert all(
+        item["source_count"] == 3
+        for item in ensemble_context["forecast"][:6]
+    )
+    assert all(
+        item["source_sync_status"] == "COMPLETE"
+        for item in ensemble_context["forecast"][:6]
+    )
+    ensemble_chart = {
+        point.timestamp.hour: point
+        for point in ensemble_context["replay"].full_day_load_forecast
+    }
+    assert ensemble_chart[11].weather_source_count == 3
+    assert ensemble_chart[11].forecast_demand_mw != 1111
+    assert (
+        ensemble_context["demand_forecast"].horizons[0].forecast_demand_mw
+        == ensemble_chart[11].forecast_demand_mw
+    )
+    assert (
+        ensemble_context["risk_payload"]["forecast_demand_60m"]
+        == ensemble_chart[11].forecast_demand_mw
+    )

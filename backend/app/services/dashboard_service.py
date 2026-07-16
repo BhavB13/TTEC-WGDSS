@@ -44,7 +44,9 @@ class DashboardService:
             and grid_service is None
             and settings.DEMO_REPLAY_ENABLED
         ):
-            self.demo_replay_service = DemoReplayService()
+            self.demo_replay_service = DemoReplayService(
+                live_weather_service=self.weather_service,
+            )
         self._last_weather: dict[str, Any] | None = None
         self._last_forecast: list[dict[str, Any]] | None = None
         self._last_grid_status: dict[str, Any] | None = None
@@ -178,6 +180,9 @@ class DashboardService:
         grid_response = GridStatusResponse.model_validate(grid_status)
         probability = ProbabilityResponse(
             engine_version=probability_payload["engine_version"],
+            policy_status=probability_payload.get(
+                "policy_status", settings.OPERATING_POLICY_STATUS
+            ),
             probability_score=probability_payload["probability_score"],
             risk_level=probability_payload["risk_level"],
             forecast_demand_30m=probability_payload["forecast_demand_30m"],
@@ -188,6 +193,9 @@ class DashboardService:
         )
         recommendation = RecommendationResponse(
             engine_version=probability_payload["engine_version"],
+            policy_status=probability_payload.get(
+                "policy_status", settings.OPERATING_POLICY_STATUS
+            ),
             probability_score=probability_payload["probability_score"],
             risk_level=probability_payload["risk_level"],
             forecast_demand_30m=probability_payload["forecast_demand_30m"],
@@ -252,6 +260,28 @@ class DashboardService:
             "weather_effect_mw",
             "available_start_capacity_mw",
             "residual_shortfall_mw",
+            "risk_profile",
+            "peak_risk_horizon_minutes",
+            "peak_risk_timestamp",
+            "forecast_lower_mw",
+            "forecast_upper_mw",
+            "immediate_online_capacity_mw",
+            "safe_online_capacity_mw",
+            "required_reserve_mw",
+            "online_headroom_mw",
+            "reserve_adjusted_headroom_mw",
+            "severity_level",
+            "urgency",
+            "decision_deadline_minutes",
+            "decision_deadline_at",
+            "drivers",
+            "increasing_factors",
+            "reducing_factors",
+            "quality_warnings",
+            "probability_method",
+            "aggregation_method",
+            "capacity_basis",
+            "formula_version",
         )
         return {field: payload[field] for field in fields if field in payload}
 
@@ -354,10 +384,23 @@ class DashboardService:
                 item.get("source_sync_status") != "COMPLETE"
                 for item in forecast_items[:6]
             )
+        live_forecast_mapped_to_simulation = bool(
+            replay_active
+            and forecast_items
+            and any(
+                item.get("forecast_mode")
+                == "LIVE_ENSEMBLE_MAPPED_TO_SIMULATION"
+                for item in forecast_items[:6]
+            )
+        )
         calibrated = "SCADA Calibration" in weather.provider_name
         weather_status = "STALE" if stale else ("FALLBACK" if fallback_used else "LIVE")
         if replay_active:
-            weather_status = "SIMULATED_REPLAY"
+            weather_status = (
+                "LIVE_FORECAST_SIMULATED_GRID"
+                if live_forecast_mapped_to_simulation
+                else "SIMULATED_REPLAY"
+            )
         if calibrated:
             weather_status = "CALIBRATED"
 
@@ -412,9 +455,16 @@ class DashboardService:
                 "Grid telemetry is simulated; this snapshot is for training and replay, not live dispatch"
             )
         if replay_active:
-            notes.append(
-                "Weather and grid measurements follow the persisted demonstration replay cursor"
-            )
+            if live_forecast_mapped_to_simulation:
+                notes.append(
+                    "Current weather and grid measurements follow the simulation cursor; "
+                    "the hourly weather forecast is a live provider ensemble mapped to "
+                    "simulation time"
+                )
+            else:
+                notes.append(
+                    "Weather and grid measurements follow the persisted demonstration replay cursor"
+                )
 
         return DataQualityResponse(
             overall_status=(

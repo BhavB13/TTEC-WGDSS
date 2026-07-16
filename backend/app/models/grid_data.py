@@ -26,6 +26,11 @@ class GridData(Base):
     current_generation_mw: Mapped[float] = mapped_column(Float, nullable=False)
     total_available_capacity_mw: Mapped[float] = mapped_column(Float, nullable=False)
     reserve_margin_percent: Mapped[float] = mapped_column(Float, nullable=False)
+    spinning_reserve_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    spinning_reserve_source: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
 
     grid_status: Mapped[str] = mapped_column(String(25), nullable=False)
     demand_period: Mapped[str] = mapped_column(String(25), nullable=False)

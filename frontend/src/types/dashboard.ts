@@ -117,6 +117,25 @@ export interface DemandForecastHorizon {
   feature_profile?: string | null;
   validation_status?: string | null;
   training_rows?: number | null;
+  confidence_lower_mw?: number | null;
+  confidence_upper_mw?: number | null;
+  confidence_level?: number | null;
+  temperature_load_correlation?: number | null;
+  similar_period_forecast_mw?: number | null;
+  similar_examples?: Array<{
+    feature_timestamp: string;
+    target_timestamp: string;
+    target_demand_mw: number;
+    temperature_c?: number | null;
+    forecast_temperature_c?: number | null;
+    day_type: string;
+    distance: number;
+  }>;
+  contributing_factors?: string[];
+  mae?: number | null;
+  rmse?: number | null;
+  mape?: number | null;
+  residual_std?: number | null;
 }
 
 export interface DemandForecastBundle {
@@ -148,15 +167,24 @@ export interface ModelStatus {
 }
 
 export interface ScadaStatus {
+  mode: "historical_replay" | "simulation" | "live_read_only" | "unavailable";
   source: string;
+  source_system?: string;
+  source_provider?: string;
+  aggregation?: string;
   latest_snapshot?: string | null;
   available_at?: string | null;
   quality_status: string;
   missing_fields: string;
+  coverage_percent?: number | null;
+  quality_notes?: string;
+  anomaly_flags?: string[];
+  field_provenance?: Record<string, unknown>;
+  formula_version?: string | null;
 }
 
 export interface ReplayStatus {
-  mode: "SIMULATED_LIVE" | string;
+  mode: "historical_replay" | "simulation" | "live_read_only";
   dataset_label: string;
   dataset_start: string;
   dataset_end: string;
@@ -177,11 +205,12 @@ export interface OperationalTrendPoint {
   timestamp: string;
   demand_mw: number;
   generation_mw: number;
+  spinning_reserve_mw: number;
   available_capacity_mw: number;
   reserve_margin_percent: number;
   temperature_c: number;
   rainfall_mm_hr: number;
-  data_phase: "HISTORICAL" | "SIMULATED_LIVE";
+  data_phase: "HISTORICAL_SOURCE" | "REPLAY_REVEALED";
 }
 
 export interface LoadForecastPoint {
@@ -230,14 +259,48 @@ export interface GridStatus {
   current_generation_mw: number;
   total_available_capacity_mw: number;
   reserve_margin_percent: number;
+  spinning_reserve_mw?: number | null;
+  spinning_reserve_source?: string | null;
   grid_status: string;
   demand_period: string;
   source_provider: string;
   generation_units: GenerationUnit[];
 }
 
+export interface RiskDriver {
+  label: string;
+  direction: "INCREASES_RISK" | "REDUCES_RISK" | "QUALITY_WARNING" | "CONTEXT" | string;
+  category: string;
+}
+
+export interface RiskHorizon {
+  horizon_minutes: number;
+  forecast_timestamp?: string | null;
+  probability: number;
+  forecast_demand_mw: number;
+  forecast_uncertainty_mw: number;
+  forecast_lower_mw: number;
+  forecast_upper_mw: number;
+  confidence_level: number;
+  immediate_online_capacity_mw: number;
+  safe_online_capacity_mw: number;
+  required_reserve_mw: number;
+  online_headroom_mw: number;
+  reserve_adjusted_headroom_mw: number;
+  expected_shortfall_mw: number;
+  conservative_shortfall_mw: number;
+  expected_load_rise_mw: number;
+  weather_effect_mw: number;
+  forecast_confidence: number;
+  startup_lead_time_minutes: number;
+  decision_deadline_minutes?: number | null;
+  decision_deadline_at?: string | null;
+  urgency: string;
+}
+
 export interface ProbabilityData {
   engine_version?: string;
+  policy_status?: string;
   probability_score: number;
   risk_level: "LOW" | "MEDIUM" | "HIGH" | "UNAVAILABLE";
   forecast_demand_30m: number;
@@ -254,6 +317,30 @@ export interface ProbabilityData {
   startup_time_minutes?: number;
   decision_confidence?: number;
   weather_effect_mw?: number;
+  available_start_capacity_mw?: number | null;
+  residual_shortfall_mw?: number;
+  risk_profile?: RiskHorizon[];
+  peak_risk_horizon_minutes?: number | null;
+  peak_risk_timestamp?: string | null;
+  forecast_lower_mw?: number;
+  forecast_upper_mw?: number;
+  immediate_online_capacity_mw?: number;
+  safe_online_capacity_mw?: number;
+  required_reserve_mw?: number;
+  online_headroom_mw?: number;
+  reserve_adjusted_headroom_mw?: number;
+  severity_level?: string;
+  urgency?: string;
+  decision_deadline_minutes?: number | null;
+  decision_deadline_at?: string | null;
+  drivers?: RiskDriver[];
+  increasing_factors?: string[];
+  reducing_factors?: string[];
+  quality_warnings?: string[];
+  probability_method?: string;
+  aggregation_method?: string;
+  capacity_basis?: string;
+  formula_version?: string;
 }
 
 export interface RecommendationData extends ProbabilityData {

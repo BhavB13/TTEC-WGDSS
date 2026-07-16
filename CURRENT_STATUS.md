@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-07-15
+Last updated: 2026-07-16
 
 ## Snapshot
 
@@ -14,23 +14,43 @@ validation only. It is not live T&TEC dispatch telemetry.
 With `DEMO_REPLAY_ENABLED=true` (the local demonstration default), the dashboard
 consumes a persistent June replay. When the five-tag historical archive has been
 imported, the current June hour is sourced from that archive and labelled
-`HistoricalScadaSimulatedReplay`; otherwise it uses the deterministic synthetic
+`HistoricalScadaReplay`; otherwise it uses the deterministic synthetic
 archive. Neither path is a live T&TEC feed.
 
 ## Implemented And Validated
 
 - Provider-based live weather and forecast data with quality metadata.
+- Historical SCADA replay weather uses cutoff-safe archived ECMWF IFS, NOAA
+  GFS, and DWD ICON runs when available, with a past-only fallback.
 - Dashboard snapshot API, map overlays, wind display, scenario profiles, and
   historical analytics.
 - SCADA CSV import with raw-source preservation, header normalization, timestamp
-  parsing, quality preservation, and duplicate-file protection.
+  parsing, interval/provenance metadata, stable record hashes, raw and
+  normalized quality, anomaly reports, duplicate-file protection, and
+  cross-file record deduplication.
+- Historical replay keeps demand, TRA generation, TA available capacity, and
+  corrected System Spin as separate quantities. The dashboard displays the
+  corrected spin tag in MW and retains TRA-minus-demand only as a diagnostic.
 - Hourly SCADA grid snapshots aligned by timestamp, never row number.
+- Snapshot availability comes from the latest contributing source interval end;
+  forecast issue times are rounded forward only after that exact availability,
+  preventing future interval aggregates from leaking into model features.
 - Leakage-safe direct 1h, 2h, and 6h forecast rows with demand lags, rolling
   trends, SCADA temperature, observed weather, and issued-or-past-only weather
   outlook features.
 - Per-horizon comparison of persistence/time-series baselines, Ridge,
-  `HistGradientBoostingRegressor`, and `RandomForestRegressor` using nested
+  `HistGradientBoostingRegressor`, `RandomForestRegressor`, and
+  `ExtraTreesRegressor` using nested
   expanding-window validation and an untouched chronological holdout.
+- Leakage-safe similar-period matching compares target hour, forecast
+  temperature, day type, season, humidity, rainfall, cloud, current demand, and
+  recent trend. Pure similarity and ML/similarity blends compete with every
+  other candidate per horizon.
+- Trinidad calendar features separate weekdays, weekends, fixed/movable public
+  holidays, configurable variable holidays, and wet/dry seasons.
+- Forecast responses include 90% confidence bounds, horizon MAE/RMSE/MAPE,
+  adjusted temperature/load correlation, comparable historical examples, and
+  major contributing factors.
 - Exact-cursor replay forecast artifacts with calibrated uncertainty, model
   version, candidate metrics, feature profile, and prototype/validated status.
 - SCADA replay preflight gate requiring all five tags, Good-quality samples, and
@@ -50,10 +70,20 @@ archive. Neither path is a live T&TEC feed.
   and explicit degradation when any source is unavailable.
 - Current-clock June alignment with real-time automatic playback and manual
   accelerated controls.
-- Operating-risk probability based on the full valid forecast profile, TA, TRA,
-  Spin, uncertainty, reserve requirement, weather effect, and startup timing.
-  Dispatch distinguishes one or two 15 MW fast-start sets from a 60-120 MW
-  heavy set and reports insufficient startable capacity explicitly.
+- Continuous operating-risk probability for every valid horizon through six
+  hours, based on TRA, corrected Spin, residual uncertainty, reserve requirement,
+  weather-informed demand, and startup timing. The API exposes raw probability,
+  demand bounds, safe capacity, headroom, expected/conservative shortfall,
+  peak-risk time, decision deadline, severity, confidence, and structured
+  drivers; the headline uses the maximum correlated-horizon probability.
+  Reserve policy, risk bands, unit blocks, and lead times are configurable and
+  returned as `PROTOTYPE_UNCONFIRMED`; they are not approved utility settings.
+- Synthetic replay no longer defines corrected Spin as `TRA - demand`; it uses
+  a separately generated, explicitly simulated series. Historical replay still
+  reads the exported corrected-spin tag directly.
+- Repository audit found no XGBoost dependency or XGBoost implementation. The
+  existing tested Ridge, histogram gradient boosting, random forest,
+  extra-trees, baseline, similarity, and blend candidates were preserved.
 - Registry-based historical imports with schema mapping, validation, SHA-256
   deduplication, and documented recalibration/retraining steps.
 
@@ -77,14 +107,26 @@ forecast feature.
 - The real June ZIP pipeline imports filename-independent CSV members, creates
   722 hourly buckets, 2,157 direct-horizon training rows, 744 Open-Meteo weather
   observations, and three cutoff-safe replay forecast artifacts.
-- Backend suite: 111 tests pass, including ingestion, resampling, leakage,
-  forecasting, replay, dashboard, and operating risk.
-- Frontend Vitest suite: 7 tests pass.
+- A provenance audit of the five-member archive reads 2,750 unique interval
+  rows, 1,631 `good`, 6 `uncertain`, and 1,113 `unknown` normalized quality
+  values. With an explicit June reporting boundary it flags one spillover
+  interval, two out-of-interval minima, and two out-of-interval maxima without
+  deleting or silently repairing them.
+- On the untouched chronological June holdout, v3 records 14.88 MW MAE at 1h,
+  19.43 MW at 2h, and 19.67 MW at 6h. The selected methods are independently
+  gated per horizon; these are prototype results, not production guarantees.
+- Backend suite: 134 tests pass, including ingestion, resampling, leakage,
+  forecasting, replay, dashboard, continuous operating risk, exact 20/50/80%
+  probabilities, and chronological Brier-score backtesting.
+- Frontend Vitest suite: 10 tests pass.
 - Frontend production build passes.
+- The Risk workspace was visually verified at 1366x768 with no document scroll,
+  horizontal overflow, or overlapping gauge/timeline/evidence panels.
 - Both the current database and a clean database upgraded from revision zero
   pass `alembic check`.
-- A real Uvicorn request to `/api/dashboard/snapshot` returns the v2.1 1h/2h/6h
-  exact-cursor bundle in under one second on the development machine.
+- A real Uvicorn request to `/api/dashboard/snapshot` returns the v3.0 1h/2h/6h
+  exact-cursor bundle, confidence bounds, metrics, similar examples, and factors
+  in under one second on the development machine.
 
 ## Next Operational Step
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 
@@ -17,7 +18,11 @@ from app.services.historical_weather_backfill_service import (
     HistoricalWeatherBackfillResult,
     HistoricalWeatherBackfillService,
 )
-from app.services.scada_import_service import ScadaImportResult, ScadaImportService
+from app.services.scada_import_service import (
+    ScadaImportResult,
+    ScadaImportService,
+    parse_reporting_datetime,
+)
 from app.services.scada_archive_service import ScadaArchiveReport, ScadaArchiveService
 from app.services.scada_replay_validation_service import (
     ScadaReplayValidationReport,
@@ -64,14 +69,23 @@ def run_pipeline(
     source_paths: list[str | Path],
     session_factory=SessionLocal,
     backfill_weather: bool = False,
+    expected_reporting_start: datetime | None = None,
+    expected_reporting_end: datetime | None = None,
 ) -> ScadaReplayPipelineResult:
-    import_service = ScadaImportService(session_factory=session_factory)
+    import_service = ScadaImportService(
+        session_factory=session_factory,
+        expected_reporting_start=expected_reporting_start,
+        expected_reporting_end=expected_reporting_end,
+    )
     paths = [Path(path) for path in source_paths]
     zip_paths = [path for path in paths if path.suffix.lower() == ".zip"]
     if zip_paths and (len(paths) != 1 or len(zip_paths) != 1):
         raise ValueError("Provide one SCADA ZIP archive or one or more CSV files")
 
-    archive_service = ScadaArchiveService(session_factory=session_factory)
+    archive_service = ScadaArchiveService(
+        session_factory=session_factory,
+        import_service=import_service,
+    )
     archive_report: ScadaArchiveReport | None = None
     if zip_paths:
         archive_report = archive_service.inspect_archive(zip_paths[0])
@@ -239,11 +253,23 @@ def main() -> int:
         action="store_true",
         help="Backfill Open-Meteo historical feature-time weather for the SCADA range",
     )
+    parser.add_argument(
+        "--reporting-start",
+        default=None,
+        help="Optional ISO-8601 export reporting-window start; values are never inferred",
+    )
+    parser.add_argument(
+        "--reporting-end",
+        default=None,
+        help="Optional ISO-8601 export reporting-window end; values are never inferred",
+    )
     args = parser.parse_args()
 
     result = run_pipeline(
         args.source_paths,
         backfill_weather=args.backfill_weather,
+        expected_reporting_start=parse_reporting_datetime(args.reporting_start),
+        expected_reporting_end=parse_reporting_datetime(args.reporting_end),
     )
     print(format_summary(result))
     return 0

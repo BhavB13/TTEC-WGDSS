@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 
 class ReplayStatusResponse(BaseModel):
-    mode: str = "SIMULATED_LIVE"
+    mode: Literal["historical_replay", "simulation", "live_read_only"] = "simulation"
     dataset_label: str
     dataset_start: datetime
     dataset_end: datetime
@@ -26,11 +26,12 @@ class OperationalTrendPointResponse(BaseModel):
     timestamp: datetime
     demand_mw: float
     generation_mw: float
+    spinning_reserve_mw: float
     available_capacity_mw: float
     reserve_margin_percent: float
     temperature_c: float
     rainfall_mm_hr: float
-    data_phase: Literal["HISTORICAL", "SIMULATED_LIVE"]
+    data_phase: Literal["HISTORICAL_SOURCE", "REPLAY_REVEALED"]
 
 
 class LoadForecastPointResponse(BaseModel):

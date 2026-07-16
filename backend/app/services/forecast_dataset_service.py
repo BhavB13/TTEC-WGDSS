@@ -150,6 +150,7 @@ class ForecastDatasetService:
                     select(ScadaGridSnapshot).order_by(ScadaGridSnapshot.timestamp)
                 )
                 if _snapshot_available_at(snapshot) <= cutoff
+                and _snapshot_issue_time(snapshot) <= cutoff
             ]
             weather_by_hour = {
                 _hour_key(row.timestamp): row
@@ -198,6 +199,7 @@ class ForecastDatasetService:
             snapshot
             for snapshot in snapshots
             if _snapshot_available_at(snapshot) <= available_at
+            and _snapshot_issue_time(snapshot) <= available_at
         ]
         if not available:
             return {}
@@ -208,10 +210,8 @@ class ForecastDatasetService:
             or bool(latest_snapshot.missing_fields.strip())
         ):
             return {}
-        feature_timestamp = _snapshot_available_at(latest_snapshot)
-        snapshot_by_hour = {
-            _snapshot_available_at(snapshot): snapshot for snapshot in snapshots
-        }
+        feature_timestamp = _snapshot_issue_time(latest_snapshot)
+        snapshot_by_hour = _snapshots_by_issue_time(snapshots)
         weather = weather_by_hour.get(feature_timestamp)
         rows: dict[int, ForecastTrainingRow] = {}
         for horizon_hours in horizons_hours:
@@ -243,14 +243,11 @@ class ForecastDatasetService:
         forecasts_by_hour: dict[datetime, list[Forecast]],
         horizons_hours: tuple[int, ...],
     ) -> tuple[list[ForecastTrainingRow], int]:
-        snapshot_by_hour = {
-            _snapshot_available_at(snapshot): snapshot for snapshot in snapshots
-        }
+        snapshot_by_hour = _snapshots_by_issue_time(snapshots)
         rows: list[ForecastTrainingRow] = []
         skipped = 0
 
-        for snapshot in snapshots:
-            feature_timestamp = _snapshot_available_at(snapshot)
+        for feature_timestamp, snapshot in sorted(snapshot_by_hour.items()):
             if snapshot.current_demand_mw is None:
                 skipped += len(horizons_hours)
                 continue
@@ -304,8 +301,12 @@ class ForecastDatasetService:
     ) -> ForecastTrainingRow:
         return ForecastTrainingRow(
             feature_timestamp=feature_timestamp,
+            feature_observation_time=_snapshot_observation_time(snapshot),
+            feature_available_at=_snapshot_available_at(snapshot),
             horizon_hours=horizon_hours,
             target_timestamp=target_timestamp,
+            target_observation_time=_snapshot_observation_time(target_snapshot),
+            target_available_at=_snapshot_available_at(target_snapshot),
             target_demand_mw=target_snapshot.current_demand_mw,
             current_demand_mw=snapshot.current_demand_mw,
             lag_1h_demand_mw=self._lag_demand(snapshot_by_hour, feature_timestamp, 1),
@@ -313,10 +314,37 @@ class ForecastDatasetService:
             lag_3h_demand_mw=self._lag_demand(snapshot_by_hour, feature_timestamp, 3),
             lag_6h_demand_mw=self._lag_demand(snapshot_by_hour, feature_timestamp, 6),
             lag_24h_demand_mw=self._lag_demand(snapshot_by_hour, feature_timestamp, 24),
+            lag_48h_demand_mw=self._lag_demand(snapshot_by_hour, feature_timestamp, 48),
+            lag_168h_demand_mw=self._lag_demand(
+                snapshot_by_hour,
+                feature_timestamp,
+                168,
+            ),
             rolling_3h_demand_mw=self._rolling_average(snapshot_by_hour, feature_timestamp, 3),
             rolling_6h_demand_mw=self._rolling_average(snapshot_by_hour, feature_timestamp, 6),
+            rolling_12h_demand_mw=self._rolling_average(
+                snapshot_by_hour,
+                feature_timestamp,
+                12,
+            ),
             rolling_24h_demand_mw=self._rolling_average(
                 snapshot_by_hour, feature_timestamp, 24
+            ),
+            rolling_168h_demand_mw=self._rolling_average(
+                snapshot_by_hour,
+                feature_timestamp,
+                168,
+            ),
+            same_hour_7d_average_mw=self._same_hour_average(
+                snapshot_by_hour,
+                feature_timestamp,
+                7,
+            ),
+            demand_volatility_6h_mw=self._rolling_stddev(
+                snapshot_by_hour,
+                feature_timestamp,
+                "current_demand_mw",
+                6,
             ),
             demand_rate_1h_mw=self._rate(
                 snapshot_by_hour, feature_timestamp, "current_demand_mw", 1
@@ -419,8 +447,12 @@ class ForecastDatasetService:
         assert snapshot.current_demand_mw is not None
         return ForecastTrainingRow(
             feature_timestamp=feature_timestamp,
+            feature_observation_time=_snapshot_observation_time(snapshot),
+            feature_available_at=_snapshot_available_at(snapshot),
             horizon_hours=horizon_hours,
             target_timestamp=target_timestamp,
+            target_observation_time=None,
+            target_available_at=None,
             target_demand_mw=snapshot.current_demand_mw,
             current_demand_mw=snapshot.current_demand_mw,
             lag_1h_demand_mw=self._lag_demand(
@@ -448,6 +480,16 @@ class ForecastDatasetService:
                 feature_timestamp,
                 24,
             ),
+            lag_48h_demand_mw=self._lag_demand(
+                snapshot_by_hour,
+                feature_timestamp,
+                48,
+            ),
+            lag_168h_demand_mw=self._lag_demand(
+                snapshot_by_hour,
+                feature_timestamp,
+                168,
+            ),
             rolling_3h_demand_mw=self._rolling_average(
                 snapshot_by_hour,
                 feature_timestamp,
@@ -458,10 +500,31 @@ class ForecastDatasetService:
                 feature_timestamp,
                 6,
             ),
+            rolling_12h_demand_mw=self._rolling_average(
+                snapshot_by_hour,
+                feature_timestamp,
+                12,
+            ),
             rolling_24h_demand_mw=self._rolling_average(
                 snapshot_by_hour,
                 feature_timestamp,
                 24,
+            ),
+            rolling_168h_demand_mw=self._rolling_average(
+                snapshot_by_hour,
+                feature_timestamp,
+                168,
+            ),
+            same_hour_7d_average_mw=self._same_hour_average(
+                snapshot_by_hour,
+                feature_timestamp,
+                7,
+            ),
+            demand_volatility_6h_mw=self._rolling_stddev(
+                snapshot_by_hour,
+                feature_timestamp,
+                "current_demand_mw",
+                6,
             ),
             demand_rate_1h_mw=self._rate(
                 snapshot_by_hour, feature_timestamp, "current_demand_mw", 1
@@ -651,6 +714,46 @@ class ForecastDatasetService:
             return None
         return round(sum(values) / len(values), 4)
 
+    @staticmethod
+    def _same_hour_average(
+        snapshot_by_hour: dict[datetime, ScadaGridSnapshot],
+        timestamp: datetime,
+        day_count: int,
+    ) -> float | None:
+        values = [
+            row.current_demand_mw
+            for day_offset in range(1, day_count + 1)
+            if (
+                row := snapshot_by_hour.get(
+                    timestamp - timedelta(hours=24 * day_offset)
+                )
+            )
+            is not None
+            and row.current_demand_mw is not None
+        ]
+        if not values:
+            return None
+        return round(sum(values) / len(values), 4)
+
+    @staticmethod
+    def _rolling_stddev(
+        snapshot_by_hour: dict[datetime, ScadaGridSnapshot],
+        timestamp: datetime,
+        field_name: str,
+        window_hours: int,
+    ) -> float | None:
+        values: list[float] = []
+        for offset in range(window_hours):
+            row = snapshot_by_hour.get(timestamp - timedelta(hours=offset))
+            value = getattr(row, field_name, None) if row is not None else None
+            if value is not None:
+                values.append(float(value))
+        if not values:
+            return None
+        average = sum(values) / len(values)
+        variance = sum((value - average) ** 2 for value in values) / len(values)
+        return round(variance**0.5, 4)
+
     @classmethod
     def _rate(
         cls,
@@ -724,4 +827,33 @@ def _local_naive(value: datetime) -> datetime:
 
 
 def _snapshot_available_at(snapshot: ScadaGridSnapshot) -> datetime:
-    return _hour_key(snapshot.available_at or snapshot.timestamp)
+    # Legacy snapshots predate explicit availability metadata and used
+    # `timestamp` as their issue-time key. Preserve that interpretation while
+    # all newly built interval snapshots carry an exact `available_at`.
+    return _local_naive(snapshot.available_at or snapshot.timestamp)
+
+
+def _snapshot_observation_time(snapshot: ScadaGridSnapshot) -> datetime:
+    if snapshot.available_at is None:
+        return _hour_key(snapshot.timestamp)
+    return _hour_key(snapshot.timestamp) + timedelta(hours=1)
+
+
+def _snapshot_issue_time(snapshot: ScadaGridSnapshot) -> datetime:
+    available_at = _snapshot_available_at(snapshot)
+    floored = _hour_key(available_at)
+    return floored if available_at == floored else floored + timedelta(hours=1)
+
+
+def _snapshots_by_issue_time(
+    snapshots: list[ScadaGridSnapshot],
+) -> dict[datetime, ScadaGridSnapshot]:
+    result: dict[datetime, ScadaGridSnapshot] = {}
+    for snapshot in sorted(snapshots, key=lambda item: _hour_key(item.timestamp)):
+        issue_time = _snapshot_issue_time(snapshot)
+        existing = result.get(issue_time)
+        if existing is None or _snapshot_observation_time(snapshot) > _snapshot_observation_time(
+            existing
+        ):
+            result[issue_time] = snapshot
+    return result

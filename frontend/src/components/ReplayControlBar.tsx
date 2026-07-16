@@ -21,7 +21,7 @@ export default function ReplayControlBar({
         <div className="flex flex-wrap items-center gap-2">
           <span className={`h-2 w-2 rounded-full ${status.is_playing ? "animate-pulse bg-emerald-400" : "bg-amber-400"}`} />
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300">
-            Simulated Live SCADA
+            {replayModeLabel(status.mode)}
           </p>
           <span className="rounded border border-slate-700 px-1.5 py-0.5 text-[9px] text-slate-400">
             {status.is_playing ? "PLAYING" : "PAUSED"}
@@ -32,7 +32,7 @@ export default function ReplayControlBar({
             {formatReplayTimestamp(status.cursor_at)}
           </p>
           <p className="text-[10px] text-slate-400">
-            {status.revealed_records}/{status.total_replay_records} June records · {status.progress_percent.toFixed(1)}%
+            {status.dataset_label} · {status.revealed_records}/{status.total_replay_records} records · {status.progress_percent.toFixed(1)}%
           </p>
         </div>
       </div>
@@ -94,6 +94,16 @@ export default function ReplayControlBar({
       </div>
     </section>
   );
+}
+
+function replayModeLabel(mode: ReplayStatus["mode"]): string {
+  if (mode === "historical_replay") {
+    return "Historical replay — June 2026";
+  }
+  if (mode === "live_read_only") {
+    return "Live read-only telemetry";
+  }
+  return "Simulation replay";
 }
 
 function formatReplayTimestamp(value: string): string {

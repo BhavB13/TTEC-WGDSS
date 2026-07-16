@@ -108,11 +108,21 @@ def test_forecast_dataset_builds_rows_without_future_leakage(tmp_path):
 
     assert row is not None
     assert row.target_timestamp == _ts(3)
+    assert row.feature_observation_time == _ts(2)
+    assert row.feature_available_at == _ts(2)
+    assert row.target_observation_time == _ts(3)
+    assert row.target_available_at == _ts(3)
     assert row.current_demand_mw == 820
     assert row.target_demand_mw == 830
     assert row.lag_1h_demand_mw == 810
     assert row.lag_2h_demand_mw == 800
     assert row.rolling_3h_demand_mw == 810
+    assert row.rolling_12h_demand_mw == 810
+    assert row.rolling_168h_demand_mw == 810
+    assert row.lag_48h_demand_mw is None
+    assert row.lag_168h_demand_mw is None
+    assert row.same_hour_7d_average_mw is None
+    assert row.demand_volatility_6h_mw == round((200 / 3) ** 0.5, 4)
     assert row.hour_of_day == 2
     assert row.day_of_week == 1
     assert row.temperature_c == 27.2
@@ -418,3 +428,34 @@ def test_replay_evaluation_uses_only_completed_intervals_at_cutoff(tmp_path):
     assert dataset.inference_rows[1].current_demand_mw == 830
     assert all(row.target_timestamp <= _ts(4) for row in dataset.rows)
     assert all(row.current_demand_mw < 9999 for row in dataset.rows)
+
+
+def test_replay_waits_until_irregular_interval_is_available_and_issue_hour_is_safe(
+    tmp_path,
+):
+    session_factory = _session_factory(tmp_path)
+    _seed_snapshots(session_factory, range(8, 10))
+    with session_factory() as session:
+        snapshots = list(
+            session.scalars(
+                select(ScadaGridSnapshot).order_by(ScadaGridSnapshot.timestamp)
+            )
+        )
+        snapshots[0].available_at = _ts(9) + timedelta(minutes=30)
+        snapshots[1].available_at = _ts(10) + timedelta(minutes=30)
+        session.commit()
+
+    service = ForecastDatasetService(session_factory=session_factory)
+    before_safe_issue = service.build_evaluation_dataset(
+        as_of=_ts(9) + timedelta(minutes=45), horizons_hours=(1,)
+    )
+    at_safe_issue = service.build_evaluation_dataset(
+        as_of=_ts(10), horizons_hours=(1,)
+    )
+
+    assert before_safe_issue.source_snapshots == 0
+    assert at_safe_issue.source_snapshots == 1
+    assert at_safe_issue.inference_rows[1].feature_timestamp == _ts(10)
+    assert at_safe_issue.inference_rows[1].feature_available_at == _ts(9) + timedelta(
+        minutes=30
+    )

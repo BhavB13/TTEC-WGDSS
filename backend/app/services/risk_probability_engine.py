@@ -1,7 +1,40 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
+from datetime import datetime, timedelta
+from statistics import NormalDist
+
+from app.core.config import settings
+
+
+@dataclass(frozen=True)
+class OperatingPolicy:
+    status: str
+    reserve_fraction: float
+    medium_probability_threshold: float
+    high_probability_threshold: float
+    fast_start_unit_capacity_mw: float
+    fast_start_max_capacity_mw: float
+    fast_start_lead_time_minutes: int
+    heavy_start_min_capacity_mw: float
+    heavy_start_max_capacity_mw: float
+    heavy_start_lead_time_minutes: int
+
+    @classmethod
+    def from_settings(cls) -> "OperatingPolicy":
+        return cls(
+            status=settings.OPERATING_POLICY_STATUS,
+            reserve_fraction=settings.OPERATING_RESERVE_FRACTION,
+            medium_probability_threshold=settings.RISK_MEDIUM_PROBABILITY_THRESHOLD,
+            high_probability_threshold=settings.RISK_HIGH_PROBABILITY_THRESHOLD,
+            fast_start_unit_capacity_mw=settings.FAST_START_UNIT_CAPACITY_MW,
+            fast_start_max_capacity_mw=settings.FAST_START_MAX_CAPACITY_MW,
+            fast_start_lead_time_minutes=settings.FAST_START_LEAD_TIME_MINUTES,
+            heavy_start_min_capacity_mw=settings.HEAVY_START_MIN_CAPACITY_MW,
+            heavy_start_max_capacity_mw=settings.HEAVY_START_MAX_CAPACITY_MW,
+            heavy_start_lead_time_minutes=settings.HEAVY_START_LEAD_TIME_MINUTES,
+        )
 
 
 @dataclass(frozen=True)
@@ -11,6 +44,10 @@ class OperatingForecastPoint:
     forecast_uncertainty_mw: float
     weather_effect_mw: float = 0.0
     confidence: float = 1.0
+    forecast_timestamp: datetime | None = None
+    confidence_lower_mw: float | None = None
+    confidence_upper_mw: float | None = None
+    confidence_level: float = 0.90
 
 
 @dataclass(frozen=True)
@@ -21,10 +58,65 @@ class OperatingRiskInput:
     online_capacity_mw: float | None
     available_capacity_mw: float | None
     spinning_reserve_mw: float | None
-    reserve_margin_threshold: float = 0.15
+    reserve_margin_threshold: float | None = None
     fallback_uncertainty_mw: float | None = None
     forecast_profile: tuple[OperatingForecastPoint, ...] = ()
     available_capacity_is_verified: bool = True
+    data_quality_status: str = "GOOD"
+    data_quality_warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RiskDriver:
+    label: str
+    direction: str
+    category: str
+
+
+@dataclass(frozen=True)
+class RiskHorizonAssessment:
+    horizon_minutes: int
+    forecast_timestamp: datetime | None
+    probability: float
+    forecast_demand_mw: float
+    forecast_uncertainty_mw: float
+    forecast_lower_mw: float
+    forecast_upper_mw: float
+    confidence_level: float
+    immediate_online_capacity_mw: float
+    safe_online_capacity_mw: float
+    required_reserve_mw: float
+    online_headroom_mw: float
+    reserve_adjusted_headroom_mw: float
+    expected_shortfall_mw: float
+    conservative_shortfall_mw: float
+    expected_load_rise_mw: float
+    weather_effect_mw: float
+    forecast_confidence: float
+    startup_lead_time_minutes: int
+    decision_deadline_minutes: int | None
+    decision_deadline_at: datetime | None
+    urgency: str
+
+
+@dataclass(frozen=True)
+class RiskBacktestSample:
+    forecast_issued_at: datetime
+    target_timestamp: datetime
+    predicted_probability: float
+    actual_demand_mw: float
+    safe_online_capacity_mw: float
+
+
+@dataclass(frozen=True)
+class RiskBacktestResult:
+    sample_count: int
+    first_target_timestamp: datetime
+    last_target_timestamp: datetime
+    event_rate: float
+    mean_probability: float
+    brier_score: float
+    mean_calibration_error: float
 
 
 @dataclass(frozen=True)
@@ -51,18 +143,79 @@ class OperatingRiskResult:
     weather_effect_mw: float = 0.0
     available_start_capacity_mw: float | None = None
     residual_shortfall_mw: float = 0.0
-    engine_version: str = "operating-risk-v2"
+    risk_profile: tuple[RiskHorizonAssessment, ...] = ()
+    peak_risk_horizon_minutes: int | None = None
+    peak_risk_timestamp: datetime | None = None
+    forecast_lower_mw: float = 0.0
+    forecast_upper_mw: float = 0.0
+    immediate_online_capacity_mw: float = 0.0
+    online_headroom_mw: float = 0.0
+    reserve_adjusted_headroom_mw: float = 0.0
+    severity_level: str = "NONE"
+    urgency: str = "ROUTINE"
+    decision_deadline_minutes: int | None = None
+    decision_deadline_at: datetime | None = None
+    drivers: tuple[RiskDriver, ...] = ()
+    increasing_factors: tuple[str, ...] = ()
+    reducing_factors: tuple[str, ...] = ()
+    quality_warnings: tuple[str, ...] = ()
+    probability_method: str = "NORMAL_RESIDUAL_EXCEEDANCE"
+    aggregation_method: str = "MAX_HORIZON_PROBABILITY"
+    capacity_basis: str = "TRA_ONLY"
+    formula_version: str = "wgdss-operating-risk-v3"
+    engine_version: str = "operating-risk-v3"
+    policy_status: str = "PROTOTYPE_UNCONFIRMED"
 
 
 class RiskProbabilityEngine:
-    ENGINE_VERSION = "operating-risk-v2.0"
-    SMALL_SET_UNIT_CAPACITY_MW = 15.0
-    SMALL_SET_MAX_CAPACITY_MW = 30.0
-    SMALL_SET_STARTUP_MINUTES = 20
-    HEAVY_SET_MIN_CAPACITY_MW = 60.0
-    HEAVY_SET_MAX_CAPACITY_MW = 120.0
-    HEAVY_SET_STARTUP_MINUTES = 60
-    CONSERVATIVE_Z = 1.2815515655446004  # 90th percentile
+    ENGINE_VERSION = "operating-risk-v3.0"
+
+    def __init__(self, policy: OperatingPolicy | None = None) -> None:
+        self.policy = policy or OperatingPolicy.from_settings()
+
+    @staticmethod
+    def chronological_backtest(
+        samples: tuple[RiskBacktestSample, ...],
+    ) -> RiskBacktestResult:
+        """Score historical probabilities without allowing target-time leakage."""
+
+        if not samples:
+            raise ValueError("At least one chronological risk sample is required")
+        ordered = tuple(sorted(samples, key=lambda sample: sample.target_timestamp))
+        for sample in ordered:
+            if sample.forecast_issued_at >= sample.target_timestamp:
+                raise ValueError(
+                    "Risk backtest forecasts must be issued before their target timestamp"
+                )
+            if not 0.0 <= sample.predicted_probability <= 1.0:
+                raise ValueError("Risk backtest probabilities must be between 0 and 1")
+            if (
+                not _is_finite(sample.actual_demand_mw)
+                or not _is_finite(sample.safe_online_capacity_mw)
+            ):
+                raise ValueError("Risk backtest demand and capacity values must be finite")
+
+        events = tuple(
+            1.0 if sample.actual_demand_mw > sample.safe_online_capacity_mw else 0.0
+            for sample in ordered
+        )
+        probabilities = tuple(sample.predicted_probability for sample in ordered)
+        sample_count = len(ordered)
+        event_rate = sum(events) / sample_count
+        mean_probability = sum(probabilities) / sample_count
+        brier_score = sum(
+            (probability - event) ** 2
+            for probability, event in zip(probabilities, events)
+        ) / sample_count
+        return RiskBacktestResult(
+            sample_count=sample_count,
+            first_target_timestamp=ordered[0].target_timestamp,
+            last_target_timestamp=ordered[-1].target_timestamp,
+            event_rate=event_rate,
+            mean_probability=mean_probability,
+            brier_score=brier_score,
+            mean_calibration_error=abs(mean_probability - event_rate),
+        )
 
     def evaluate(self, risk_input: OperatingRiskInput) -> OperatingRiskResult:
         missing = self._invalid_fields(risk_input)
@@ -75,20 +228,20 @@ class RiskProbabilityEngine:
         assert risk_input.forecast_demand_mw is not None
         assert risk_input.current_demand_mw is not None
         assert risk_input.online_capacity_mw is not None
+        reserve_fraction = self._reserve_fraction(risk_input)
 
-        uncertainty = self._resolve_uncertainty(risk_input)
-        if not _is_positive_finite(uncertainty):
+        profile = self._profile(
+            risk_input,
+            self._resolve_uncertainty(risk_input),
+        )
+        if not profile:
             return self._unavailable(
                 risk_input,
                 "Risk probability unavailable; forecast uncertainty is missing or invalid",
             )
 
-        required_reserve_mw = max(
-            0.0,
-            max(risk_input.current_demand_mw, risk_input.forecast_demand_mw)
-            * risk_input.reserve_margin_threshold,
-        )
         immediate_capacity_mw = risk_input.online_capacity_mw
+        capacity_basis = "TRA_ONLY_SPIN_UNAVAILABLE"
         if risk_input.spinning_reserve_mw is not None:
             synchronized_capacity_mw = (
                 risk_input.current_demand_mw + risk_input.spinning_reserve_mw
@@ -97,14 +250,13 @@ class RiskProbabilityEngine:
                 immediate_capacity_mw,
                 synchronized_capacity_mw,
             )
-        safe_online_capacity_mw = immediate_capacity_mw - required_reserve_mw
-        profile = self._profile(risk_input, uncertainty)
+            capacity_basis = "MIN_TRA_AND_DEMAND_PLUS_CORRECTED_SPIN"
         assessments = [
             self._assess_point(
                 point,
                 current_demand_mw=risk_input.current_demand_mw,
                 immediate_capacity_mw=immediate_capacity_mw,
-                reserve_margin_threshold=risk_input.reserve_margin_threshold,
+                reserve_margin_threshold=reserve_fraction,
             )
             for point in profile
         ]
@@ -117,17 +269,11 @@ class RiskProbabilityEngine:
             ),
         )
         selected_point = selected["point"]
+        assert isinstance(selected_point, OperatingForecastPoint)
         required_reserve_mw = selected["required_reserve_mw"]
         safe_online_capacity_mw = selected["safe_online_capacity_mw"]
         uncertainty = selected_point.forecast_uncertainty_mw
-        z_score = (
-            safe_online_capacity_mw - selected_point.forecast_demand_mw
-        ) / uncertainty
-        # Use erfc for the upper normal tail.  Subtracting a CDF close to one
-        # loses meaningful low-risk precision and previously made valid values
-        # appear as 0.00 after rounding.
-        probability = _normal_survival(z_score)
-        probability_score = max(0.0, min(1.0, probability))
+        probability_score = float(selected["probability"])
 
         available_capacity = risk_input.available_capacity_mw
         reserve_margin_mw = (
@@ -157,15 +303,13 @@ class RiskProbabilityEngine:
             uncertainty=uncertainty,
             reserve_margin_percent=reserve_margin_percent,
         )
-        reasons.extend(
-            [
-                f"Expected load rise is {selected['expected_load_rise_mw']:.1f} MW in "
-                f"{selected_point.horizon_minutes} minutes",
-                f"Conservative capacity shortfall is {selected['projected_shortfall_mw']:.1f} MW",
-                f"Weather contributes {selected_point.weather_effect_mw:+.1f} MW to the forecast",
-                f"Dispatch decision confidence is {selected_point.confidence * 100:.0f}%",
-            ]
-        )
+        reasons.extend([
+            f"Expected load rise is {float(selected['expected_load_rise_mw']):.1f} MW in "
+            f"{selected_point.horizon_minutes} minutes",
+            f"Conservative capacity shortfall is {float(selected['projected_shortfall_mw']):.1f} MW",
+            f"Weather contributes {selected_point.weather_effect_mw:+.1f} MW to the forecast",
+            f"Forecast confidence is {selected_point.confidence * 100:.0f}%",
+        ])
         if dispatch["generator_set"] != "NONE":
             reasons.append(
                 f"{dispatch['generator_set']} requires {dispatch['startup_time_minutes']} minutes to start"
@@ -181,54 +325,151 @@ class RiskProbabilityEngine:
                 "requiring further operator action"
             )
 
+        drivers = self._drivers(
+            risk_input=risk_input,
+            selected=selected,
+            reserve_margin_percent=reserve_margin_percent,
+            capacity_basis=capacity_basis,
+        )
+        increasing_factors = tuple(
+            driver.label for driver in drivers if driver.direction == "INCREASES_RISK"
+        )
+        reducing_factors = tuple(
+            driver.label for driver in drivers if driver.direction == "REDUCES_RISK"
+        )
+        quality_warnings = tuple(
+            driver.label for driver in drivers if driver.direction == "QUALITY_WARNING"
+        )
+        reasons = list(dict.fromkeys([*reasons, *(driver.label for driver in drivers)]))
+
+        risk_profile = tuple(
+            self._public_assessment(assessment) for assessment in assessments
+        )
+        projected_shortfall = float(selected["projected_shortfall_mw"])
+        severity_level = self._severity_level(projected_shortfall)
+        deadline_minutes = selected["decision_deadline_minutes"]
+        deadline_at = selected["decision_deadline_at"]
+
         return OperatingRiskResult(
             probability_score=probability_score,
             risk_level=risk_level,
             recommendation=recommendation,
-            forecast_demand_mw=round(selected_point.forecast_demand_mw, 4),
-            forecast_uncertainty_mw=round(uncertainty, 4),
-            safe_online_capacity_mw=round(safe_online_capacity_mw, 4),
-            required_reserve_mw=round(required_reserve_mw, 4),
-            reserve_margin_mw=_round_or_none(reserve_margin_mw),
-            reserve_margin_percent=_round_or_none(reserve_margin_percent),
+            forecast_demand_mw=selected_point.forecast_demand_mw,
+            forecast_uncertainty_mw=uncertainty,
+            safe_online_capacity_mw=float(safe_online_capacity_mw),
+            required_reserve_mw=float(required_reserve_mw),
+            reserve_margin_mw=reserve_margin_mw,
+            reserve_margin_percent=reserve_margin_percent,
             reasons=reasons,
-            decision_action=dispatch["decision_action"],
-            generator_set=dispatch["generator_set"],
-            recommended_capacity_mw=dispatch["recommended_capacity_mw"],
-            projected_shortfall_mw=round(selected["projected_shortfall_mw"], 2),
-            expected_shortfall_mw=round(selected["expected_shortfall_mw"], 2),
-            expected_load_rise_mw=round(selected["expected_load_rise_mw"], 2),
+            decision_action=str(dispatch["decision_action"]),
+            generator_set=str(dispatch["generator_set"]),
+            recommended_capacity_mw=float(dispatch["recommended_capacity_mw"]),
+            projected_shortfall_mw=projected_shortfall,
+            expected_shortfall_mw=float(selected["expected_shortfall_mw"]),
+            expected_load_rise_mw=float(selected["expected_load_rise_mw"]),
             expected_rise_minutes=selected_point.horizon_minutes,
-            startup_time_minutes=dispatch["startup_time_minutes"],
-            decision_confidence=round(selected_point.confidence, 2),
-            weather_effect_mw=round(selected_point.weather_effect_mw, 2),
-            available_start_capacity_mw=_round_or_none(available_start_capacity),
-            residual_shortfall_mw=round(dispatch["residual_shortfall_mw"], 2),
+            startup_time_minutes=int(dispatch["startup_time_minutes"]),
+            decision_confidence=selected_point.confidence,
+            weather_effect_mw=selected_point.weather_effect_mw,
+            available_start_capacity_mw=(
+                float(available_start_capacity)
+                if available_start_capacity is not None
+                else None
+            ),
+            residual_shortfall_mw=float(dispatch["residual_shortfall_mw"]),
+            risk_profile=risk_profile,
+            peak_risk_horizon_minutes=selected_point.horizon_minutes,
+            peak_risk_timestamp=selected_point.forecast_timestamp,
+            forecast_lower_mw=float(selected["forecast_lower_mw"]),
+            forecast_upper_mw=float(selected["forecast_upper_mw"]),
+            immediate_online_capacity_mw=immediate_capacity_mw,
+            online_headroom_mw=float(selected["online_headroom_mw"]),
+            reserve_adjusted_headroom_mw=float(
+                selected["reserve_adjusted_headroom_mw"]
+            ),
+            severity_level=severity_level,
+            urgency=str(selected["urgency"]),
+            decision_deadline_minutes=(
+                int(deadline_minutes) if deadline_minutes is not None else None
+            ),
+            decision_deadline_at=(
+                deadline_at if isinstance(deadline_at, datetime) else None
+            ),
+            drivers=drivers,
+            increasing_factors=increasing_factors,
+            reducing_factors=reducing_factors,
+            quality_warnings=quality_warnings,
+            capacity_basis=capacity_basis,
             engine_version=self.ENGINE_VERSION,
+            policy_status=self.policy.status,
         )
 
-    @staticmethod
+    @classmethod
     def _profile(
+        cls,
         risk_input: OperatingRiskInput,
         fallback_uncertainty: float,
     ) -> tuple[OperatingForecastPoint, ...]:
-        valid = tuple(
-            point
-            for point in risk_input.forecast_profile
-            if point.horizon_minutes > 0
-            and _is_finite(point.forecast_demand_mw)
-            and point.forecast_demand_mw >= 0
-            and _is_positive_finite(point.forecast_uncertainty_mw)
-        )
+        valid: list[OperatingForecastPoint] = []
+        for point in risk_input.forecast_profile:
+            uncertainty = cls._point_uncertainty(point)
+            if (
+                not 0 < point.horizon_minutes <= 6 * 60
+                or not _is_finite(point.forecast_demand_mw)
+                or point.forecast_demand_mw < 0
+                or not _is_positive_finite(uncertainty)
+            ):
+                continue
+            confidence = (
+                max(0.0, min(1.0, float(point.confidence)))
+                if _is_finite(point.confidence)
+                else 0.0
+            )
+            confidence_level = (
+                float(point.confidence_level)
+                if _is_finite(point.confidence_level)
+                and 0 < point.confidence_level < 1
+                else 0.90
+            )
+            valid.append(
+                replace(
+                    point,
+                    forecast_uncertainty_mw=uncertainty,
+                    confidence=confidence,
+                    confidence_level=confidence_level,
+                )
+            )
         if valid:
             return tuple(sorted(valid, key=lambda point: point.horizon_minutes))
-        assert risk_input.forecast_demand_mw is not None
+        if (
+            risk_input.forecast_demand_mw is None
+            or not _is_positive_finite(fallback_uncertainty)
+        ):
+            return ()
         return (
             OperatingForecastPoint(
                 horizon_minutes=60,
                 forecast_demand_mw=risk_input.forecast_demand_mw,
                 forecast_uncertainty_mw=fallback_uncertainty,
             ),
+        )
+
+    @staticmethod
+    def _point_uncertainty(point: OperatingForecastPoint) -> float:
+        if _is_positive_finite(point.forecast_uncertainty_mw):
+            return point.forecast_uncertainty_mw
+        if (
+            point.confidence_lower_mw is None
+            or point.confidence_upper_mw is None
+            or not _is_finite(point.confidence_lower_mw)
+            or not _is_finite(point.confidence_upper_mw)
+            or point.confidence_upper_mw <= point.confidence_lower_mw
+            or not 0 < point.confidence_level < 1
+        ):
+            return 0.0
+        z_value = NormalDist().inv_cdf((1.0 + point.confidence_level) / 2.0)
+        return (point.confidence_upper_mw - point.confidence_lower_mw) / (
+            2.0 * z_value
         )
 
     def _assess_point(
@@ -238,27 +479,310 @@ class RiskProbabilityEngine:
         immediate_capacity_mw: float,
         reserve_margin_threshold: float,
     ) -> dict[str, object]:
-        required_reserve = max(current_demand_mw, point.forecast_demand_mw) * reserve_margin_threshold
+        required_reserve = (
+            max(current_demand_mw, point.forecast_demand_mw)
+            * reserve_margin_threshold
+        )
         safe_capacity = immediate_capacity_mw - required_reserve
         z_score = (safe_capacity - point.forecast_demand_mw) / point.forecast_uncertainty_mw
         probability = max(0.0, min(1.0, _normal_survival(z_score)))
-        expected_shortfall = max(0.0, point.forecast_demand_mw - safe_capacity)
-        conservative_demand = (
-            point.forecast_demand_mw
-            + self.CONSERVATIVE_Z * point.forecast_uncertainty_mw
+        confidence_level = (
+            point.confidence_level if 0 < point.confidence_level < 1 else 0.90
+        )
+        confidence_z = NormalDist().inv_cdf((1.0 + confidence_level) / 2.0)
+        explicit_interval_is_valid = (
+            point.confidence_lower_mw is not None
+            and point.confidence_upper_mw is not None
+            and _is_finite(point.confidence_lower_mw)
+            and _is_finite(point.confidence_upper_mw)
+            and point.confidence_lower_mw <= point.forecast_demand_mw
+            and point.confidence_upper_mw >= point.forecast_demand_mw
+            and point.confidence_upper_mw > point.confidence_lower_mw
+        )
+        forecast_lower = (
+            point.confidence_lower_mw
+            if explicit_interval_is_valid
+            else point.forecast_demand_mw
+            - confidence_z * point.forecast_uncertainty_mw
+        )
+        forecast_upper = (
+            point.confidence_upper_mw
+            if explicit_interval_is_valid
+            else point.forecast_demand_mw
+            + confidence_z * point.forecast_uncertainty_mw
+        )
+        mean_gap = point.forecast_demand_mw - safe_capacity
+        standardized_gap = mean_gap / point.forecast_uncertainty_mw
+        expected_shortfall = (
+            point.forecast_uncertainty_mw * _normal_density(standardized_gap)
+            + mean_gap * _normal_cdf(standardized_gap)
+        )
+        conservative_demand = forecast_upper
+        conservative_shortfall = max(0.0, conservative_demand - safe_capacity)
+        startup_lead_time = self._startup_lead_time(conservative_shortfall)
+        deadline_minutes = (
+            point.horizon_minutes - startup_lead_time
+            if conservative_shortfall > 0 and startup_lead_time > 0
+            else None
+        )
+        deadline_at = (
+            point.forecast_timestamp - timedelta(minutes=startup_lead_time)
+            if point.forecast_timestamp is not None
+            and deadline_minutes is not None
+            else None
         )
         return {
             "point": point,
             "probability": probability,
             "required_reserve_mw": required_reserve,
             "safe_online_capacity_mw": safe_capacity,
-            "expected_shortfall_mw": expected_shortfall,
-            "projected_shortfall_mw": max(0.0, conservative_demand - safe_capacity),
+            "forecast_lower_mw": max(0.0, forecast_lower),
+            "forecast_upper_mw": max(0.0, forecast_upper),
+            "confidence_level": confidence_level,
+            "immediate_online_capacity_mw": immediate_capacity_mw,
+            "online_headroom_mw": immediate_capacity_mw - point.forecast_demand_mw,
+            "reserve_adjusted_headroom_mw": safe_capacity - point.forecast_demand_mw,
+            "expected_shortfall_mw": max(0.0, expected_shortfall),
+            "projected_shortfall_mw": conservative_shortfall,
             "expected_load_rise_mw": max(
                 0.0,
                 point.forecast_demand_mw - current_demand_mw,
             ),
+            "startup_lead_time_minutes": startup_lead_time,
+            "decision_deadline_minutes": deadline_minutes,
+            "decision_deadline_at": deadline_at,
+            "urgency": self._urgency(deadline_minutes, conservative_shortfall),
         }
+
+    def _startup_lead_time(self, conservative_shortfall_mw: float) -> int:
+        if conservative_shortfall_mw <= 0:
+            return 0
+        if conservative_shortfall_mw <= self.policy.fast_start_max_capacity_mw:
+            return self.policy.fast_start_lead_time_minutes
+        return self.policy.heavy_start_lead_time_minutes
+
+    @staticmethod
+    def _urgency(deadline_minutes: int | None, shortfall_mw: float) -> str:
+        if shortfall_mw <= 0 or deadline_minutes is None:
+            return "ROUTINE"
+        if deadline_minutes <= 0:
+            return "ACTION_DUE"
+        return "LEAD_TIME_AVAILABLE"
+
+    @staticmethod
+    def _public_assessment(
+        assessment: dict[str, object],
+    ) -> RiskHorizonAssessment:
+        point = assessment["point"]
+        assert isinstance(point, OperatingForecastPoint)
+        deadline_at = assessment["decision_deadline_at"]
+        return RiskHorizonAssessment(
+            horizon_minutes=point.horizon_minutes,
+            forecast_timestamp=point.forecast_timestamp,
+            probability=float(assessment["probability"]),
+            forecast_demand_mw=point.forecast_demand_mw,
+            forecast_uncertainty_mw=point.forecast_uncertainty_mw,
+            forecast_lower_mw=float(assessment["forecast_lower_mw"]),
+            forecast_upper_mw=float(assessment["forecast_upper_mw"]),
+            confidence_level=float(assessment["confidence_level"]),
+            immediate_online_capacity_mw=float(
+                assessment["immediate_online_capacity_mw"]
+            ),
+            safe_online_capacity_mw=float(
+                assessment["safe_online_capacity_mw"]
+            ),
+            required_reserve_mw=float(assessment["required_reserve_mw"]),
+            online_headroom_mw=float(assessment["online_headroom_mw"]),
+            reserve_adjusted_headroom_mw=float(
+                assessment["reserve_adjusted_headroom_mw"]
+            ),
+            expected_shortfall_mw=float(assessment["expected_shortfall_mw"]),
+            conservative_shortfall_mw=float(
+                assessment["projected_shortfall_mw"]
+            ),
+            expected_load_rise_mw=float(assessment["expected_load_rise_mw"]),
+            weather_effect_mw=point.weather_effect_mw,
+            forecast_confidence=point.confidence,
+            startup_lead_time_minutes=int(
+                assessment["startup_lead_time_minutes"]
+            ),
+            decision_deadline_minutes=(
+                int(assessment["decision_deadline_minutes"])
+                if assessment["decision_deadline_minutes"] is not None
+                else None
+            ),
+            decision_deadline_at=(
+                deadline_at if isinstance(deadline_at, datetime) else None
+            ),
+            urgency=str(assessment["urgency"]),
+        )
+
+    def _severity_level(self, conservative_shortfall_mw: float) -> str:
+        if conservative_shortfall_mw <= 0:
+            return "NONE"
+        if conservative_shortfall_mw <= self.policy.fast_start_unit_capacity_mw:
+            return "SMALL_UNIT"
+        if conservative_shortfall_mw <= self.policy.fast_start_max_capacity_mw:
+            return "FAST_START"
+        if conservative_shortfall_mw <= self.policy.heavy_start_max_capacity_mw:
+            return "HEAVY_START"
+        return "CAPACITY_DEFICIT"
+
+    def _drivers(
+        self,
+        risk_input: OperatingRiskInput,
+        selected: dict[str, object],
+        reserve_margin_percent: float | None,
+        capacity_basis: str,
+    ) -> tuple[RiskDriver, ...]:
+        point = selected["point"]
+        assert isinstance(point, OperatingForecastPoint)
+        drivers: list[RiskDriver] = []
+        reserve_headroom = float(selected["reserve_adjusted_headroom_mw"])
+        safe_capacity = float(selected["safe_online_capacity_mw"])
+        forecast_upper = float(selected["forecast_upper_mw"])
+        required_reserve = float(selected["required_reserve_mw"])
+
+        if reserve_headroom < 0:
+            drivers.append(
+                RiskDriver(
+                    label=(
+                        "Forecast mean exceeds reserve-adjusted safe capacity by "
+                        f"{abs(reserve_headroom):.1f} MW"
+                    ),
+                    direction="INCREASES_RISK",
+                    category="CAPACITY",
+                )
+            )
+        elif forecast_upper > safe_capacity:
+            drivers.append(
+                RiskDriver(
+                    label=(
+                        "Forecast uncertainty band crosses safe capacity by "
+                        f"{forecast_upper - safe_capacity:.1f} MW"
+                    ),
+                    direction="INCREASES_RISK",
+                    category="UNCERTAINTY",
+                )
+            )
+        else:
+            drivers.append(
+                RiskDriver(
+                    label=f"Reserve-adjusted forecast headroom is {reserve_headroom:.1f} MW",
+                    direction="REDUCES_RISK",
+                    category="CAPACITY",
+                )
+            )
+
+        if risk_input.spinning_reserve_mw is not None:
+            spin_gap = risk_input.spinning_reserve_mw - required_reserve
+            drivers.append(
+                RiskDriver(
+                    label=(
+                        f"Corrected spin is {abs(spin_gap):.1f} MW "
+                        f"{'above' if spin_gap >= 0 else 'below'} the configured reserve requirement"
+                    ),
+                    direction=(
+                        "REDUCES_RISK" if spin_gap >= 0 else "INCREASES_RISK"
+                    ),
+                    category="RESERVE",
+                )
+            )
+        else:
+            drivers.append(
+                RiskDriver(
+                    label="Corrected spin is unavailable; probability uses TRA only",
+                    direction="QUALITY_WARNING",
+                    category="DATA_QUALITY",
+                )
+            )
+
+        if point.weather_effect_mw > 0.05:
+            drivers.append(
+                RiskDriver(
+                    label=f"Forecast weather adds {point.weather_effect_mw:.1f} MW of demand",
+                    direction="INCREASES_RISK",
+                    category="WEATHER",
+                )
+            )
+        elif point.weather_effect_mw < -0.05:
+            drivers.append(
+                RiskDriver(
+                    label=f"Forecast weather reduces demand by {abs(point.weather_effect_mw):.1f} MW",
+                    direction="REDUCES_RISK",
+                    category="WEATHER",
+                )
+            )
+
+        if float(selected["expected_load_rise_mw"]) > 0:
+            drivers.append(
+                RiskDriver(
+                    label=(
+                        f"Demand is forecast to rise {float(selected['expected_load_rise_mw']):.1f} MW "
+                        f"within {point.horizon_minutes} minutes"
+                    ),
+                    direction="INCREASES_RISK",
+                    category="DEMAND",
+                )
+            )
+
+        if reserve_margin_percent is not None and reserve_margin_percent > 0:
+            drivers.append(
+                RiskDriver(
+                    label=f"TA margin is {reserve_margin_percent:.1f}% before startup verification",
+                    direction="REDUCES_RISK",
+                    category="AVAILABLE_CAPACITY",
+                )
+            )
+
+        if not risk_input.available_capacity_is_verified:
+            drivers.append(
+                RiskDriver(
+                    label="TA-to-startable-capacity mapping is not verified",
+                    direction="QUALITY_WARNING",
+                    category="DATA_QUALITY",
+                )
+            )
+        if self.policy.status.upper() != "CONFIRMED":
+            drivers.append(
+                RiskDriver(
+                    label=(
+                        "Reserve threshold, risk bands, and startup policy are "
+                        f"{self.policy.status.lower().replace('_', ' ')}"
+                    ),
+                    direction="QUALITY_WARNING",
+                    category="POLICY",
+                )
+            )
+        if risk_input.data_quality_status.upper() not in {
+            "GOOD",
+            "USABLE_WITH_WARNING",
+        }:
+            drivers.append(
+                RiskDriver(
+                    label=f"Input data quality is {risk_input.data_quality_status}",
+                    direction="QUALITY_WARNING",
+                    category="DATA_QUALITY",
+                )
+            )
+        drivers.extend(
+            RiskDriver(
+                label=warning,
+                direction="QUALITY_WARNING",
+                category="DATA_QUALITY",
+            )
+            for warning in risk_input.data_quality_warnings
+            if warning
+        )
+        if capacity_basis == "MIN_TRA_AND_DEMAND_PLUS_CORRECTED_SPIN":
+            drivers.append(
+                RiskDriver(
+                    label="Immediate capacity is the lower of TRA and demand plus corrected spin",
+                    direction="CONTEXT",
+                    category="METHOD",
+                )
+            )
+        return tuple(dict.fromkeys(drivers))
 
     def _dispatch_decision(
         self,
@@ -293,36 +817,36 @@ class RiskProbabilityEngine:
                 available_start_capacity_mw=available_start_capacity,
                 projected_shortfall_mw=shortfall,
             )
-        if shortfall <= self.SMALL_SET_MAX_CAPACITY_MW:
+        if shortfall <= self.policy.fast_start_max_capacity_mw:
             requested_capacity = (
-                self.SMALL_SET_UNIT_CAPACITY_MW
-                if shortfall <= self.SMALL_SET_UNIT_CAPACITY_MW
-                else self.SMALL_SET_MAX_CAPACITY_MW
+                self.policy.fast_start_unit_capacity_mw
+                if shortfall <= self.policy.fast_start_unit_capacity_mw
+                else self.policy.fast_start_max_capacity_mw
             )
             startable_capacity = self._startable_capacity(
                 requested_capacity,
                 available_start_capacity,
-                self.SMALL_SET_UNIT_CAPACITY_MW,
+                self.policy.fast_start_unit_capacity_mw,
             )
-            if startable_capacity < self.SMALL_SET_UNIT_CAPACITY_MW:
+            if startable_capacity < self.policy.fast_start_unit_capacity_mw:
                 return self._dispatch_payload(
                     recommendation="MONITOR CONDITIONS",
                     decision_action="ESCALATE CAPACITY AVAILABILITY",
                     available_start_capacity_mw=available_start_capacity,
                     projected_shortfall_mw=shortfall,
                 )
-            one_set = startable_capacity < self.SMALL_SET_MAX_CAPACITY_MW
+            one_set = startable_capacity < self.policy.fast_start_max_capacity_mw
             generator_set = (
-                "1 x 15 MW FAST-START"
+                f"1 x {self.policy.fast_start_unit_capacity_mw:g} MW FAST-START"
                 if one_set
-                else "2 x 15 MW FAST-START"
+                else f"2 x {self.policy.fast_start_unit_capacity_mw:g} MW FAST-START"
             )
-            start_now = point.horizon_minutes <= self.SMALL_SET_STARTUP_MINUTES
+            start_now = point.horizon_minutes <= self.policy.fast_start_lead_time_minutes
             return self._dispatch_payload(
                 recommendation=(
-                    "START ONE 15 MW SMALL SET"
+                    f"START ONE {self.policy.fast_start_unit_capacity_mw:g} MW SMALL SET"
                     if start_now and one_set
-                    else "START BOTH 15 MW SMALL SETS"
+                    else f"START BOTH {self.policy.fast_start_unit_capacity_mw:g} MW SMALL SETS"
                     if start_now
                     else "MONITOR CONDITIONS"
                 ),
@@ -335,36 +859,40 @@ class RiskProbabilityEngine:
                 ),
                 generator_set=generator_set,
                 recommended_capacity_mw=startable_capacity,
-                startup_time_minutes=self.SMALL_SET_STARTUP_MINUTES,
+                startup_time_minutes=self.policy.fast_start_lead_time_minutes,
                 available_start_capacity_mw=available_start_capacity,
                 projected_shortfall_mw=shortfall,
             )
 
         heavy_capacity = min(
-            self.HEAVY_SET_MAX_CAPACITY_MW,
+            self.policy.heavy_start_max_capacity_mw,
             max(
-                self.HEAVY_SET_MIN_CAPACITY_MW,
-                math.ceil(shortfall / 30.0) * 30.0,
+                self.policy.heavy_start_min_capacity_mw,
+                math.ceil(
+                    shortfall / self.policy.fast_start_max_capacity_mw
+                )
+                * self.policy.fast_start_max_capacity_mw,
             ),
         )
         startable_heavy = self._startable_capacity(
             heavy_capacity,
             available_start_capacity,
-            30.0,
+            self.policy.fast_start_max_capacity_mw,
         )
-        if startable_heavy < self.HEAVY_SET_MIN_CAPACITY_MW:
+        if startable_heavy < self.policy.heavy_start_min_capacity_mw:
             startable_small = self._startable_capacity(
-                self.SMALL_SET_MAX_CAPACITY_MW,
+                self.policy.fast_start_max_capacity_mw,
                 available_start_capacity,
-                self.SMALL_SET_UNIT_CAPACITY_MW,
+                self.policy.fast_start_unit_capacity_mw,
             )
-            if startable_small >= self.SMALL_SET_UNIT_CAPACITY_MW:
-                start_now = point.horizon_minutes <= self.SMALL_SET_STARTUP_MINUTES
+            if startable_small >= self.policy.fast_start_unit_capacity_mw:
+                start_now = point.horizon_minutes <= self.policy.fast_start_lead_time_minutes
                 return self._dispatch_payload(
                     recommendation=(
-                        "START ONE 15 MW SMALL SET"
-                        if start_now and startable_small < self.SMALL_SET_MAX_CAPACITY_MW
-                        else "START BOTH 15 MW SMALL SETS"
+                        f"START ONE {self.policy.fast_start_unit_capacity_mw:g} MW SMALL SET"
+                        if start_now
+                        and startable_small < self.policy.fast_start_max_capacity_mw
+                        else f"START BOTH {self.policy.fast_start_unit_capacity_mw:g} MW SMALL SETS"
                         if start_now
                         else "MONITOR CONDITIONS"
                     ),
@@ -374,12 +902,12 @@ class RiskProbabilityEngine:
                         else "ESCALATE CAPACITY AVAILABILITY"
                     ),
                     generator_set=(
-                        "1 x 15 MW FAST-START"
-                        if startable_small < self.SMALL_SET_MAX_CAPACITY_MW
-                        else "2 x 15 MW FAST-START"
+                        f"1 x {self.policy.fast_start_unit_capacity_mw:g} MW FAST-START"
+                        if startable_small < self.policy.fast_start_max_capacity_mw
+                        else f"2 x {self.policy.fast_start_unit_capacity_mw:g} MW FAST-START"
                     ),
                     recommended_capacity_mw=startable_small,
-                    startup_time_minutes=self.SMALL_SET_STARTUP_MINUTES,
+                    startup_time_minutes=self.policy.fast_start_lead_time_minutes,
                     available_start_capacity_mw=available_start_capacity,
                     projected_shortfall_mw=shortfall,
                 )
@@ -389,7 +917,7 @@ class RiskProbabilityEngine:
                 available_start_capacity_mw=available_start_capacity,
                 projected_shortfall_mw=shortfall,
             )
-        start_now = point.horizon_minutes <= self.HEAVY_SET_STARTUP_MINUTES
+        start_now = point.horizon_minutes <= self.policy.heavy_start_lead_time_minutes
         return self._dispatch_payload(
             recommendation=(
                 "START HEAVY GENERATOR SET"
@@ -401,9 +929,13 @@ class RiskProbabilityEngine:
                 if start_now
                 else "MONITOR HEAVY-SET WINDOW"
             ),
-            generator_set="HEAVY 60-120 MW SET",
+            generator_set=(
+                "HEAVY "
+                f"{self.policy.heavy_start_min_capacity_mw:g}-"
+                f"{self.policy.heavy_start_max_capacity_mw:g} MW SET"
+            ),
             recommended_capacity_mw=startable_heavy,
-            startup_time_minutes=self.HEAVY_SET_STARTUP_MINUTES,
+            startup_time_minutes=self.policy.heavy_start_lead_time_minutes,
             available_start_capacity_mw=available_start_capacity,
             projected_shortfall_mw=shortfall,
         )
@@ -442,8 +974,7 @@ class RiskProbabilityEngine:
             ),
         }
 
-    @staticmethod
-    def _invalid_fields(risk_input: OperatingRiskInput) -> list[str]:
+    def _invalid_fields(self, risk_input: OperatingRiskInput) -> list[str]:
         required = {
             "forecast_demand_mw": risk_input.forecast_demand_mw,
             "current_demand_mw": risk_input.current_demand_mw,
@@ -479,10 +1010,36 @@ class RiskProbabilityEngine:
             or risk_input.spinning_reserve_mw < 0
         ):
             invalid.append("nonnegative spinning_reserve_mw")
-        if not _is_finite(risk_input.reserve_margin_threshold) or not (
-            0 <= risk_input.reserve_margin_threshold <= 1
+        reserve_fraction = self._reserve_fraction(risk_input)
+        if not _is_finite(reserve_fraction) or not (
+            0 <= reserve_fraction <= 1
         ):
             invalid.append("reserve_margin_threshold between 0 and 1")
+        if not (
+            0 <= self.policy.medium_probability_threshold
+            < self.policy.high_probability_threshold
+            <= 1
+        ):
+            invalid.append("ordered probability policy thresholds between 0 and 1")
+        if min(
+            self.policy.fast_start_unit_capacity_mw,
+            self.policy.fast_start_max_capacity_mw,
+            self.policy.heavy_start_min_capacity_mw,
+            self.policy.heavy_start_max_capacity_mw,
+            self.policy.fast_start_lead_time_minutes,
+            self.policy.heavy_start_lead_time_minutes,
+        ) <= 0:
+            invalid.append("positive configured generator capacities and lead times")
+        if (
+            self.policy.fast_start_max_capacity_mw
+            < self.policy.fast_start_unit_capacity_mw
+        ):
+            invalid.append("fast-start maximum capacity not below unit capacity")
+        if (
+            self.policy.heavy_start_max_capacity_mw
+            < self.policy.heavy_start_min_capacity_mw
+        ):
+            invalid.append("heavy-start maximum capacity not below minimum capacity")
         if (
             risk_input.current_demand_mw is not None
             and risk_input.online_capacity_mw is not None
@@ -529,8 +1086,8 @@ class RiskProbabilityEngine:
             probability_score=0.0,
             risk_level="UNAVAILABLE",
             recommendation="DATA UNAVAILABLE",
-            forecast_demand_mw=round(forecast_demand, 4),
-            forecast_uncertainty_mw=round(uncertainty, 4),
+            forecast_demand_mw=forecast_demand,
+            forecast_uncertainty_mw=uncertainty,
             safe_online_capacity_mw=0.0,
             required_reserve_mw=0.0,
             reserve_margin_mw=None,
@@ -538,15 +1095,22 @@ class RiskProbabilityEngine:
             reasons=[reason],
             decision_action="DATA UNAVAILABLE",
             engine_version=self.ENGINE_VERSION,
+            policy_status=self.policy.status,
         )
 
-    @staticmethod
-    def _risk_level(probability_score: float) -> str:
-        if probability_score > 0.65:
+    def _risk_level(self, probability_score: float) -> str:
+        if probability_score > self.policy.high_probability_threshold:
             return "HIGH"
-        if probability_score >= 0.30:
+        if probability_score >= self.policy.medium_probability_threshold:
             return "MEDIUM"
         return "LOW"
+
+    def _reserve_fraction(self, risk_input: OperatingRiskInput) -> float:
+        return (
+            risk_input.reserve_margin_threshold
+            if risk_input.reserve_margin_threshold is not None
+            else self.policy.reserve_fraction
+        )
 
     @staticmethod
     def _recommendation(risk_level: str) -> str:
@@ -575,14 +1139,17 @@ class RiskProbabilityEngine:
             reasons.append("Forecast demand remains within safe online capacity")
 
         margin_to_safe_capacity = safe_online_capacity_mw - risk_input.forecast_demand_mw
-        if margin_to_safe_capacity < uncertainty:
+        if (
+            margin_to_safe_capacity >= 0
+            and margin_to_safe_capacity < uncertainty * 1.6448536269514722
+        ):
             reasons.append("Forecast uncertainty overlaps the operating reserve boundary")
 
         if risk_input.spinning_reserve_mw is not None:
             if risk_input.spinning_reserve_mw < required_reserve_mw:
-                reasons.append("Spinning reserve is below the planning threshold")
+                reasons.append("Corrected spin is below the configured reserve requirement")
             else:
-                reasons.append("Spinning reserve satisfies the planning threshold")
+                reasons.append("Corrected spin satisfies the configured reserve requirement")
             synchronized_capacity = (
                 risk_input.current_demand_mw + risk_input.spinning_reserve_mw
                 if risk_input.current_demand_mw is not None
@@ -593,7 +1160,7 @@ class RiskProbabilityEngine:
                 and synchronized_capacity < risk_input.online_capacity_mw
             ):
                 reasons.append(
-                    "Immediate operating capacity is constrained by spinning reserve"
+                    "Immediate operating capacity is constrained by corrected spin"
                 )
 
         if risk_input.available_capacity_mw is not None:
@@ -606,11 +1173,14 @@ class RiskProbabilityEngine:
                 )
             else:
                 reasons.append(
-                    "Available capacity can satisfy forecast demand and reserve requirement"
+                    "TA could satisfy forecast demand and reserve after verified startup; "
+                    "it is not counted as immediate online capacity"
                 )
 
         if reserve_margin_percent is not None:
-            reasons.append(f"Available reserve margin is {reserve_margin_percent:.1f}%")
+            reasons.append(
+                f"TA headroom relative to current demand is {reserve_margin_percent:.1f}%"
+            )
 
         reasons.append(
             f"Safe online headroom is {margin_to_safe_capacity:.1f} MW against "
@@ -622,8 +1192,31 @@ class RiskProbabilityEngine:
         return reasons
 
 
+def risk_result_details(result: OperatingRiskResult) -> dict[str, object]:
+    """Serialize the unrounded evidence shared by API-producing services."""
+
+    payload = asdict(result)
+    summary_fields = {
+        "probability_score",
+        "risk_level",
+        "recommendation",
+        "forecast_demand_mw",
+        "forecast_uncertainty_mw",
+        "reserve_margin_mw",
+        "reserve_margin_percent",
+        "reasons",
+        "engine_version",
+        "policy_status",
+    }
+    return {key: value for key, value in payload.items() if key not in summary_fields}
+
+
 def _normal_cdf(value: float) -> float:
     return 0.5 * (1.0 + math.erf(value / math.sqrt(2.0)))
+
+
+def _normal_density(value: float) -> float:
+    return math.exp(-0.5 * value * value) / math.sqrt(2.0 * math.pi)
 
 
 def _normal_survival(value: float) -> float:
@@ -644,18 +1237,15 @@ def _format_probability_percent(probability: float) -> str:
     return f"{percent:.1f}%"
 
 
-def _is_finite(value: float) -> bool:
-    return math.isfinite(float(value))
+def _is_finite(value: object) -> bool:
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
 
 
 def _is_positive_finite(value: float) -> bool:
     return _is_finite(value) and value > 0
-
-
-def _round_or_none(value: float | None) -> float | None:
-    if value is None:
-        return None
-    return round(value, 4)
 
 
 def _safe_nonnegative(value: float | None, fallback: float) -> float:

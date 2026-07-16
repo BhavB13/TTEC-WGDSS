@@ -32,6 +32,8 @@ class ScadaArchiveMemberReport:
     quality_counts: dict[str, int] = field(default_factory=dict)
     minimum_value: float | None = None
     maximum_value: float | None = None
+    normalized_quality_counts: dict[str, int] = field(default_factory=dict)
+    anomaly_counts: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,8 @@ class ScadaArchiveReport:
     degraded_hour_count: int
     validation_status: str
     warnings: tuple[str, ...] = ()
+    normalized_quality_counts: dict[str, int] = field(default_factory=dict)
+    anomaly_counts: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -72,9 +76,16 @@ class ScadaArchiveImportResult:
 class ScadaArchiveService:
     """Validate and import filename-agnostic SCADA CSV archives."""
 
-    def __init__(self, session_factory=SessionLocal) -> None:
+    def __init__(
+        self,
+        session_factory=SessionLocal,
+        *,
+        import_service: ScadaImportService | None = None,
+    ) -> None:
         self.session_factory = session_factory
-        self.import_service = ScadaImportService(session_factory=session_factory)
+        self.import_service = import_service or ScadaImportService(
+            session_factory=session_factory
+        )
 
     def can_handle(self, source_path: str | Path) -> bool:
         source = Path(source_path)
@@ -159,6 +170,8 @@ class ScadaArchiveService:
                         payload,
                         parsed.measurements,
                         parsed.duplicate_rows_skipped,
+                        parsed.quality_counts,
+                        parsed.anomaly_counts,
                     )
                 )
 
@@ -184,6 +197,11 @@ class ScadaArchiveService:
         quality_counts = Counter(
             str(row["quality"]).strip().lower() for row in all_measurements
         )
+        normalized_quality_counts: Counter[str] = Counter()
+        anomaly_counts: Counter[str] = Counter()
+        for member_report in member_reports:
+            normalized_quality_counts.update(member_report.normalized_quality_counts)
+            anomaly_counts.update(member_report.anomaly_counts)
         if quality_counts.get("other"):
             warnings.append(
                 "'Other' quality is preserved and conditionally weighted; engineering approval is required for production use"
@@ -201,6 +219,10 @@ class ScadaArchiveService:
             warnings.append(
                 "Less than 60 days of aligned history; model results remain prototype-only"
             )
+        if anomaly_counts:
+            warnings.append(
+                "Source interval anomalies are present; inspect anomaly_counts before modeling"
+            )
 
         report = ScadaArchiveReport(
             source_filename=source.name,
@@ -216,6 +238,8 @@ class ScadaArchiveService:
             degraded_hour_count=degraded_count,
             validation_status="VALID" if not missing_tags else "INVALID",
             warnings=tuple(warnings),
+            normalized_quality_counts=dict(sorted(normalized_quality_counts.items())),
+            anomaly_counts=dict(sorted(anomaly_counts.items())),
         )
         return report, payloads
 
@@ -225,6 +249,8 @@ class ScadaArchiveService:
         payload: bytes,
         measurements: list[dict[str, object]],
         duplicates: int,
+        normalized_quality_counts: dict[str, int],
+        anomaly_counts: dict[str, int],
     ) -> ScadaArchiveMemberReport:
         start_times = [
             row["start_time"]
@@ -260,6 +286,8 @@ class ScadaArchiveService:
             ),
             minimum_value=min(values),
             maximum_value=max(values),
+            normalized_quality_counts=normalized_quality_counts,
+            anomaly_counts=anomaly_counts,
         )
 
 
@@ -269,4 +297,3 @@ def _file_hash(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-

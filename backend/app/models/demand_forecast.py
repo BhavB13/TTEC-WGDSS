@@ -15,11 +15,23 @@ class ForecastTrainingRow(Base):
         nullable=False,
         index=True,
     )
+    feature_observation_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    feature_available_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     horizon_hours: Mapped[int] = mapped_column(Integer, nullable=False)
     target_timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         index=True,
+    )
+    target_observation_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    target_available_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     target_demand_mw: Mapped[float] = mapped_column(Float, nullable=False)
 
@@ -29,9 +41,15 @@ class ForecastTrainingRow(Base):
     lag_3h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     lag_6h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     lag_24h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lag_48h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lag_168h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     rolling_3h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     rolling_6h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rolling_12h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     rolling_24h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rolling_168h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    same_hour_7d_average_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    demand_volatility_6h_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     demand_rate_1h_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     demand_rate_3h_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     demand_rate_6h_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -143,6 +161,19 @@ class DemandForecastResult(Base):
     train_row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     test_row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     candidate_metrics: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    confidence_lower_mw: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    confidence_upper_mw: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    confidence_level: Mapped[float] = mapped_column(Float, nullable=False, default=0.9)
+    temperature_load_correlation: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+    similar_period_forecast_mw: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+    similar_examples: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    contributing_factors: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -201,6 +232,19 @@ class ScadaReplayForecastResult(Base):
     train_row_count: Mapped[int] = mapped_column(Integer, nullable=False)
     test_row_count: Mapped[int] = mapped_column(Integer, nullable=False)
     candidate_metrics: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    confidence_lower_mw: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    confidence_upper_mw: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    confidence_level: Mapped[float] = mapped_column(Float, nullable=False, default=0.9)
+    temperature_load_correlation: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+    similar_period_forecast_mw: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+    similar_examples: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    contributing_factors: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     training_rows: Mapped[int] = mapped_column(Integer, nullable=False)
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

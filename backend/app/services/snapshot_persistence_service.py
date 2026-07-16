@@ -59,6 +59,8 @@ class SnapshotPersistenceService:
                             current_generation_mw=grid.current_generation_mw,
                             total_available_capacity_mw=grid.total_available_capacity_mw,
                             reserve_margin_percent=grid.reserve_margin_percent,
+                            spinning_reserve_mw=grid.spinning_reserve_mw,
+                            spinning_reserve_source=grid.spinning_reserve_source,
                             grid_status=grid.grid_status,
                             demand_period=grid.demand_period,
                             source_provider=grid.source_provider,

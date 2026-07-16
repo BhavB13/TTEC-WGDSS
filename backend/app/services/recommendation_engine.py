@@ -3,7 +3,12 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from app.services.risk_probability_engine import OperatingRiskInput, RiskProbabilityEngine
+from app.services.risk_probability_engine import (
+    OperatingForecastPoint,
+    OperatingRiskInput,
+    RiskProbabilityEngine,
+    risk_result_details,
+)
 
 
 class RecommendationEngine:
@@ -20,6 +25,7 @@ class RecommendationEngine:
         demand = self._safe_float(current_demand_mw) or 0.0
         return {
             "engine_version": self.ENGINE_VERSION,
+            "policy_status": self.risk_engine.policy.status,
             "probability_score": 0.0,
             "risk_level": "UNAVAILABLE",
             "forecast_demand_30m": demand,
@@ -46,6 +52,12 @@ class RecommendationEngine:
         )
         available_capacity_mw = self._safe_float(
             grid_status.get("total_available_capacity_mw")
+        )
+        spinning_reserve_mw = self._safe_float(
+            grid_status.get("spinning_reserve_mw")
+        )
+        spinning_reserve_source = str(
+            grid_status.get("spinning_reserve_source") or ""
         )
 
         required_values = {
@@ -74,6 +86,10 @@ class RecommendationEngine:
         assert rainfall_mm_hr is not None
         assert cloud_cover_percent is not None
         assert current_generation_mw is not None
+        has_reported_spin = (
+            spinning_reserve_mw is not None
+            and not spinning_reserve_source.startswith("DERIVED_")
+        )
 
         scenario = self._scenario_inputs(calibration)
         future_weather = self._future_weather_inputs(
@@ -126,10 +142,34 @@ class RecommendationEngine:
                 forecast_demand_mw=forecast_demand_60m,
                 forecast_uncertainty_mw=uncertainty_mw,
                 current_demand_mw=current_demand_mw,
-                online_capacity_mw=available_capacity_mw,
+                online_capacity_mw=(
+                    current_generation_mw
+                    if has_reported_spin
+                    else available_capacity_mw
+                ),
                 available_capacity_mw=available_capacity_mw,
-                spinning_reserve_mw=None,
+                spinning_reserve_mw=(
+                    spinning_reserve_mw if has_reported_spin else None
+                ),
+                forecast_profile=(
+                    OperatingForecastPoint(
+                        horizon_minutes=30,
+                        forecast_demand_mw=forecast_demand_30m,
+                        forecast_uncertainty_mw=max(
+                            self.MIN_UNCERTAINTY_MW,
+                            uncertainty_mw / math.sqrt(2.0),
+                        ),
+                        confidence=future_weather[4] or 0.5,
+                    ),
+                    OperatingForecastPoint(
+                        horizon_minutes=60,
+                        forecast_demand_mw=forecast_demand_60m,
+                        forecast_uncertainty_mw=uncertainty_mw,
+                        confidence=future_weather[4] or 0.5,
+                    ),
+                ),
                 available_capacity_is_verified=False,
+                data_quality_status=str(grid_status.get("quality_status", "UNKNOWN")),
             )
         )
         if risk.risk_level == "UNAVAILABLE":
@@ -154,6 +194,7 @@ class RecommendationEngine:
         recommendation = self._dashboard_recommendation(risk.recommendation)
         return {
             "engine_version": self.ENGINE_VERSION,
+            "policy_status": risk.policy_status,
             "probability_score": risk.probability_score,
             "risk_level": risk.risk_level,
             "forecast_demand_30m": round(forecast_demand_30m, 2),
@@ -161,6 +202,7 @@ class RecommendationEngine:
             "recommendation": recommendation,
             "factors": factors,
             "reason": "; ".join(factors),
+            **risk_result_details(risk),
         }
 
     @staticmethod

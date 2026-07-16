@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy import delete, select
 
+from app.core.config import settings
 from app.database.init_db import initialize_database
 from app.database.session import SessionLocal
 from app.models.demand_forecast import DemandForecastResult, ForecastTrainingRow
@@ -21,9 +22,14 @@ from app.services.demand_forecast_baselines import (
     trend_adjusted_persistence_forecast,
 )
 from app.services.forecast_dataset_service import ForecastDatasetService
+from app.services.forecast_calendar_service import (
+    calendar_context,
+    calendar_feature_vector,
+)
+from app.services.similar_period_service import similar_period_forecast
 
-MODEL_VERSION = "demand-forecast-v2.1"
-FEATURE_PROFILE = "demand_weather_v2_1"
+MODEL_VERSION = "demand-forecast-v3.0"
+FEATURE_PROFILE = "demand_weather_similarity_v3"
 MIN_FORECAST_UNCERTAINTY_MW = 5.0
 MIN_FORECAST_UNCERTAINTY_DEMAND_RATIO = 0.015
 MIN_ML_TRAIN_ROWS = 48
@@ -41,9 +47,15 @@ FEATURE_COLUMNS = (
     "lag_3h_demand_mw",
     "lag_6h_demand_mw",
     "lag_24h_demand_mw",
+    "lag_48h_demand_mw",
+    "lag_168h_demand_mw",
     "rolling_3h_demand_mw",
     "rolling_6h_demand_mw",
+    "rolling_12h_demand_mw",
     "rolling_24h_demand_mw",
+    "rolling_168h_demand_mw",
+    "same_hour_7d_average_mw",
+    "demand_volatility_6h_mw",
     "demand_rate_1h_mw",
     "demand_rate_3h_mw",
     "demand_rate_6h_mw",
@@ -110,7 +122,14 @@ class HorizonModelResult:
     feature_profile: str = FEATURE_PROFILE
     validation_status: str = "PROTOTYPE"
     training_span_hours: int = 0
-    candidate_metrics: dict[str, dict[str, float | str | bool | int]] | None = None
+    candidate_metrics: dict[str, object] | None = None
+    confidence_lower_mw: float = 0.0
+    confidence_upper_mw: float = 0.0
+    confidence_level: float = 0.9
+    temperature_load_correlation: float | None = None
+    similar_period_forecast_mw: float | None = None
+    similar_examples: tuple[dict[str, object], ...] = ()
+    contributing_factors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -119,6 +138,7 @@ class _ModelCandidate:
     model_name: str
     family: str
     params: dict[str, Any]
+    similarity_weight: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -193,6 +213,22 @@ class DemandForecastModelService:
                             result.candidate_metrics or {},
                             sort_keys=True,
                         ),
+                        confidence_lower_mw=result.confidence_lower_mw,
+                        confidence_upper_mw=result.confidence_upper_mw,
+                        confidence_level=result.confidence_level,
+                        temperature_load_correlation=(
+                            result.temperature_load_correlation
+                        ),
+                        similar_period_forecast_mw=(
+                            result.similar_period_forecast_mw
+                        ),
+                        similar_examples=json.dumps(
+                            result.similar_examples,
+                            sort_keys=True,
+                        ),
+                        contributing_factors=json.dumps(
+                            result.contributing_factors,
+                        ),
                     )
                 )
             session.commit()
@@ -256,7 +292,7 @@ class DemandForecastModelService:
         ml_metrics = None
         ml_beats_baseline = False
         selected_candidate: _ModelCandidate | None = None
-        candidate_metrics: dict[str, dict[str, float | str | bool | int]] = {}
+        candidate_metrics: dict[str, object] = {}
 
         ml_prediction_result = self._try_ml_model(train_rows, test_rows)
         if ml_prediction_result is not None:
@@ -333,6 +369,35 @@ class DemandForecastModelService:
         ):
             uncertainty *= 1.25
 
+        explanation_row = inference_row or latest_row
+        explanation_history = rows if inference_row is not None else train_rows
+        similar_periods = similar_period_forecast(
+            explanation_history,
+            explanation_row,
+            extra_holiday_dates=settings.FORECAST_EXTRA_HOLIDAY_DATES,
+        )
+        temperature_correlation = _temperature_load_correlation(
+            explanation_history,
+        )
+        contributing_factors = _contributing_factors(
+            row=explanation_row,
+            history=explanation_history,
+            active_model=active_model,
+            best_baseline=best_baseline,
+            forecast_demand_mw=forecast_prediction,
+            baseline_forecast_mw=baseline_forecast,
+            temperature_correlation=temperature_correlation,
+            similar_forecast_mw=similar_periods.forecast_mw,
+            similar_count=len(similar_periods.examples),
+        )
+        confidence_level = 0.9
+        confidence_multiplier = 1.6448536269514722
+        confidence_lower = max(
+            0.0,
+            forecast_prediction - confidence_multiplier * uncertainty,
+        )
+        confidence_upper = forecast_prediction + confidence_multiplier * uncertainty
+
         training_span_hours = max(
             0,
             int(
@@ -367,6 +432,20 @@ class DemandForecastModelService:
             validation_status=validation_status,
             candidate_metrics={
                 **candidate_metrics,
+                **{
+                    f"baseline_{name}": {
+                        "model": name,
+                        "mae": metrics.mae,
+                        "rmse": metrics.rmse,
+                        "mape": metrics.mape,
+                        "selected": False,
+                        "active_baseline": name == best_baseline,
+                    }
+                    for name, metrics in self._baseline_metric_summary(
+                        train_rows,
+                        test_rows,
+                    ).items()
+                },
                 "active": {
                     "model": active_model,
                     "mae": active_metrics.mae,
@@ -379,7 +458,23 @@ class DemandForecastModelService:
                     "rmse": baseline_metrics.rmse,
                     "mape": baseline_metrics.mape,
                 },
+                "similarity_analysis": {
+                    "forecast_mw": similar_periods.forecast_mw,
+                    "spread_mw": similar_periods.spread_mw,
+                    "example_count": len(similar_periods.examples),
+                    "temperature_load_correlation": temperature_correlation,
+                    "selected": False,
+                },
             },
+            confidence_lower_mw=round(confidence_lower, 4),
+            confidence_upper_mw=round(confidence_upper, 4),
+            confidence_level=confidence_level,
+            temperature_load_correlation=temperature_correlation,
+            similar_period_forecast_mw=similar_periods.forecast_mw,
+            similar_examples=tuple(
+                example.as_json_object() for example in similar_periods.examples
+            ),
+            contributing_factors=tuple(contributing_factors),
         )
 
     @staticmethod
@@ -395,6 +490,7 @@ class DemandForecastModelService:
             "rolling_trend": [],
             "same_hour_yesterday": [],
             "hourly_average": [],
+            "similar_periods": [],
         }
         for row in test_rows:
             predictions["persistence"].append(persistence_forecast(row))
@@ -419,7 +515,28 @@ class DemandForecastModelService:
                     fallback_average,
                 )
             )
+            similarity = similar_period_forecast(
+                train_rows,
+                row,
+                extra_holiday_dates=settings.FORECAST_EXTRA_HOLIDAY_DATES,
+            )
+            predictions["similar_periods"].append(
+                _fallback_if_none(similarity.forecast_mw, fallback_average)
+            )
         return predictions
+
+    def _baseline_metric_summary(
+        self,
+        train_rows: list[ForecastTrainingRow],
+        test_rows: list[ForecastTrainingRow],
+    ) -> dict[str, ForecastMetrics]:
+        predictions = self._baseline_predictions(train_rows, test_rows)
+        actual = _targets(test_rows)
+        summary: dict[str, ForecastMetrics] = {}
+        for name, values in predictions.items():
+            _, bias = self._baseline_bias_walk_forward(train_rows, name)
+            summary[name] = _metrics(actual, _apply_bias(values, bias))
+        return summary
 
     def _select_baseline_walk_forward(
         self,
@@ -485,11 +602,45 @@ class DemandForecastModelService:
                 candidate,
                 validation_folds,
             )
-            bias = _median_residual(actual, raw_predictions)
-            corrected = _apply_bias(raw_predictions, bias)
-            scored.append(
-                (candidate, _metrics(actual, corrected), bias, actual, corrected)
+            similarity_predictions = self._walk_forward_similarity_predictions(
+                validation_folds,
+                fallback_predictions=raw_predictions,
             )
+            for similarity_weight in (0.0, 0.25, 0.5, 0.75):
+                scored_candidate = _ModelCandidate(
+                    candidate_id=(
+                        candidate.candidate_id
+                        if similarity_weight == 0
+                        else f"{candidate.candidate_id}_similarity_{int(similarity_weight * 100)}"
+                    ),
+                    model_name=(
+                        candidate.model_name
+                        if similarity_weight == 0
+                        else f"{candidate.model_name}+SimilarPeriods"
+                    ),
+                    family=candidate.family,
+                    params=candidate.params,
+                    similarity_weight=similarity_weight,
+                )
+                blended = [
+                    (1.0 - similarity_weight) * model_prediction
+                    + similarity_weight * similarity_prediction
+                    for model_prediction, similarity_prediction in zip(
+                        raw_predictions,
+                        similarity_predictions,
+                    )
+                ]
+                bias = _median_residual(actual, blended)
+                corrected = _apply_bias(blended, bias)
+                scored.append(
+                    (
+                        scored_candidate,
+                        _metrics(actual, corrected),
+                        bias,
+                        actual,
+                        corrected,
+                    )
+                )
         selected_candidate, validation_metrics, bias, _, _ = min(
             scored,
             key=lambda item: (
@@ -513,6 +664,7 @@ class DemandForecastModelService:
                 "validation_rmse": metrics.rmse,
                 "validation_mape": metrics.mape,
                 "validation_residual_std": metrics.residual_std,
+                "similarity_weight": candidate.similarity_weight,
                 "selected": candidate.candidate_id == selected_candidate.candidate_id,
             }
             for candidate, metrics, _, _, _ in scored
@@ -560,6 +712,18 @@ class DemandForecastModelService:
                     "n_jobs": 1,
                 },
             ),
+            _ModelCandidate(
+                candidate_id="extra_trees",
+                model_name="ExtraTreesRegressor",
+                family="extra_trees",
+                params={
+                    "n_estimators": 180,
+                    "max_depth": 12,
+                    "min_samples_leaf": max(2, min_samples_leaf // 2),
+                    "max_features": 0.8,
+                    "n_jobs": 1,
+                },
+            ),
         )
 
     def _candidate_inference_prediction(
@@ -594,6 +758,29 @@ class DemandForecastModelService:
                 )
             )
         return actual, predicted
+
+    @staticmethod
+    def _walk_forward_similarity_predictions(
+        folds: list[tuple[list[ForecastTrainingRow], list[ForecastTrainingRow]]],
+        fallback_predictions: list[float],
+    ) -> list[float]:
+        predictions: list[float] = []
+        fallback_index = 0
+        for fold_train, fold_validation in folds:
+            for row in fold_validation:
+                similarity = similar_period_forecast(
+                    fold_train,
+                    row,
+                    extra_holiday_dates=settings.FORECAST_EXTRA_HOLIDAY_DATES,
+                )
+                fallback = fallback_predictions[fallback_index]
+                predictions.append(
+                    similarity.forecast_mw
+                    if similarity.forecast_mw is not None
+                    else fallback
+                )
+                fallback_index += 1
+        return predictions
 
     @staticmethod
     def _fit_candidate_predictions(
@@ -635,9 +822,37 @@ class DemandForecastModelService:
             )
             model.fit(x_train, y_train, sample_weight=sample_weights)
             predicted = model.predict(x_test)
+        elif candidate.family == "extra_trees":
+            from sklearn.ensemble import ExtraTreesRegressor
+
+            model = ExtraTreesRegressor(
+                random_state=42,
+                **candidate.params,
+            )
+            model.fit(x_train, y_train, sample_weight=sample_weights)
+            predicted = model.predict(x_test)
         else:
             raise ValueError(f"Unsupported model family: {candidate.family}")
-        return [max(0.0, float(value)) for value in predicted]
+        model_predictions = [max(0.0, float(value)) for value in predicted]
+        if candidate.similarity_weight <= 0:
+            return model_predictions
+        blended: list[float] = []
+        for row, model_prediction in zip(test_rows, model_predictions):
+            similarity = similar_period_forecast(
+                train_rows,
+                row,
+                extra_holiday_dates=settings.FORECAST_EXTRA_HOLIDAY_DATES,
+            )
+            similarity_prediction = (
+                similarity.forecast_mw
+                if similarity.forecast_mw is not None
+                else model_prediction
+            )
+            blended.append(
+                (1.0 - candidate.similarity_weight) * model_prediction
+                + candidate.similarity_weight * similarity_prediction
+            )
+        return blended
 
 
 def _targets(rows: list[ForecastTrainingRow]) -> list[float]:
@@ -807,6 +1022,28 @@ def _feature_vector(
             1.0 if row.source_quality_status == "GOOD" else 0.0,
         )
     )
+    vector.extend(
+        calendar_feature_vector(
+            row.target_timestamp,
+            settings.FORECAST_EXTRA_HOLIDAY_DATES,
+        )
+    )
+    target_context = calendar_context(
+        row.target_timestamp,
+        settings.FORECAST_EXTRA_HOLIDAY_DATES,
+    )
+    vector.extend(
+        (
+            math.sin(target_hour_angle)
+            * (1.0 if target_context.day_type == "WEEKEND" else 0.0),
+            math.cos(target_hour_angle)
+            * (1.0 if target_context.day_type == "WEEKEND" else 0.0),
+            math.sin(target_hour_angle)
+            * (1.0 if target_context.day_type == "HOLIDAY" else 0.0),
+            math.cos(target_hour_angle)
+            * (1.0 if target_context.day_type == "HOLIDAY" else 0.0),
+        )
+    )
     for column in FEATURE_COLUMNS:
         vector.append(1.0 if getattr(row, column) is None else 0.0)
     return vector
@@ -871,3 +1108,131 @@ def _training_sample_weights(rows: list[ForecastTrainingRow]) -> list[float]:
     if average_weight <= 0:
         return [1.0 for _ in rows]
     return [weight / average_weight for weight in weights]
+
+
+def _temperature_load_correlation(
+    rows: list[ForecastTrainingRow],
+) -> float | None:
+    samples = [
+        (
+            float(row.forecast_temperature_c or row.temperature_c),
+            float(row.target_demand_mw),
+            (
+                row.target_timestamp.hour,
+                calendar_context(
+                    row.target_timestamp,
+                    settings.FORECAST_EXTRA_HOLIDAY_DATES,
+                ).day_type,
+            ),
+        )
+        for row in rows
+        if (row.forecast_temperature_c is not None or row.temperature_c is not None)
+    ]
+    if len(samples) < 3:
+        return None
+    grouped: dict[tuple[int, str], list[tuple[float, float]]] = {}
+    for temperature, demand, key in samples:
+        grouped.setdefault(key, []).append((temperature, demand))
+    centered: list[tuple[float, float]] = []
+    for values in grouped.values():
+        if len(values) < 2:
+            continue
+        average_temperature = mean(value[0] for value in values)
+        average_demand = mean(value[1] for value in values)
+        centered.extend(
+            (
+                temperature - average_temperature,
+                demand - average_demand,
+            )
+            for temperature, demand in values
+        )
+    if len(centered) >= 3:
+        centered_correlation = _pearson_correlation(centered)
+        if centered_correlation is not None:
+            return centered_correlation
+    return _pearson_correlation([(row[0], row[1]) for row in samples])
+
+
+def _pearson_correlation(values: list[tuple[float, float]]) -> float | None:
+    if len(values) < 3:
+        return None
+    temperatures = [value[0] for value in values]
+    demands = [value[1] for value in values]
+    average_temperature = mean(temperatures)
+    average_demand = mean(demands)
+    covariance = sum(
+        (temperature - average_temperature) * (demand - average_demand)
+        for temperature, demand in values
+    )
+    temperature_variance = sum(
+        (temperature - average_temperature) ** 2 for temperature in temperatures
+    )
+    demand_variance = sum((demand - average_demand) ** 2 for demand in demands)
+    denominator = math.sqrt(temperature_variance * demand_variance)
+    if denominator <= 0:
+        return None
+    return round(max(-1.0, min(1.0, covariance / denominator)), 4)
+
+
+def _contributing_factors(
+    row: ForecastTrainingRow,
+    history: list[ForecastTrainingRow],
+    active_model: str,
+    best_baseline: str,
+    forecast_demand_mw: float,
+    baseline_forecast_mw: float,
+    temperature_correlation: float | None,
+    similar_forecast_mw: float | None,
+    similar_count: int,
+) -> list[str]:
+    factors: list[str] = []
+    context = calendar_context(
+        row.target_timestamp,
+        settings.FORECAST_EXTRA_HOLIDAY_DATES,
+    )
+    calendar_label = context.day_type.lower()
+    if context.holiday_name:
+        calendar_label = context.holiday_name
+    factors.append(
+        f"Target is a {calendar_label} hour in the {context.season.lower()} season."
+    )
+
+    forecast_temperature = row.forecast_temperature_c or row.temperature_c
+    historical_temperatures = [
+        value
+        for historical_row in history
+        if (
+            value := historical_row.forecast_temperature_c
+            or historical_row.temperature_c
+        )
+        is not None
+    ]
+    if forecast_temperature is not None and historical_temperatures:
+        temperature_delta = float(forecast_temperature) - median(historical_temperatures)
+        direction = "above" if temperature_delta >= 0 else "below"
+        correlation_text = (
+            f"; adjusted temperature/load correlation is {temperature_correlation:+.2f}"
+            if temperature_correlation is not None
+            else ""
+        )
+        factors.append(
+            f"Forecast temperature is {abs(temperature_delta):.1f}C {direction} the historical median{correlation_text}."
+        )
+
+    demand_rate = row.demand_rate_1h_mw
+    if demand_rate is not None:
+        direction = "rising" if demand_rate > 0 else "falling" if demand_rate < 0 else "steady"
+        factors.append(
+            f"Recent demand is {direction} at {abs(demand_rate):.1f} MW per hour."
+        )
+
+    if similar_forecast_mw is not None and similar_count:
+        factors.append(
+            f"{similar_count} comparable historical periods indicate approximately {similar_forecast_mw:.0f} MW."
+        )
+
+    model_delta = forecast_demand_mw - baseline_forecast_mw
+    factors.append(
+        f"{active_model} is {model_delta:+.0f} MW relative to the selected {best_baseline} baseline."
+    )
+    return factors

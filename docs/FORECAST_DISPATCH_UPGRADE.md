@@ -1,5 +1,9 @@
 # Three-Source Forecast And Generator Dispatch Upgrade
 
+> Dispatch capacities, lead times, and reserve fractions in this historical
+> design note are configurable prototype assumptions. They are not approved
+> T&TEC policy; see `docs/SCADA_OSI_CONFIRMATION_REGISTER.md`.
+
 ## Recommended Forecast Approach
 
 WGDSS uses a hybrid architecture because no single model is reliable in every
@@ -39,25 +43,30 @@ On first startup after migration, the selected June replay maps the current
 Trinidad day and hour to the archive. For example, July 15 at 10:42 maps to June
 15 at 10:00. The cursor starts in real-time playback. `Sync Now` repeats this
 mapping; manual Step and accelerated rates remain available. All API and UI
-surfaces retain the `SIMULATED_LIVE` label.
+surfaces use explicit `historical_replay`, `simulation`, or `live_read_only`
+labels and never present replay data as live SCADA.
 
 ## Dispatch Mathematics
 
 For each forecast horizon up to six hours:
 
 ```text
-required_reserve_mw = max(current_demand, forecast_demand) * 0.15
+required_reserve_mw = max(current_demand, forecast_demand)
+                      * configured_reserve_fraction
 immediate_capacity_mw = min(online_capacity,
                             current_demand + spinning_reserve)
 safe_online_capacity_mw = immediate_capacity_mw - required_reserve_mw
 z = (safe_online_capacity_mw - forecast_demand_mw) / uncertainty_mw
 risk_probability = P(Normal(0,1) > z)
 conservative_shortfall_mw = max(0,
-  forecast_demand + 1.2816 * uncertainty - safe_online_capacity)
+  confidence_upper_mw - safe_online_capacity)
 ```
 
-The 1.2816 multiplier is the 90th-percentile normal error allowance. The engine
-selects the most exposed horizon and applies these lead-time rules:
+The default 90% central interval uses the 95th-percentile upper endpoint
+(`forecast + 1.64485 * sigma`) when the model has not supplied valid bounds.
+The reserve fraction is configurable and unconfirmed. The engine selects the
+highest-probability horizon and applies configurable, unconfirmed lead-time
+rules:
 
 | Condition | Decision |
 |---|---|
@@ -81,4 +90,3 @@ support outputs, not autonomous dispatch commands.
 - Reduced weather confidence widens load uncertainty.
 - Missing or inconsistent grid capacity inhibits dispatch guidance.
 - Future replay demand remains hidden until the cursor reaches its timestamp.
-

@@ -22,6 +22,7 @@ from app.services.risk_probability_engine import (
     OperatingForecastPoint,
     OperatingRiskInput,
     RiskProbabilityEngine,
+    risk_result_details,
 )
 
 
@@ -73,6 +74,21 @@ class ModelStatusService:
                     feature_profile=row.feature_profile,
                     validation_status=row.validation_status,
                     training_rows=row.train_row_count + row.test_row_count,
+                    confidence_lower_mw=row.confidence_lower_mw,
+                    confidence_upper_mw=row.confidence_upper_mw,
+                    confidence_level=row.confidence_level,
+                    temperature_load_correlation=(
+                        row.temperature_load_correlation
+                    ),
+                    similar_period_forecast_mw=row.similar_period_forecast_mw,
+                    similar_examples=_json_list(row.similar_examples),
+                    contributing_factors=_json_string_list(
+                        row.contributing_factors
+                    ),
+                    mae=row.mae,
+                    rmse=row.rmse,
+                    mape=row.mape,
+                    residual_std=row.residual_std,
                 )
                 for row in latest_by_horizon.values()
             ]
@@ -127,11 +143,17 @@ class ModelStatusService:
             return None
 
         return ScadaStatusResponse(
+            mode="historical_replay",
             source=latest.source,
             latest_snapshot=latest.timestamp,
             available_at=latest.available_at or latest.timestamp,
             quality_status=latest.quality_status,
             missing_fields=latest.missing_fields,
+            coverage_percent=latest.coverage_percent,
+            quality_notes=latest.quality_notes,
+            anomaly_flags=_json_string_list(latest.anomaly_flags),
+            field_provenance=_json_object(latest.field_provenance),
+            formula_version=latest.formula_version,
         )
 
     def get_operating_risk_payload(
@@ -178,6 +200,10 @@ class ModelStatusService:
                 confidence=(
                     0.9 if row.validation_status == "VALIDATED" else 0.75
                 ),
+                forecast_timestamp=row.forecast_timestamp,
+                confidence_lower_mw=row.confidence_lower_mw,
+                confidence_upper_mw=row.confidence_upper_mw,
+                confidence_level=row.confidence_level or 0.90,
             )
             for row in sorted(forecast_cohort, key=lambda item: item.horizon_hours)
         )
@@ -194,6 +220,15 @@ class ModelStatusService:
                 available_capacity_is_verified=not bool(
                     scada.missing_fields.strip()
                 ),
+                data_quality_status=scada.quality_status,
+                data_quality_warnings=tuple(
+                    warning
+                    for warning in (
+                        scada.quality_notes,
+                        *_json_string_list(scada.anomaly_flags),
+                    )
+                    if warning
+                ),
             )
         )
         forecast_demand_30m = (
@@ -208,6 +243,7 @@ class ModelStatusService:
         forecast_demand_60m = one_hour.forecast_demand_mw
         return {
             "engine_version": result.engine_version,
+            "policy_status": result.policy_status,
             "probability_score": result.probability_score,
             "risk_level": result.risk_level,
             "forecast_demand_30m": forecast_demand_30m,
@@ -215,18 +251,7 @@ class ModelStatusService:
             "recommendation": _dashboard_recommendation(result.recommendation),
             "factors": result.reasons,
             "reason": "; ".join(result.reasons),
-            "decision_action": result.decision_action,
-            "generator_set": result.generator_set,
-            "recommended_capacity_mw": result.recommended_capacity_mw,
-            "projected_shortfall_mw": result.projected_shortfall_mw,
-            "expected_shortfall_mw": result.expected_shortfall_mw,
-            "expected_load_rise_mw": result.expected_load_rise_mw,
-            "expected_rise_minutes": result.expected_rise_minutes,
-            "startup_time_minutes": result.startup_time_minutes,
-            "decision_confidence": result.decision_confidence,
-            "weather_effect_mw": result.weather_effect_mw,
-            "available_start_capacity_mw": result.available_start_capacity_mw,
-            "residual_shortfall_mw": result.residual_shortfall_mw,
+            **risk_result_details(result),
         }
 
     @staticmethod
@@ -287,3 +312,19 @@ def _json_object(value: str) -> dict[str, object]:
     except (TypeError, ValueError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_list(value: str) -> list[dict[str, object]]:
+    try:
+        parsed = json.loads(value or "[]")
+    except (TypeError, ValueError):
+        return []
+    return [item for item in parsed if isinstance(item, dict)] if isinstance(parsed, list) else []
+
+
+def _json_string_list(value: str) -> list[str]:
+    try:
+        parsed = json.loads(value or "[]")
+    except (TypeError, ValueError):
+        return []
+    return [item for item in parsed if isinstance(item, str)] if isinstance(parsed, list) else []

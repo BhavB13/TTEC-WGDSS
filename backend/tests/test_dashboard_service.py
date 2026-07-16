@@ -184,6 +184,19 @@ def _seed_model_status_data(session_factory):
                 residual_std=30,
                 ml_beats_baseline=False,
                 quality_status="BASELINE_ACTIVE",
+                confidence_lower_mw=990,
+                confidence_upper_mw=1090,
+                confidence_level=0.9,
+                temperature_load_correlation=0.42,
+                similar_period_forecast_mw=1035,
+                similar_examples=(
+                    '[{"feature_timestamp":"2026-06-01T12:00:00Z",'
+                    '"target_timestamp":"2026-06-01T13:00:00Z",'
+                    '"target_demand_mw":1032,"temperature_c":30,'
+                    '"forecast_temperature_c":31,"day_type":"WEEKDAY",'
+                    '"distance":0.8}]'
+                ),
+                contributing_factors='["Recent demand is rising."]',
             )
         )
         session.commit()
@@ -392,12 +405,22 @@ async def test_dashboard_snapshot_exposes_model_scada_status_and_operating_risk(
 
     assert snapshot.demand_forecast is not None
     assert len(snapshot.demand_forecast.horizons) == 1
+    horizon = snapshot.demand_forecast.horizons[0]
+    assert horizon.confidence_lower_mw == 990
+    assert horizon.confidence_upper_mw == 1090
+    assert horizon.temperature_load_correlation == 0.42
+    assert horizon.similar_examples[0].target_demand_mw == 1032
+    assert horizon.contributing_factors == ["Recent demand is rising."]
+    assert horizon.mae == 10
     assert snapshot.model_status is not None
     assert snapshot.model_status.mode == "BASELINE_ACTIVE"
     assert snapshot.model_status.metrics.mae == 10
     assert snapshot.scada_status is not None
     assert snapshot.scada_status.quality_status == "GOOD"
-    assert snapshot.probability.engine_version == "operating-risk-v2.0"
+    assert snapshot.probability.engine_version == "operating-risk-v3.0"
+    assert snapshot.probability.risk_profile
+    assert snapshot.probability.probability_method == "NORMAL_RESIDUAL_EXCEEDANCE"
+    assert snapshot.probability.policy_status == "PROTOTYPE_UNCONFIRMED"
     assert snapshot.probability.risk_level == "HIGH"
     assert snapshot.probability.forecast_demand_30m == 970
     assert snapshot.recommendation.recommendation == "START HEAVY GENERATOR SET"

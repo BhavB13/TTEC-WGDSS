@@ -20,6 +20,9 @@ vi.mock("../components/DemandForecastChart", () => ({
 vi.mock("../components/ProbabilityGauge", () => ({
   default: () => <div data-testid="probability-gauge">Probability gauge</div>,
 }));
+vi.mock("../components/RiskTimelineChart", () => ({
+  default: () => <div data-testid="risk-timeline">Risk timeline</div>,
+}));
 vi.mock("../components/ScenarioComparisonChart", () => ({
   default: () => <div data-testid="scenario-chart">Scenario chart</div>,
 }));
@@ -45,10 +48,14 @@ describe("Dashboard", () => {
     const user = userEvent.setup();
     render(<Dashboard />);
 
-    expect(await screen.findByText("Simulated Live SCADA")).toBeInTheDocument();
+    expect(await screen.findByText("Simulation replay")).toBeInTheDocument();
     expect(screen.getByTestId("replay-load-chart")).toBeInTheDocument();
     expect(screen.getByText("Weather · Current + 6 Hours")).toBeInTheDocument();
-    expect(screen.getByText("9/720 June records · 1.1%")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "2025 hourly SCADA + weather demonstration · 9/720 records · 1.1%",
+      ),
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Step" }));
     await waitFor(() =>
@@ -98,6 +105,9 @@ describe("Dashboard", () => {
 
     await user.click(screen.getByRole("button", { name: "Risk Gauge" }));
     expect(screen.getByTestId("probability-gauge")).toBeInTheDocument();
+    expect(screen.getByTestId("risk-timeline")).toBeInTheDocument();
+    expect(screen.getByText("Operating Risk Evidence")).toBeInTheDocument();
+    expect(screen.getByText("Risk Drivers")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Operational Guidance" }));
     expect(screen.getByText("Conservative Shortfall")).toBeInTheDocument();

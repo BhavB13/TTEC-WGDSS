@@ -43,6 +43,8 @@ def test_grid_normalization_keeps_provider_quality_metadata():
             current_generation_mw=900,
             total_available_capacity_mw=1200,
             reserve_margin_percent=50,
+            spinning_reserve_mw=75,
+            spinning_reserve_source="SCADA_CORRECTED_SPIN",
             grid_status="NORMAL",
             demand_period="MORNING",
             source_provider="TestScadaProvider",
@@ -52,6 +54,8 @@ def test_grid_normalization_keeps_provider_quality_metadata():
     )
 
     assert normalized["quality_status"] == "UNCERTAIN"
+    assert normalized["spinning_reserve_mw"] == 75
+    assert normalized["spinning_reserve_source"] == "SCADA_CORRECTED_SPIN"
     normalized_timestamp = datetime.fromisoformat(
         normalized["timestamp"].replace("Z", "+00:00")
     )
@@ -71,6 +75,12 @@ def test_grid_normalization_recalculates_inconsistent_derived_reserve_margin():
     )
 
     assert normalized["reserve_margin_percent"] == 50
+    assert normalized["spinning_reserve_mw"] is None
+    assert (
+        normalized["spinning_reserve_source"]
+        == "UNAVAILABLE_NOT_DERIVED"
+    )
+    assert "spinning_reserve_mw" in normalized["missing_fields"]
 
 
 def test_unconfigured_live_provider_fails_closed():

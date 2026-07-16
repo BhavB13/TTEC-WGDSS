@@ -18,6 +18,12 @@ class Settings(BaseSettings):
 
     OPEN_METEO_BASE_URL: str = "https://api.open-meteo.com/v1/forecast"
     OPEN_METEO_ARCHIVE_URL: str = "https://archive-api.open-meteo.com/v1/archive"
+    OPEN_METEO_SINGLE_RUNS_URL: str = (
+        "https://single-runs-api.open-meteo.com/v1/forecast"
+    )
+    REPLAY_WEATHER_MODELS: str = "ecmwf_ifs025,gfs_global,icon_global"
+    REPLAY_WEATHER_RUN_AVAILABILITY_LAG_HOURS: int = 6
+    REPLAY_WEATHER_CACHE_TTL_SECONDS: int = 21600
     MET_NORWAY_BASE_URL: str = (
         "https://api.met.no/weatherapi/locationforecast/2.0/compact"
     )
@@ -50,12 +56,35 @@ class Settings(BaseSettings):
     GRID_PROVIDER: str = "mock"
     GRID_STALE_AFTER_SECONDS: int = 30
     MODEL_FORECAST_STALE_AFTER_SECONDS: int = 7200
+    FORECAST_EXTRA_HOLIDAY_DATES: str = ""
     DEMO_REPLAY_ENABLED: bool = True
     DEMO_REPLAY_AUTO_SEED: bool = True
     DEMO_DATASET_YEAR: int = 2025
     DEMO_REPLAY_MONTH: int = 6
     SCADA_REPLAY_ARCHIVE_PATH: str = ""
     SCADA_HISTORICAL_WEATHER_BACKFILL: bool = False
+
+    # Historical trend-export policy. These defaults preserve current prototype
+    # behavior and are not confirmed T&TEC/OSI production rules.
+    SCADA_STRICT_QUALITY_VALUES: str = "Good"
+    SCADA_CONDITIONAL_QUALITY_VALUES: str = "Other"
+    SCADA_MIN_HOURLY_COVERAGE: float = 0.90
+    SCADA_MAX_HOURLY_COVERAGE: float = 1.05
+    SCADA_EXPECTED_REPORTING_START: str = ""
+    SCADA_EXPECTED_REPORTING_END: str = ""
+
+    # Operator-policy assumptions are configurable and remain explicitly
+    # unconfirmed until T&TEC control engineering approves them.
+    OPERATING_POLICY_STATUS: str = "PROTOTYPE_UNCONFIRMED"
+    OPERATING_RESERVE_FRACTION: float = 0.15
+    RISK_MEDIUM_PROBABILITY_THRESHOLD: float = 0.30
+    RISK_HIGH_PROBABILITY_THRESHOLD: float = 0.65
+    FAST_START_UNIT_CAPACITY_MW: float = 15.0
+    FAST_START_MAX_CAPACITY_MW: float = 30.0
+    FAST_START_LEAD_TIME_MINUTES: int = 20
+    HEAVY_START_MIN_CAPACITY_MW: float = 60.0
+    HEAVY_START_MAX_CAPACITY_MW: float = 120.0
+    HEAVY_START_LEAD_TIME_MINUTES: int = 60
 
     model_config = SettingsConfigDict(
         env_file=".env",

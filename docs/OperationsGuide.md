@@ -32,6 +32,17 @@ environments and apply Alembic migrations during deployment.
 The frontend reads `VITE_API_BASE_URL` when the API is hosted separately. Local
 development uses Vite's `/api` proxy.
 
+The forecast model includes fixed and Easter-relative Trinidad and Tobago
+holidays. Add engineering-approved variable or specially declared dates as a
+comma-separated list when required:
+
+```text
+FORECAST_EXTRA_HOLIDAY_DATES=2026-03-20,2026-11-09
+```
+
+Dates must use `YYYY-MM-DD`. This setting changes calendar features and
+similar-period classification; it does not retrieve a calendar API.
+
 The default weather site is Piarco (`10.5953, -61.3372`, 12 m elevation), which
 avoids applying a mountainous grid-cell elevation to the main Trinidad load
 corridor. Open-Meteo Best Match supplies current conditions and the primary
@@ -45,10 +56,12 @@ MET Norway responses honor `Expires`, `Last-Modified`, and `ETag` headers. Slow
 forecast members are abandoned after 12 seconds so one provider cannot stall the
 operator dashboard.
 
-The default map uses NASA GIBS Blue Marble, GOES-East cloud imagery, and GPM
-IMERG precipitation. OpenStreetMap is the optional street layer. No OpenWeather
-or Esri billing key is read by the frontend. See `ExternalServices.md` before
-changing providers or deploying the hosted Open-Meteo endpoint operationally.
+The default map uses NASA GIBS Blue Marble, GOES-East Band 13 Clean Infrared
+cloud imagery, and GPM IMERG precipitation. The cloud tiles refresh every ten
+minutes and remain usable at night. OpenStreetMap is the optional street layer.
+No OpenWeather or Esri billing key is read by the frontend. See
+`ExternalServices.md` before changing providers or deploying the hosted
+Open-Meteo endpoint operationally.
 
 ## Database migration
 
@@ -149,6 +162,27 @@ quality remains visible as `USABLE_WITH_WARNING`; it is not converted to
 `Good`. The command stores direct forecasts only for the exact mapped replay
 cursor and reports which chronological baseline/model won each horizon.
 
+If the export owner provides an explicit reporting window, pass
+`--reporting-start` and `--reporting-end` as ISO-8601 values. Records outside
+that window remain preserved and are flagged. WGDSS does not infer the window
+from a filename or assume that a month label defines exact boundaries.
+
+In replay, the dashboard maps the compatibility demand field to `PTL132
+GENERATION TOTALS` as an unconfirmed proxy, generation to the current TRA
+interpretation (`GSYS SYSTEM_ONLN_TOTAL`), and System Spin to the corrected
+spin tag. Official tag semantics and units remain pending T&TEC/OSI approval.
+The raw `TRA - demand` gap remains visible as a diagnostic, together with the
+adjustment between that gap and corrected System Spin. Weather affects forecast
+demand and risk; WGDSS does not invent a weather correction for measured spin.
+
+For the replay outlook, WGDSS requests the latest six-hour global model cycle
+that is conservatively assumed to have completed before the historical SCADA
+cursor. The free Open-Meteo Single Runs archive supplies ECMWF IFS, NOAA GFS,
+and DWD ICON in one cached request. These values are mapped by forecast lead,
+not by calendar year, and feed the active replay demand/risk forecast. If the
+archive call fails, the past-only weather baseline and exact-cursor persisted
+forecast remain available.
+
 Run supervised refresh outside the API process after new Good-quality SCADA data
 arrives:
 
@@ -163,9 +197,13 @@ they influence operating decisions.
 ## Bundled Production Demonstration
 
 When `DEMO_REPLAY_ENABLED=true`, the dashboard uses a clearly labelled
-simulated-live feed backed by 8,760 deterministic hourly SCADA/weather
+simulation replay backed by 8,760 deterministic hourly grid/weather
 observations. June 2025 is replayed; the remaining eleven months support
 historical analytics. This mode does not claim a live T&TEC integration.
+
+The application has no SCADA/OSI write or control capability. Read
+`SCADA_OSI_CONTEXT.md`, `SCADA_OSI_CONFIRMATION_REGISTER.md`, and
+`SCADA_OSI_READ_ONLY_SECURITY.md` before designing any production provider.
 
 Initialize or reset it with:
 

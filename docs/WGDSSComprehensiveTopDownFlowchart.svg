@@ -222,7 +222,7 @@
 
     <rect x="660" y="1524" width="480" height="64" rx="12" fill="#071f25" stroke="#14b8a6"/>
     <text class="boxText center" x="900" y="1551">3. Classify risk and select operator action</text>
-    <text class="small center" x="900" y="1572">Reserve below 15% forces HIGH / START ADDITIONAL TURBINE</text>
+    <text class="small center" x="900" y="1572">Configured prototype policy; T&amp;TEC confirmation required</text>
 
     <rect x="748" y="1597" width="304" height="20" rx="10" fill="#063b36" stroke="#34d399"/>
     <text class="tag center" x="900" y="1611" fill="#a7f3d0">RULE-BASED · EXPLAINABLE · NO AUTO-CONTROL</text>

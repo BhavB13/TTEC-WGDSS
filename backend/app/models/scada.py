@@ -16,6 +16,7 @@ class ScadaImportRun(Base):
     row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     import_status: Mapped[str] = mapped_column(String(32), nullable=False, default="IMPORTED")
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    quality_report: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
 
     imported_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -44,6 +45,8 @@ class ScadaRawMeasurement(Base):
     )
     pen_index: Mapped[int] = mapped_column(Integer, nullable=False)
     tag_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_tag_raw: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    canonical_variable: Mapped[str | None] = mapped_column(String(128), nullable=True)
     start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     min_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -52,6 +55,26 @@ class ScadaRawMeasurement(Base):
     max_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     avg_value: Mapped[float] = mapped_column(Float, nullable=False)
     quality: Mapped[str] = mapped_column(String(64), nullable=False)
+    normalized_quality: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="unknown"
+    )
+    source_system: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="AspenTech OSI trend export"
+    )
+    source_provider: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="csv_trend_export"
+    )
+    source_timezone: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="America/Port_of_Spain"
+    )
+    interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    engineering_unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    aggregation: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="interval_summary"
+    )
+    anomaly_flags: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    record_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_metadata: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     source_filename: Mapped[str] = mapped_column(String(255), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -66,6 +89,8 @@ class ScadaRawMeasurement(Base):
         Index("idx_scada_raw_measurements_tag_start", "tag_name", "start_time"),
         Index("idx_scada_raw_measurements_import_run", "import_run_id"),
         Index("idx_scada_raw_measurements_quality", "quality"),
+        Index("idx_scada_raw_measurements_normalized_quality", "normalized_quality"),
+        Index("idx_scada_raw_measurements_record_hash", "record_hash", unique=True),
     )
 
 
@@ -100,6 +125,11 @@ class ScadaGridSnapshot(Base):
         default="interval_overlap_hourly",
     )
     source: Mapped[str] = mapped_column(String(500), nullable=False)
+    field_provenance: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    anomaly_flags: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    formula_version: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="wgdss-headroom-v1"
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

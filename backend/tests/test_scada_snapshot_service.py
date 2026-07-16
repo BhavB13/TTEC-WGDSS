@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -50,7 +51,7 @@ def _add_measurement(
     pen_index: int = 1,
     end_time: datetime | None = None,
 ) -> None:
-    interval_end = end_time or start_time
+    interval_end = end_time or start_time + timedelta(hours=1)
     session.add(
         ScadaRawMeasurement(
             import_run_id=import_run_id,
@@ -76,9 +77,10 @@ def _seed_complete_hour(session_factory, import_run_id: int, hour: int = 8) -> N
             session,
             import_run_id,
             "GSYS SYSTEM_AVAIL_TOTAL",
-            _dt(hour, 20),
+            _dt(hour),
             1190,
             pen_index=4,
+            end_time=_dt(hour) + timedelta(hours=1),
         )
         _add_measurement(
             session,
@@ -87,22 +89,25 @@ def _seed_complete_hour(session_factory, import_run_id: int, hour: int = 8) -> N
             _dt(hour, 0),
             840,
             pen_index=1,
+            end_time=_dt(hour, 30),
         )
         _add_measurement(
             session,
             import_run_id,
             "MHO132 AVERAGE AMBIENT TEMPERATURE",
-            _dt(hour, 5),
+            _dt(hour),
             27.8,
             pen_index=2,
+            end_time=_dt(hour) + timedelta(hours=1),
         )
         _add_measurement(
             session,
             import_run_id,
             "GSYS SYSTEM_ONLN_TOTAL",
-            _dt(hour, 10),
+            _dt(hour),
             940,
             pen_index=5,
+            end_time=_dt(hour) + timedelta(hours=1),
         )
         _add_measurement(
             session,
@@ -111,6 +116,7 @@ def _seed_complete_hour(session_factory, import_run_id: int, hour: int = 8) -> N
             _dt(hour, 0),
             148,
             pen_index=3,
+            end_time=_dt(hour) + timedelta(hours=1),
         )
         _add_measurement(
             session,
@@ -119,6 +125,7 @@ def _seed_complete_hour(session_factory, import_run_id: int, hour: int = 8) -> N
             _dt(hour, 30),
             860,
             pen_index=1,
+            end_time=_dt(hour) + timedelta(hours=1),
         )
         session.commit()
 
@@ -239,6 +246,7 @@ def test_non_good_quality_creates_degraded_snapshot(tmp_path):
             940,
             quality="Inactive",
             pen_index=5,
+            end_time=_dt(9),
         )
         session.commit()
 
@@ -309,6 +317,10 @@ def test_interval_overlap_resampling_weights_irregular_exports_by_timestamp(tmp_
     assert snapshot.quality_status == "GOOD"
     assert snapshot.coverage_percent == 100
     assert snapshot.resampling_method == "interval_overlap_hourly"
+    assert snapshot.available_at == _dt(10, 30).replace(tzinfo=None)
+    provenance = json.loads(snapshot.field_provenance)
+    assert provenance["current_demand_mw"]["coverage_percent"] == 100
+    assert len(provenance["current_demand_mw"]["source_intervals"]) == 2
 
 
 def test_other_quality_is_preserved_as_conditionally_usable_not_good(tmp_path):
@@ -345,3 +357,61 @@ def test_other_quality_is_preserved_as_conditionally_usable_not_good(tmp_path):
     assert snapshot is not None
     assert snapshot.quality_status == "USABLE_WITH_WARNING"
     assert "Conditionally accepted 'Other' quality" in snapshot.quality_notes
+
+
+def test_invalid_zero_duration_interval_is_flagged_and_not_used_as_point(tmp_path):
+    session_factory = _session_factory(tmp_path)
+    import_run_id = _seed_import_run(session_factory)
+    with session_factory() as session:
+        _add_measurement(
+            session,
+            import_run_id,
+            "PTL132 GENERATION TOTALS",
+            _dt(8),
+            850,
+            end_time=_dt(8),
+        )
+        session.commit()
+
+    ScadaSnapshotService(session_factory=session_factory).build_hourly_snapshots(
+        import_run_id=import_run_id
+    )
+
+    with session_factory() as session:
+        snapshot = session.scalar(select(ScadaGridSnapshot))
+    assert snapshot is not None
+    assert snapshot.current_demand_mw is None
+    assert snapshot.quality_status == "DEGRADED"
+    assert "non_positive_interval" in json.loads(snapshot.anomaly_flags)
+
+
+def test_soft_capacity_invariant_is_reported_without_repair(tmp_path):
+    session_factory = _session_factory(tmp_path)
+    import_run_id = _seed_import_run(session_factory)
+    values = (
+        ("PTL132 GENERATION TOTALS", 1000),
+        ("MHO132 AVERAGE AMBIENT TEMPERATURE", 30),
+        ("GSYS SYSTEM_CORRECTED_SPIN_TOTAL", 80),
+        ("GSYS SYSTEM_AVAIL_TOTAL", 900),
+        ("GSYS SYSTEM_ONLN_TOTAL", 950),
+    )
+    with session_factory() as session:
+        for pen_index, (tag, value) in enumerate(values, start=1):
+            _add_measurement(session, import_run_id, tag, _dt(8), value, pen_index=pen_index)
+        session.commit()
+
+    ScadaSnapshotService(session_factory=session_factory).build_hourly_snapshots(
+        import_run_id=import_run_id
+    )
+
+    with session_factory() as session:
+        snapshot = session.scalar(select(ScadaGridSnapshot))
+    assert snapshot is not None
+    assert snapshot.current_demand_mw == 1000
+    assert snapshot.online_capacity_mw == 950
+    assert snapshot.available_capacity_mw == 900
+    assert snapshot.quality_status == "DEGRADED"
+    assert set(json.loads(snapshot.anomaly_flags)) >= {
+        "generation_proxy_exceeds_tra",
+        "tra_exceeds_ta",
+    }

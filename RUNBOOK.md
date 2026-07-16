@@ -2,6 +2,18 @@
 
 ## Startup
 
+One-command local launch from the repository root:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-WGDSS.ps1
+```
+
+Alternatively, double-click `START_WGDSS.cmd`. See
+`docs/LAUNCH_AND_DEPLOYMENT.md` for setup behavior and production-deployment
+boundaries.
+
+Manual startup:
+
 Backend:
 
 ```powershell
@@ -53,6 +65,18 @@ venv\Scripts\python.exe scripts\run_scada_replay_pipeline.py `
   --backfill-weather C:\Users\<user>\Downloads\junescadadata.zip
 ```
 
+When the export owner supplies an explicit reporting window, pass its ISO-8601
+boundaries so spillover records are retained but flagged:
+
+```powershell
+venv\Scripts\python.exe scripts\run_scada_replay_pipeline.py `
+  --reporting-start "<approved-window-start>" `
+  --reporting-end "<approved-window-end>" `
+  C:\path\to\scada-export.zip
+```
+
+WGDSS never infers those boundaries from a filename or month label.
+
 For separate CSV exports:
 
 ```powershell
@@ -95,11 +119,18 @@ The command requires 48 Good-quality SCADA snapshots by default and skips when
 no newer snapshot exists. A skip is a safe result, not an error. Use `--force`
 only after deliberate review.
 
+Variable or specially declared public holidays can be supplied in `backend/.env`
+as a comma-separated list of `YYYY-MM-DD` values using
+`FORECAST_EXTRA_HOLIDAY_DATES`. Have operations engineering approve those dates
+before retraining.
+
 ## Before Editing
 
 1. Run `git status --short` and preserve unrelated user changes.
 2. Read `CURRENT_STATUS.md` and `NEXT_TASKS.md`.
-3. If touching SCADA, forecasting, or probability logic, read `docs/SCADA_WEATHER_MATH_UPGRADE_PLAN.md`.
+3. If touching SCADA, forecasting, or probability logic, read
+   `docs/SCADA_OSI_CONTEXT.md` first, then
+   `docs/SCADA_WEATHER_MATH_UPGRADE_PLAN.md`.
 4. Keep mock/dashboard compatibility unless the task explicitly changes the contract.
 
 ## Operational Notes

@@ -1,5 +1,4 @@
 import type { ProbabilityData } from "../types/dashboard";
-import { formatRiskProbability } from "../utils/probability";
 
 interface ProbabilityGaugeProps {
   probability: ProbabilityData;
@@ -44,8 +43,8 @@ export default function ProbabilityGauge({
   const palette = riskPalette(probability.risk_level);
 
   return (
-    <div className={`flex h-full w-full min-w-0 flex-col rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-3.5 shadow-[0_0_34px_rgba(8,145,178,0.08)] ${className}`}>
-      <div className="mb-3 flex items-start justify-between gap-3">
+    <div className={`flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-3 shadow-[0_0_34px_rgba(8,145,178,0.08)] ${className}`}>
+      <div className="mb-1.5 flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
             Probability
@@ -59,8 +58,8 @@ export default function ProbabilityGauge({
         </span>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-evenly gap-4">
-        <div className="relative flex h-[clamp(11rem,22vw,15rem)] w-[clamp(11rem,22vw,15rem)] items-center justify-center">
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-between gap-1.5">
+        <div className="relative flex h-[clamp(6.25rem,11vw,7.25rem)] w-[clamp(6.25rem,11vw,7.25rem)] shrink-0 items-center justify-center">
           <svg viewBox="0 0 140 140" className="h-full w-full -rotate-90">
             <circle
               cx="70"
@@ -81,34 +80,19 @@ export default function ProbabilityGauge({
             />
           </svg>
           <div className="absolute text-center">
-            <p className="text-3xl font-semibold text-white">
-              {available ? formatRiskProbability(score) : "--"}
+            <p className="text-xl font-semibold text-white">
+              {available ? `${(score * 100).toFixed(1)}%` : "--"}
             </p>
-            <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
-              Capacity shortfall probability
+            <p className="max-w-[7rem] text-[9px] uppercase tracking-[0.12em] text-slate-400">
+              Reserve shortfall probability
             </p>
           </div>
         </div>
 
-        <div className="grid w-full grid-cols-3 gap-2 text-sm text-slate-300">
+        <div className="grid w-full grid-cols-3 gap-1.5 text-sm text-slate-300">
           <RiskBand label="Low" range="0–29%" tone="emerald" />
           <RiskBand label="Medium" range="30–65%" tone="amber" />
           <RiskBand label="High" range="66–100%" tone="rose" />
-        </div>
-
-        <div className="w-full rounded-xl border border-slate-800 bg-slate-950/55 px-3 py-3">
-          <div className="relative h-2 overflow-hidden rounded-full bg-gradient-to-r from-emerald-400 via-amber-400 to-rose-400">
-            {available ? (
-              <span
-                className="absolute top-1/2 h-5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white bg-slate-950 shadow-[0_0_10px_rgba(255,255,255,0.5)]"
-                style={{ left: `${score * 100}%` }}
-              />
-            ) : null}
-          </div>
-          <div className="mt-2 flex justify-between text-[9px] uppercase tracking-[0.1em] text-slate-500">
-            <span>Low pressure</span>
-            <span>Generation action pressure</span>
-          </div>
         </div>
       </div>
     </div>
@@ -131,9 +115,9 @@ function RiskBand({
   };
 
   return (
-    <div className={`flex min-h-[3.75rem] flex-col items-center justify-center rounded-lg border px-2 py-2 text-center ${toneClasses[tone]}`}>
+    <div className={`flex min-h-[2.15rem] flex-col items-center justify-center rounded-lg border px-1 py-1 text-center ${toneClasses[tone]}`}>
       <p className="text-[10px] font-semibold uppercase tracking-[0.12em]">{label}</p>
-      <p className="mt-1 text-[0.72rem] leading-tight text-slate-300">{range}</p>
+      <p className="mt-0.5 text-[0.65rem] leading-tight text-slate-300">{range}</p>
     </div>
   );
 }

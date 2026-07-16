@@ -349,7 +349,7 @@ dashboard.
 |---|---|---|
 | NASA Blue Marble | NASA GIBS | `frontend/src/components/WeatherMap.tsx` |
 | OpenStreetMap | OpenStreetMap tiles | `frontend/src/components/WeatherMap.tsx` |
-| Cloud systems | NASA GIBS GOES-East GeoColor | `frontend/src/components/WeatherMap.tsx` |
+| Cloud systems | NASA GIBS GOES-East Band 13 Clean Infrared | `frontend/src/components/WeatherMap.tsx` |
 | Rainfall coverage | NASA GIBS IMERG precipitation rate | `frontend/src/components/WeatherMap.tsx` |
 | Country outline | Local boundary coordinates | `frontend/src/data/trinidadAndTobagoBoundary.ts`, `frontend/src/components/WeatherMap.tsx` |
 
@@ -480,8 +480,8 @@ requirements files.
 
 | System | Current foundation | Missing active components |
 |---|---|---|
-| Live SCADA | `GridProvider`, normalized grid contract, calibration samples | `ScadaGridProvider`, credentials, network/security controls, live tag mapping |
-| Historian | Database and provider boundary | `HistorianGridProvider`, historian client, query/caching policy |
+| Future live read-only SCADA | `GridProvider`, normalized grid contract, calibration samples | Approved read-only provider, credentials, network/security controls, confirmed tag mapping |
+| Historian | Database and provider boundary | Approved read-only historian provider/client and confirmed query/caching policy |
 | Authentication | `users` table | Login API, password service, tokens/sessions, route protection, frontend auth |
 | Historical analytics | Snapshot tables and `historical_analysis` model | Analytics service/API, aggregation jobs, UI queries |
 | Recommendation history | Probability persistence and table component | History endpoint and active dashboard integration |

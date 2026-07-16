@@ -96,6 +96,22 @@ class ScadaReplayForecastService:
                             result.candidate_metrics or {},
                             sort_keys=True,
                         ),
+                        confidence_lower_mw=result.confidence_lower_mw,
+                        confidence_upper_mw=result.confidence_upper_mw,
+                        confidence_level=result.confidence_level,
+                        temperature_load_correlation=(
+                            result.temperature_load_correlation
+                        ),
+                        similar_period_forecast_mw=(
+                            result.similar_period_forecast_mw
+                        ),
+                        similar_examples=json.dumps(
+                            result.similar_examples,
+                            sort_keys=True,
+                        ),
+                        contributing_factors=json.dumps(
+                            result.contributing_factors,
+                        ),
                         training_rows=result.train_rows + result.test_rows,
                         generated_at=generated_at,
                     )

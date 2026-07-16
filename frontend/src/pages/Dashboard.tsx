@@ -7,6 +7,7 @@ import HistoricalDemandChart from "../components/HistoricalDemandChart";
 import ProbabilityGauge from "../components/ProbabilityGauge";
 import ReplayControlBar from "../components/ReplayControlBar";
 import ReplayLoadChart from "../components/ReplayLoadChart";
+import RiskTimelineChart from "../components/RiskTimelineChart";
 import { formatRiskProbability } from "../utils/probability";
 import ScenarioComparisonChart from "../components/ScenarioComparisonChart";
 import WeatherMap from "../components/WeatherMap";
@@ -53,6 +54,8 @@ const FALLBACK_GRID: DashboardSnapshot["grid"] = {
   current_generation_mw: 0,
   total_available_capacity_mw: 0,
   reserve_margin_percent: 0,
+  spinning_reserve_mw: null,
+  spinning_reserve_source: null,
   grid_status: "Unavailable",
   demand_period: "Unavailable",
   source_provider: "Unavailable",
@@ -300,7 +303,7 @@ export default function Dashboard() {
 
               {activeTab === "riskGauge" ? (
                 <WorkspacePage>
-                  <RiskGaugeTab probability={probability} />
+                  <RiskGaugeTab probability={probability} theme={theme} />
                 </WorkspacePage>
               ) : null}
 
@@ -450,9 +453,17 @@ function HomeTab({
       <>
         <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-5">
           <SummaryTile label="Demand" value={`${grid.current_demand_mw.toFixed(0)} MW`} tone="cyan" />
-          <SummaryTile label="Generation" value={`${grid.current_generation_mw.toFixed(0)} MW`} tone="emerald" />
+          <SummaryTile
+            label={generationMetricLabel(grid)}
+            value={`${grid.current_generation_mw.toFixed(0)} MW`}
+            tone="emerald"
+          />
           <SummaryTile label="Available" value={`${grid.total_available_capacity_mw.toFixed(0)} MW`} tone="cyan" />
-          <SummaryTile label="Reserve Margin" value={`${grid.reserve_margin_percent.toFixed(1)}%`} tone="amber" />
+          <SummaryTile
+            label="System Spin"
+            value={formatSystemSpin(grid)}
+            tone="amber"
+          />
           <SummaryTile label="Capacity Risk" value={formatProbability(probability)} tone="rose" />
         </div>
 
@@ -468,8 +479,16 @@ function HomeTab({
     <>
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryTile label="Demand" value={`${grid.current_demand_mw.toFixed(0)} MW`} tone="cyan" />
-        <SummaryTile label="Generation" value={`${grid.current_generation_mw.toFixed(0)} MW`} tone="emerald" />
-        <SummaryTile label="Reserve Margin" value={`${grid.reserve_margin_percent.toFixed(1)}%`} tone="amber" />
+        <SummaryTile
+          label={generationMetricLabel(grid)}
+          value={`${grid.current_generation_mw.toFixed(0)} MW`}
+          tone="emerald"
+        />
+        <SummaryTile
+          label="System Spin"
+          value={formatSystemSpin(grid)}
+          tone="amber"
+        />
         <SummaryTile label="Capacity Risk" value={formatProbability(probability)} tone="rose" />
       </div>
 
@@ -726,8 +745,10 @@ function OperationsTab({
 }) {
   const generationBalance =
     grid.current_generation_mw - grid.current_demand_mw;
-  const capacityHeadroom =
-    grid.total_available_capacity_mw - grid.current_demand_mw;
+  const usesTraGeneration = isHistoricalScadaReplay(grid);
+  const systemSpinMw = getSystemSpinMw(grid);
+  const spinAdjustmentMw =
+    systemSpinMw == null ? null : systemSpinMw - generationBalance;
   const generationUnits = Array.isArray(grid.generation_units)
     ? grid.generation_units
     : [];
@@ -768,7 +789,7 @@ function OperationsTab({
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
         <SummaryTile label="Total Demand" value={`${grid.current_demand_mw.toFixed(0)} MW`} tone="cyan" />
         <SummaryTile
-          label="Total Generation"
+          label={usesTraGeneration ? "Total Generation (TRA)" : "Total Generation"}
           value={`${grid.current_generation_mw.toFixed(0)} MW`}
           tone="emerald"
         />
@@ -778,8 +799,8 @@ function OperationsTab({
           tone="cyan"
         />
         <SummaryTile
-          label="Reserve Margin"
-          value={`${grid.reserve_margin_percent.toFixed(1)}%`}
+          label="System Spin"
+          value={formatSystemSpin(grid)}
           tone="amber"
         />
         <SummaryTile
@@ -818,7 +839,10 @@ function OperationsTab({
                       </span>
                     </div>
                     <div className="grid grid-cols-4 gap-2 text-center">
-                      <StationDatum label="Output" value={`${station.outputMw.toFixed(0)} MW`} />
+                      <StationDatum
+                        label={usesTraGeneration ? "TRA Share" : "Output"}
+                        value={`${station.outputMw.toFixed(0)} MW`}
+                      />
                       <StationDatum label="Available" value={`${station.availableMw.toFixed(0)} MW`} />
                       <StationDatum label="Headroom" value={`${stationHeadroom.toFixed(0)} MW`} />
                       <StationDatum label="Utilization" value={`${utilization.toFixed(0)}%`} />
@@ -842,14 +866,21 @@ function OperationsTab({
           <div className="flex h-full min-h-0 flex-col gap-2">
             <div className="grid grid-cols-3 gap-2">
               <MiniMetric
-                label="Capacity Headroom"
-                value={formatSignedMegawatts(capacityHeadroom)}
-              />
-              <MiniMetric
-                label="Generation Balance"
+                label={usesTraGeneration ? "TRA-Demand Gap" : "Generation-Demand Gap"}
                 value={formatSignedMegawatts(generationBalance)}
               />
-              <MiniMetric label="Demand Period" value={grid.demand_period} />
+              <MiniMetric
+                label="Corrected System Spin"
+                value={formatSystemSpin(grid)}
+              />
+              <MiniMetric
+                label="Spin Adjustment"
+                value={
+                  spinAdjustmentMw == null
+                    ? "Unavailable"
+                    : formatSignedMegawatts(spinAdjustmentMw)
+                }
+              />
             </div>
 
             <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-slate-800 bg-slate-950/45">
@@ -893,7 +924,7 @@ function OperationsTab({
 
                         <div className="grid grid-cols-3 gap-2 text-center">
                           <StationDatum
-                            label="Output"
+                            label={usesTraGeneration ? "TRA Share" : "Output"}
                             value={`${unit.current_output_mw.toFixed(0)} MW`}
                           />
                           <StationDatum
@@ -1048,86 +1079,156 @@ function DemandForecastTab({
 
 function RiskGaugeTab({
   probability,
+  theme,
 }: {
   probability: DashboardSnapshot["probability"];
+  theme: ThemeMode;
 }) {
-  const factors =
+  const [showAllDrivers, setShowAllDrivers] = useState(false);
+  const fallbackFactors =
     Array.isArray(probability.factors) && probability.factors.length > 0
       ? probability.factors
       : [probability.reason];
-  const driverDirections = factors.map(getRiskDriverDirection);
-  const upwardDrivers = driverDirections.filter(
-    (direction) => direction === "upward",
+  const drivers = probability.drivers?.length
+    ? probability.drivers
+    : fallbackFactors.map((label) => ({
+        label,
+        direction: legacyRiskDirection(label),
+        category: "LEGACY",
+      }));
+  const increasingCount = drivers.filter(
+    (driver) => driver.direction === "INCREASES_RISK",
   ).length;
-  const downwardDrivers = driverDirections.filter(
-    (direction) => direction === "downward",
+  const reducingCount = drivers.filter(
+    (driver) => driver.direction === "REDUCES_RISK",
   ).length;
-  const highRiskGap = Math.max(0, 0.7 - probability.probability_score);
+  const warningCount = drivers.filter(
+    (driver) => driver.direction === "QUALITY_WARNING",
+  ).length;
+  const contextCount = drivers.filter(
+    (driver) => driver.direction === "CONTEXT",
+  ).length;
+  const topDrivers = selectTopRiskDrivers(drivers, 5);
+  const visibleDrivers = showAllDrivers ? drivers : topDrivers;
+  const deadline = formatDecisionDeadline(
+    probability.decision_deadline_at,
+    probability.decision_deadline_minutes,
+  );
 
   return (
-    <div className="grid h-full min-h-0 w-full min-w-0 grid-cols-1 gap-2.5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-      <ProbabilityGauge probability={probability} className="h-full min-h-0 w-full min-w-0" />
-      <PanelCard title="Risk Factors" className="h-full min-h-0 w-full min-w-0">
-        <div className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-2">
-          <ol className="grid min-h-0 auto-rows-fr gap-2 overflow-auto sm:grid-cols-2">
-            {factors.map((factor, index) => {
-              const direction = driverDirections[index];
-              return (
-                <li
-                  key={`${factor}-${index}`}
-                  className="flex min-h-[6rem] flex-col justify-between rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-sm leading-snug text-slate-200"
-                >
-                  <div className="flex items-start gap-3">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-amber-500/30 bg-amber-500/10 text-xs font-semibold text-amber-200">
-                      {index + 1}
-                    </span>
-                    <span className="min-w-0 break-words">{factor}</span>
-                  </div>
-                  <span
-                    className={`mt-3 self-end rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] ${
-                      direction === "downward"
-                        ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200"
-                        : direction === "upward"
-                          ? "border-rose-500/25 bg-rose-500/10 text-rose-200"
-                          : "border-slate-700 bg-slate-900 text-slate-300"
-                    }`}
-                  >
-                    {direction === "downward"
-                      ? "Reduces risk"
-                      : direction === "upward"
-                        ? "Raises risk"
-                        : "Context"}
-                  </span>
-                </li>
-              );
-            })}
-          </ol>
+    <div className="grid h-full min-h-0 w-full min-w-0 grid-rows-[minmax(0,1.08fr)_minmax(0,0.92fr)] gap-2.5 overflow-hidden">
+      <div className="grid min-h-0 min-w-0 gap-2.5 xl:grid-cols-[minmax(17rem,0.36fr)_minmax(0,0.64fr)]">
+        <ProbabilityGauge
+          probability={probability}
+          className="h-full min-h-0 w-full min-w-0"
+        />
+        <RiskTimelineChart
+          probability={probability}
+          theme={theme}
+          className="h-full min-h-0 w-full min-w-0"
+        />
+      </div>
 
-          <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
-            <MiniMetric label="Drivers Evaluated" value={`${factors.length}`} />
-            <MiniMetric label="Upward Drivers" value={`${upwardDrivers}`} />
-            <MiniMetric label="Downward Drivers" value={`${downwardDrivers}`} />
+      <div className="grid min-h-0 min-w-0 gap-2.5 overflow-hidden xl:grid-cols-[minmax(0,1.08fr)_minmax(20rem,0.92fr)]">
+        <PanelCard
+          title="Operating Risk Evidence"
+          className="h-full min-h-0 w-full min-w-0"
+        >
+          <div className="grid h-full min-h-0 grid-cols-2 auto-rows-fr gap-1.5 sm:grid-cols-4">
             <MiniMetric
-              label="Gap to High Risk"
-              value={probability.probability_score >= 0.7 ? "At high risk" : highRiskGap.toFixed(2)}
+              label="Expected Shortfall"
+              value={`${(probability.expected_shortfall_mw ?? 0).toFixed(1)} MW`}
+            />
+            <MiniMetric
+              label="Conservative Shortfall"
+              value={`${(probability.projected_shortfall_mw ?? 0).toFixed(1)} MW`}
+            />
+            <MiniMetric
+              label="Peak Risk Time"
+              value={formatRiskPeak(probability)}
+            />
+            <MiniMetric label="Decision Deadline" value={deadline} />
+            <MiniMetric
+              label="Severity"
+              value={formatEnumLabel(probability.severity_level ?? "NONE")}
+            />
+            <MiniMetric
+              label="Forecast Confidence"
+              value={`${((probability.decision_confidence ?? 0) * 100).toFixed(1)}%`}
+            />
+            <MiniMetric
+              label="Recommended Capacity"
+              value={`${(probability.recommended_capacity_mw ?? 0).toFixed(0)} MW`}
+            />
+            <MiniMetric
+              label="Action"
+              value={probability.decision_action ?? "NO ACTION"}
             />
           </div>
-        </div>
-      </PanelCard>
+        </PanelCard>
+
+        <PanelCard title="Risk Drivers" className="h-full min-h-0 w-full min-w-0">
+          <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-1.5">
+            <div className="grid grid-cols-4 gap-1 text-center text-[8px] uppercase tracking-[0.06em]">
+              <span className="rounded-lg border border-rose-500/25 bg-rose-500/10 px-1.5 py-1 text-rose-200">
+                {increasingCount} raising
+              </span>
+              <span className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-1 text-emerald-200">
+                {reducingCount} reducing
+              </span>
+              <span className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-1.5 py-1 text-amber-200">
+                {warningCount} warnings
+              </span>
+              <span className="rounded-lg border border-slate-600/60 bg-slate-800/55 px-1.5 py-1 text-slate-300">
+                {contextCount} context
+              </span>
+            </div>
+            <ol className="min-h-0 space-y-1 overflow-auto pr-0.5">
+              {visibleDrivers.map((driver, index) => (
+                <li
+                  key={`${driver.category}-${driver.label}-${index}`}
+                  className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/55 px-2 py-1.5 text-[0.68rem] leading-snug text-slate-200"
+                >
+                  <span
+                    className={`h-2 w-2 shrink-0 rounded-full ${riskDriverDot(driver.direction)}`}
+                  />
+                  <span className="min-w-0 flex-1 break-words">{driver.label}</span>
+                  <span className="shrink-0 text-[8px] uppercase tracking-[0.08em] text-slate-500">
+                    {driver.category.replace(/_/g, " ")}
+                  </span>
+                </li>
+              ))}
+            </ol>
+            {drivers.length > 5 ? (
+              <button
+                type="button"
+                onClick={() => setShowAllDrivers((current) => !current)}
+                className="justify-self-end rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-semibold text-cyan-100 hover:border-cyan-400/45 hover:bg-cyan-500/15"
+              >
+                {showAllDrivers ? "Show top 5" : `View all ${drivers.length}`}
+              </button>
+            ) : (
+              <span className="text-right text-[9px] text-slate-500">
+                {probability.formula_version ?? "Operating risk evidence"}
+              </span>
+            )}
+          </div>
+        </PanelCard>
+      </div>
     </div>
   );
 }
 
-function getRiskDriverDirection(
+function legacyRiskDirection(
   factor: string,
-): "upward" | "downward" | "neutral" {
+): "INCREASES_RISK" | "REDUCES_RISK" | "CONTEXT" {
   const normalized = factor.toLowerCase();
   if (
     normalized.includes("decrease") ||
     normalized.includes("reduced") ||
     normalized.includes("lower expected")
   ) {
-    return "downward";
+    return "REDUCES_RISK";
   }
   if (
     normalized.includes("increase") ||
@@ -1135,9 +1236,62 @@ function getRiskDriverDirection(
     normalized.includes("below") ||
     normalized.includes("high ")
   ) {
-    return "upward";
+    return "INCREASES_RISK";
   }
-  return "neutral";
+  return "CONTEXT";
+}
+
+function selectTopRiskDrivers(
+  drivers: NonNullable<DashboardSnapshot["probability"]["drivers"]>,
+  limit: number,
+) {
+  const selected: typeof drivers = [];
+  const addFirst = (direction: string) => {
+    const match = drivers.find(
+      (driver) =>
+        driver.direction === direction && !selected.includes(driver),
+    );
+    if (match) selected.push(match);
+  };
+
+  addFirst("INCREASES_RISK");
+  addFirst("REDUCES_RISK");
+  addFirst("QUALITY_WARNING");
+  for (const driver of drivers) {
+    if (selected.length >= limit) break;
+    if (!selected.includes(driver)) selected.push(driver);
+  }
+  return selected;
+}
+
+function riskDriverDot(direction: string): string {
+  if (direction === "INCREASES_RISK") return "bg-rose-400";
+  if (direction === "REDUCES_RISK") return "bg-emerald-400";
+  if (direction === "QUALITY_WARNING") return "bg-amber-400";
+  return "bg-slate-400";
+}
+
+function formatRiskPeak(probability: DashboardSnapshot["probability"]): string {
+  if (probability.peak_risk_timestamp) {
+    return formatShortDateTime(probability.peak_risk_timestamp);
+  }
+  const minutes = probability.peak_risk_horizon_minutes;
+  if (minutes == null) return "Unavailable";
+  return minutes < 60 ? `In ${minutes} min` : `In ${minutes / 60} hr`;
+}
+
+function formatDecisionDeadline(
+  timestamp?: string | null,
+  minutes?: number | null,
+): string {
+  if (timestamp) return formatShortDateTime(timestamp);
+  if (minutes == null) return "No action window";
+  if (minutes <= 0) return "Due now";
+  return `In ${minutes} min`;
+}
+
+function formatEnumLabel(value: string): string {
+  return value.replace(/_/g, " ");
 }
 
 function OperationalGuidanceTab({
@@ -1570,6 +1724,35 @@ function formatStatusLabel(value: string): string {
 
 function formatSignedMegawatts(value: number): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(0)} MW`;
+}
+
+function isHistoricalScadaReplay(
+  grid: DashboardSnapshot["grid"],
+): boolean {
+  return ["HistoricalScadaReplay", "HistoricalScadaSimulatedReplay"].includes(
+    grid.source_provider,
+  );
+}
+
+function generationMetricLabel(grid: DashboardSnapshot["grid"]): string {
+  return isHistoricalScadaReplay(grid) ? "Generation (TRA)" : "Generation";
+}
+
+function getSystemSpinMw(grid: DashboardSnapshot["grid"]): number | null {
+  const reportedSpin = grid.spinning_reserve_mw;
+  if (
+    typeof reportedSpin === "number" &&
+    Number.isFinite(reportedSpin) &&
+    reportedSpin >= 0
+  ) {
+    return reportedSpin;
+  }
+  return null;
+}
+
+function formatSystemSpin(grid: DashboardSnapshot["grid"]): string {
+  const systemSpinMw = getSystemSpinMw(grid);
+  return systemSpinMw == null ? "Unavailable" : `${systemSpinMw.toFixed(0)} MW`;
 }
 
 function formatProbability(

@@ -1,8 +1,15 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { lineChartSpy } = vi.hoisted(() => ({
+  lineChartSpy: vi.fn(),
+}));
 
 vi.mock("react-chartjs-2", () => ({
-  Line: () => <div data-testid="line-chart">Responsive chart</div>,
+  Line: (props: unknown) => {
+    lineChartSpy(props);
+    return <div data-testid="line-chart">Responsive chart</div>;
+  },
 }));
 
 import DemandForecastChart from "./DemandForecastChart";
@@ -80,6 +87,10 @@ const modelForecast: DemandForecastBundle = {
 };
 
 describe("DemandForecastChart", () => {
+  beforeEach(() => {
+    lineChartSpy.mockClear();
+  });
+
   it("renders a live-adjusted total-day estimate and near-term numeric values", () => {
     render(
       <DemandForecastChart
@@ -97,5 +108,53 @@ describe("DemandForecastChart", () => {
     expect(screen.getByText("990 MW")).toBeInTheDocument();
     expect(screen.getByText("1000 MW")).toBeInTheDocument();
     expect(screen.getByTestId("line-chart").parentElement).toHaveClass("w-full");
+
+    const chartProps = lineChartSpy.mock.calls.at(-1)?.[0] as {
+      data: { datasets: Array<{ label: string; data: Array<number | null> }> };
+    };
+    const generation = chartProps.data.datasets.find(
+      (dataset) => dataset.label === "Current Generation Reference",
+    );
+    expect(generation?.data).toEqual([grid.current_generation_mw]);
+  });
+
+  it("plots current generation as a reference against near-term demand", () => {
+    render(
+      <DemandForecastChart
+        gridStatus={grid}
+        probability={probability}
+        view="nearTerm"
+      />,
+    );
+
+    const chartProps = lineChartSpy.mock.calls.at(-1)?.[0] as {
+      data: { datasets: Array<{ label: string; data: number[] }> };
+    };
+    const generation = chartProps.data.datasets.find(
+      (dataset) => dataset.label === "Current Generation Reference",
+    );
+    expect(generation?.data).toEqual([960, 960, 960]);
+  });
+
+  it("identifies TRA as generation for historical SCADA replay", () => {
+    render(
+      <DemandForecastChart
+        gridStatus={{
+          ...grid,
+          current_generation_mw: 1310,
+          source_provider: "HistoricalScadaReplay",
+        }}
+        probability={probability}
+        view="nearTerm"
+      />,
+    );
+
+    const chartProps = lineChartSpy.mock.calls.at(-1)?.[0] as {
+      data: { datasets: Array<{ label: string; data: number[] }> };
+    };
+    const generation = chartProps.data.datasets.find(
+      (dataset) => dataset.label === "Generation (TRA)",
+    );
+    expect(generation?.data).toEqual([1310, 1310, 1310]);
   });
 });

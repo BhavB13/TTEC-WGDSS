@@ -1,13 +1,18 @@
 # SCADA + Weather Mathematical Forecasting Upgrade Plan
 
+> **Authoritative context:** `docs/SCADA_OSI_CONTEXT.md` supersedes any older
+> tag semantics, units, thresholds, or production-integration suggestions in
+> this plan. Utility-specific assumptions are tracked in
+> `docs/SCADA_OSI_CONFIRMATION_REGISTER.md`.
+
 ## Summary
 
 This upgrade moves WGDSS from mostly rule-based, mock-grid decision support toward a mathematically grounded forecasting and probability engine using historical SCADA CSV exports plus live/weather forecast data.
 
 ### Implemented Mathematical Hardening
 
-The current `demand-forecast-v2.1` implementation and
-`operating-risk-v2.0` engine add these integrity controls:
+The current `demand-forecast-v3.0` implementation and
+`operating-risk-v3.0` engine add these integrity controls:
 
 - Baseline and ML evaluation use chronological outer holdout data.
 - Baseline choice and ML parameter choice use expanding-window walk-forward validation inside the training period, leaving the outer holdout untouched until final evaluation.
@@ -23,6 +28,15 @@ The current `demand-forecast-v2.1` implementation and
 - Forecast weather is eligible for a training row only when its `created_at` timestamp proves it was available at the feature timestamp.
 - Bad SCADA feature/target rows are excluded from model fitting; weather-degraded rows remain usable with explicit missingness indicators.
 - ML is activated only when both MAE and RMSE improve on the selected baseline by at least 2%.
+- Similar-period matching and 25/50/75% ML blends compete under the same
+  chronological gates. Neighbours must have a target already observable by the
+  query feature time.
+- Calendar context separates Trinidad weekdays, weekends, public holidays, and
+  wet/dry seasons. Variable holiday dates can be supplied through
+  `FORECAST_EXTRA_HOLIDAY_DATES`.
+- Forecast artifacts expose calibrated 90% bounds, per-horizon metrics,
+  temperature/load correlation, comparable historical periods, and major
+  contributing factors.
 - ML fitting uses a 14-day exponential recency half-life and lower weights for weather-degraded rows, allowing the model to adapt while keeping all split and feature chronology intact.
 - Forecast uncertainty is calibrated from residual standard deviation, MAE/RMSE floors, demand/horizon floors, and the empirical 90th-percentile absolute error.
 - Historical replay/backtest forecasts cannot drive the live dashboard recommendation. Live use requires fresh generation time, fresh SCADA, good quality, and a forecast target strictly after the latest SCADA timestamp.
@@ -79,11 +93,11 @@ Known SCADA tags:
 
 | SCADA Tag | Meaning | Normalized Field |
 |---|---|---|
-| `PTL132 GENERATION TOTALS` | System demand/load | `current_demand_mw` |
-| `MHO132 AVERAGE AMBIENT TEMPERATURE` | Ambient temperature | `temperature_c` |
-| `GSYS SYSTEM_CORRECTED_SPIN_TOTAL` | Spinning reserve | `spinning_reserve_mw` |
-| `GSYS SYSTEM_AVAIL_TOTAL` | Available generation capacity | `available_capacity_mw` |
-| `GSYS SYSTEM_ONLN_TOTAL` | Online generation capacity | `online_capacity_mw` |
+| `PTL132 GENERATION TOTALS` | Generation total; currently used as an unconfirmed demand proxy | `system_generation_total_mw` / compatibility field `current_demand_mw` |
+| `MHO132 AVERAGE AMBIENT TEMPERATURE` | Ambient temperature; unit pending confirmation | `temperature_c` |
+| `GSYS SYSTEM_CORRECTED_SPIN_TOTAL` | Corrected System Spin; formula/unit pending confirmation | `spinning_reserve_mw` |
+| `GSYS SYSTEM_AVAIL_TOTAL` | TA interpretation pending confirmation | `available_capacity_mw` |
+| `GSYS SYSTEM_ONLN_TOTAL` | TRA interpretation pending confirmation | `online_capacity_mw` |
 
 ### Weather Data Role
 
@@ -152,6 +166,12 @@ reserve_margin_percent = reserve_margin_mw / current_demand_mw * 100
 online_spare_mw = online_capacity_mw - current_demand_mw
 ```
 
+Terminology correction: the `reserve_margin_*` fields above are retained as
+legacy available-capacity-margin features for compatibility. Operator-facing
+**System Spin** is `spinning_reserve_mw` from `GSYS
+SYSTEM_CORRECTED_SPIN_TOTAL`. `online_spare_mw` is the raw TRA-minus-demand gap
+and may differ from corrected System Spin.
+
 Guardrails:
 
 - If `current_demand_mw <= 0`, do not calculate percentage margin.
@@ -178,24 +198,17 @@ immediate_capacity_mw = min(
 safe_online_capacity_mw = immediate_capacity_mw - required_reserve_mw
 ```
 
-A first version can set:
+A first version currently evaluates this configurable prototype policy:
 
 ```text
-required_reserve_mw = max(spinning_reserve_mw_threshold, current_demand_mw * reserve_margin_threshold)
+required_reserve_mw = max(current_demand_mw, forecast_demand_mw)
+                      * configured_reserve_fraction
 ```
 
-Recommended default:
-
-```text
-reserve_margin_threshold = 0.15
-```
-
-So:
-
-```text
-required_reserve_mw = max(current_demand_mw, forecast_demand_mw) * 0.15
-safe_online_capacity_mw = immediate_capacity_mw - required_reserve_mw
-```
+The configured value is not an approved T&TEC operating rule. Its status is
+returned in the API as `policy_status`; production use requires the utility to
+confirm reserve requirements, credible-contingency treatment, thresholds, unit
+blocks, and lead times.
 
 If a trustworthy spinning-reserve measurement is unavailable, use online capacity as the immediate-capacity boundary and state that limitation in model status. Historical calibration spinning reserve must not be substituted for live spinning reserve.
 
@@ -490,29 +503,35 @@ Inputs:
 - model status
 - data quality
 
-Risk event:
+Risk event at each valid horizon through six hours:
 
 ```text
-actual_demand_mw > safe_online_capacity_mw
+actual_demand_mw + required_reserve_mw > immediate_online_capacity_mw
 ```
 
-Safe online capacity:
+With corrected spin available, immediate capacity honors both the TRA ceiling
+and the corrected rapid-response reserve constraint:
 
 ```text
-safe_online_capacity_mw = online_capacity_mw - required_reserve_mw
+immediate_online_capacity_mw = min(
+    TRA,
+    current_demand_mw + corrected_spin_mw
+)
+safe_online_capacity_mw = immediate_online_capacity_mw - required_reserve_mw
 ```
 
 Required reserve:
 
 ```text
-required_reserve_mw = current_demand_mw * reserve_margin_threshold
+required_reserve_mw = max(current_demand_mw, forecast_demand_mw)
+                      * reserve_margin_threshold
 ```
 
-Recommended default:
-
-```text
-reserve_margin_threshold = 0.15
-```
+The reserve fraction is configurable and explicitly unconfirmed. Do not treat
+the development default as an approved operating threshold. Corrected spin is
+not redefined as `TRA - demand`, and the reserve requirement is subtracted only
+once. TA is not immediate capacity; verified TA headroom only bounds capacity
+that guidance may identify as startable.
 
 ### Probability Estimate
 
@@ -522,6 +541,11 @@ For v1, use normal approximation:
 z = (safe_online_capacity_mw - forecast_demand_mw) / forecast_uncertainty_mw
 probability = 1 - normal_cdf(z)
 ```
+
+The API returns this calculation for every valid horizon and uses the maximum
+horizon probability as the headline risk. Horizons are correlated, so it does
+not combine them using an independence formula. The result also includes exact
+expected positive shortfall and confidence-upper-bound conservative shortfall.
 
 Guardrails:
 
@@ -969,7 +993,7 @@ The dashboard snapshot may now include these optional objects:
         "forecast_demand_mw": 1040,
         "forecast_uncertainty_mw": 30,
         "model_name": "persistence",
-        "model_version": "demand-forecast-v2.1",
+        "model_version": "demand-forecast-v3.0",
         "baseline_name": "persistence",
         "baseline_forecast_mw": 1030,
         "quality_status": "BASELINE_ACTIVE"
@@ -978,7 +1002,7 @@ The dashboard snapshot may now include these optional objects:
   },
   "model_status": {
     "active_model": "persistence",
-    "model_version": "demand-forecast-v2.1",
+    "model_version": "demand-forecast-v3.0",
     "mode": "BASELINE_ACTIVE",
     "trained_through": "2026-06-30T09:00:00Z",
     "metrics": {
@@ -1008,12 +1032,16 @@ These fields are optional. Frontend and API clients must continue handling snaps
 When both a latest 1-hour demand forecast and a latest SCADA grid snapshot exist, the dashboard can use:
 
 ```text
-safe_online_capacity_mw = online_capacity_mw - required_reserve_mw
-required_reserve_mw = current_demand_mw * 0.15
+safe_online_capacity_mw = immediate_capacity_mw - required_reserve_mw
+required_reserve_mw = max(current_demand_mw, forecast_demand_mw)
+                      * configured_reserve_fraction
 probability = P(actual_demand_mw > safe_online_capacity_mw)
 ```
 
-The probability uses forecast uncertainty from validation residuals. If SCADA/model data is unavailable, incomplete, or invalid, the system falls back to the existing rule-based recommendation path or inhibits the recommendation when live telemetry is stale/bad.
+The probability uses forecast uncertainty from validation residuals. If
+SCADA/model data is unavailable, incomplete, or invalid, the system must fail
+safely and label the recommendation unavailable or degraded. Replay and mock
+inputs must never be presented as live telemetry.
 
 ## Validation Commands
 
@@ -1213,7 +1241,10 @@ The probability calculation remains tied to the operating event:
 actual_demand_mw > safe_online_capacity_mw
 ```
 
-Available capacity and spinning reserve are used for explainability and operational context; they do not replace the probability event.
+Corrected spin and TRA are separate constraints on immediate capability. TA is
+used only for verified startability context. Weather enters the risk calculation
+through the leakage-safe demand forecast and residual uncertainty, not through
+fixed probability points.
 
 ## Limitations of One Month of SCADA Data
 
@@ -1244,11 +1275,14 @@ Better target:
 Historical CSV support should evolve toward one of these production paths:
 
 1. Automated CSV export into a monitored import folder.
-2. Historian database query.
-3. PI/OSIsoft integration.
-4. OPC-UA integration.
-5. SCADA vendor API.
-6. Message bus or telemetry stream.
+2. An approved read-only historian database or replica.
+3. An approved AspenTech OSI export or historian interface.
+4. An approved read-only OPC UA interface.
+5. An approved vendor API.
+6. An approved telemetry/message interface.
+
+No endpoint, protocol, or credential should be implemented until T&TEC/OSI
+owners select and document the approved option.
 
 The future live provider should implement the existing `GridProvider` pattern rather than bypassing dashboard services.
 

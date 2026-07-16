@@ -20,6 +20,7 @@ from app.services.demand_forecast_model_service import (
     DemandForecastModelService,
     _feature_fill_values,
     _feature_vector,
+    _temperature_load_correlation,
     _training_sample_weights,
 )
 
@@ -86,8 +87,15 @@ def test_demand_forecast_model_service_uses_chronological_baseline_and_persists(
         "rolling_trend",
         "same_hour_yesterday",
         "hourly_average",
+        "similar_periods",
     }
     assert horizon.forecast_uncertainty_mw > 0
+    assert horizon.confidence_lower_mw < horizon.forecast_demand_mw
+    assert horizon.confidence_upper_mw > horizon.forecast_demand_mw
+    assert horizon.confidence_level == 0.9
+    assert horizon.similar_period_forecast_mw is not None
+    assert horizon.similar_examples
+    assert horizon.contributing_factors
     assert horizon.metrics.mae >= 0
     assert horizon.forecast_timestamp == datetime(2026, 6, 2, 6)
 
@@ -99,11 +107,15 @@ def test_demand_forecast_model_service_uses_chronological_baseline_and_persists(
     assert stored.horizon_hours == 1
     assert stored.forecast_demand_mw == horizon.forecast_demand_mw
     assert stored.forecast_uncertainty_mw == horizon.forecast_uncertainty_mw
-    assert stored.feature_profile == "demand_weather_v2_1"
+    assert stored.feature_profile == "demand_weather_similarity_v3"
     assert stored.validation_status == "PROTOTYPE"
     assert stored.train_row_count == horizon.train_rows
     assert stored.test_row_count == horizon.test_rows
     assert json.loads(stored.candidate_metrics)["active"]["model"] == horizon.active_model
+    assert stored.confidence_lower_mw < stored.forecast_demand_mw
+    assert stored.confidence_upper_mw > stored.forecast_demand_mw
+    assert stored.confidence_level == 0.9
+    assert json.loads(stored.contributing_factors)
 
 
 def test_demand_forecast_model_service_replaces_results(tmp_path):
@@ -173,6 +185,12 @@ def test_model_compares_ridge_boosting_and_forest_chronologically(tmp_path):
         "ridge_alpha_10",
         "hist_gradient_boosting",
         "random_forest",
+        "extra_trees",
+    }.issubset(horizon.candidate_metrics)
+    assert {
+        "baseline_persistence",
+        "baseline_hourly_average",
+        "baseline_similar_periods",
     }.issubset(horizon.candidate_metrics)
     selected = [
         metrics
@@ -186,7 +204,12 @@ def test_model_compares_ridge_boosting_and_forest_chronologically(tmp_path):
             "ridge_alpha_10",
             "hist_gradient_boosting",
             "random_forest",
+            "extra_trees",
         )
+    )
+    assert any(
+        name.endswith("_similarity_25")
+        for name in horizon.candidate_metrics
     )
 
 
@@ -524,3 +547,52 @@ def test_ml_feature_vector_responds_to_known_and_forecast_weather(tmp_path):
 
     assert len(normal_weather) == len(adverse_weather)
     assert normal_weather != adverse_weather
+
+
+def test_ml_feature_vector_separates_holiday_from_normal_weekday(tmp_path):
+    session_factory = _session_factory(tmp_path)
+    _seed_training_rows(session_factory, count=3)
+    with session_factory() as session:
+        rows = list(
+            session.scalars(
+                select(ForecastTrainingRow).order_by(
+                    ForecastTrainingRow.feature_timestamp
+                )
+            )
+        )
+
+    fill_values = _feature_fill_values(rows)
+    rows[0].target_timestamp = datetime(2026, 8, 28, 16)
+    weekday = _feature_vector(rows[0], fill_values)
+    rows[0].target_timestamp = datetime(2026, 8, 31, 16)
+    holiday = _feature_vector(rows[0], fill_values)
+
+    assert len(weekday) == len(holiday)
+    assert weekday != holiday
+
+
+def test_temperature_load_correlation_controls_for_target_hour():
+    rows = []
+    start = datetime(2026, 6, 1, 15)
+    for index in range(10):
+        feature_timestamp = start + timedelta(days=index)
+        temperature = 25 + index * 0.5
+        rows.append(
+            ForecastTrainingRow(
+                feature_timestamp=feature_timestamp,
+                horizon_hours=1,
+                target_timestamp=feature_timestamp + timedelta(hours=1),
+                target_demand_mw=950 + index * 20,
+                current_demand_mw=930 + index * 20,
+                hour_of_day=feature_timestamp.hour,
+                day_of_week=feature_timestamp.weekday(),
+                temperature_c=temperature,
+                forecast_temperature_c=temperature,
+                source_quality_status="GOOD",
+            )
+        )
+
+    correlation = _temperature_load_correlation(rows)
+
+    assert correlation is not None
+    assert correlation > 0.9
