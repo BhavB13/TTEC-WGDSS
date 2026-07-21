@@ -96,7 +96,7 @@ def test_forecast_dataset_builds_rows_without_future_leakage(tmp_path):
 
     result = ForecastDatasetService(session_factory=session_factory).build_training_rows()
 
-    assert result.rows_created == 15
+    assert result.rows_created == 27
     assert result.source_snapshots == 8
     with session_factory() as session:
         row = session.scalar(
@@ -156,6 +156,53 @@ def test_forecast_dataset_uses_requested_horizons_and_replaces_rows(tmp_path):
     assert second.rows_created == 7
     with session_factory() as session:
         assert session.scalar(select(func.count(ForecastTrainingRow.id))) == 7
+
+
+def test_target_relative_history_uses_forecast_hour_without_future_leakage(
+    tmp_path,
+):
+    session_factory = _session_factory(tmp_path)
+    start = datetime(2026, 6, 1)
+    with session_factory() as session:
+        for offset in range(32):
+            timestamp = start + timedelta(hours=offset)
+            demand = 800.0 + offset
+            session.add(
+                ScadaGridSnapshot(
+                    timestamp=timestamp,
+                    available_at=timestamp,
+                    current_demand_mw=demand,
+                    temperature_c=28.0,
+                    spinning_reserve_mw=150.0,
+                    available_capacity_mw=1300.0,
+                    online_capacity_mw=1200.0,
+                    reserve_margin_mw=1300.0 - demand,
+                    reserve_margin_percent=(1300.0 - demand) / demand * 100.0,
+                    online_spare_mw=1200.0 - demand,
+                    quality_status="GOOD",
+                    missing_fields="",
+                    source="target-relative-test",
+                )
+            )
+        session.commit()
+
+    ForecastDatasetService(session_factory=session_factory).build_training_rows(
+        horizons_hours=(6,)
+    )
+
+    with session_factory() as session:
+        row = session.scalar(
+            select(ForecastTrainingRow).where(
+                ForecastTrainingRow.feature_timestamp
+                == start + timedelta(hours=24),
+                ForecastTrainingRow.horizon_hours == 6,
+            )
+        )
+
+    assert row is not None
+    assert row.lag_24h_demand_mw == 800.0
+    assert row.target_lag_24h_demand_mw == 806.0
+    assert row.target_same_hour_7d_average_mw == 806.0
 
 
 def test_forecast_dataset_uses_past_only_weather_baseline_when_issued_forecast_missing(
@@ -456,6 +503,7 @@ def test_replay_waits_until_irregular_interval_is_available_and_issue_hour_is_sa
     assert before_safe_issue.source_snapshots == 0
     assert at_safe_issue.source_snapshots == 1
     assert at_safe_issue.inference_rows[1].feature_timestamp == _ts(10)
+    assert at_safe_issue.inference_rows[1].feature_observation_time == _ts(8)
     assert at_safe_issue.inference_rows[1].feature_available_at == _ts(9) + timedelta(
         minutes=30
     )

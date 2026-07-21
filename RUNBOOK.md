@@ -5,8 +5,7 @@
 One-command local launch from the repository root:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Start-WGDSS.ps1
-```
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Users\Bhave\Downloads\TTEC-WGDSS\scripts\Start-WGDSS.ps1"
 
 Alternatively, double-click `START_WGDSS.cmd`. See
 `docs/LAUNCH_AND_DEPLOYMENT.md` for setup behavior and production-deployment
@@ -90,10 +89,27 @@ venv\Scripts\python.exe scripts\run_scada_replay_pipeline.py `
 The pipeline performs a preflight before database mutation. It rejects missing
 required tags or fewer than eight interval-aligned usable hourly samples. It
 normalizes two-digit timestamps and tag whitespace, deduplicates CSV content,
-resamples by interval overlap, preserves quality, builds 1h/2h/6h datasets,
+resamples by duration-weighted interval overlap, preserves quality, builds
+direct 1h-through-6h datasets,
 compares chronological baselines and ML candidates, and stores a forecast for
 the exact current June replay cursor. `Other` remains conditionally usable and
 never becomes `Good`.
+
+The pipeline also reconciles persisted demand snapshots against the preserved
+raw intervals. Its summary reports the selected alignment method, candidate
+chronological errors, matched hours, and mismatches. A mismatch means the
+derived hourly table must be reviewed before it is used for model validation.
+
+Timestamp meanings are intentionally separate:
+
+- `timestamp`: civil-hour bucket used for historical display and model targets.
+- `available_at`: exact end of the latest source interval contributing to that
+  bucket.
+- forecast issue time: first model clock at which `available_at` has passed.
+
+Historical charts may show post-event actuals at their observation hour. Model
+features and replay forecasts must only use rows whose `available_at` is at or
+before the simulated issue time.
 
 `--backfill-weather` makes one free Open-Meteo Archive API request for the SCADA
 date range and stores observed feature-time weather. It does not fabricate
@@ -118,6 +134,32 @@ venv\Scripts\python.exe scripts\refresh_demand_forecast.py
 The command requires 48 Good-quality SCADA snapshots by default and skips when
 no newer snapshot exists. A skip is a safe result, not an error. Use `--force`
 only after deliberate review.
+
+The full candidate tournament is intentionally an offline/scheduled operation;
+it must never run inside a dashboard request. It performs expanding-window
+selection for every 1-6 hour horizon and may take several minutes on a laptop.
+The dashboard continues to use the last persisted, validated artifact while it
+runs.
+
+After new SCADA snapshots have passed ingestion/alignment validation, retrain
+from `backend` with:
+
+```powershell
+venv\Scripts\python.exe scripts\build_forecast_training_rows.py
+venv\Scripts\python.exe scripts\train_demand_forecast_model.py
+```
+
+Review the printed MAE, RMSE, MAPE, peak error, selected baseline, and model
+mode for all six horizons. ML is activated only when its newest chronological
+holdout MAE and RMSE are both at least 2% better than the selected baseline.
+Otherwise `BASELINE_ACTIVE` is the expected safe outcome. Also inspect
+`candidate_metrics.temperature_analysis`, `candidate_metrics.input_quality`,
+and `candidate_metrics.active.interval_coverage` in model status before using a
+new artifact for replay demonstrations.
+
+The current training history is historical OSI export data from October 2025
+through June 2026. It supports calibration and replay only. Do not label the
+result as a live T&TEC forecast or trigger any control action from it.
 
 Variable or specially declared public holidays can be supplied in `backend/.env`
 as a comma-separated list of `YYYY-MM-DD` values using

@@ -116,7 +116,7 @@ def test_replay_forecast_refresh_persists_exact_cursor_horizons_and_audit_metada
         for row in rows
     )
     assert rows[0].baseline_mae == 20
-    assert rows[0].feature_profile == "demand_weather_similarity_v3"
+    assert rows[0].feature_profile == "demand_weather_grid_state_v5"
     assert rows[0].candidate_metrics.startswith('{"active"')
     assert [row.horizon_hours for row in service.forecasts_for_source_cursor(expected_cursor)] == [1, 2, 6]
     assert service.forecasts_for_source_cursor(expected_cursor + timedelta(hours=1)) == []

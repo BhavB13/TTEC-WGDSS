@@ -109,12 +109,14 @@ class ScadaImportService:
         *,
         source_filename: str,
         source_path: str,
+        archive_import_run_id: int | None = None,
+        source_metadata_overrides: dict[str, Any] | None = None,
     ) -> ScadaImportResult:
         """Import one CSV payload while preserving logical archive provenance."""
         if self.session_factory is SessionLocal:
             initialize_database()
         source_hash = hashlib.sha256(payload).hexdigest()
-        parsed = self._read_measurements_text(payload.decode("utf-8-sig"))
+        parsed = self.parse_measurements_bytes(payload)
         measurements = parsed.measurements
         duplicate_rows = parsed.duplicate_rows_skipped
 
@@ -123,6 +125,12 @@ class ScadaImportService:
                 select(ScadaImportRun).where(ScadaImportRun.source_hash == source_hash)
             )
             if existing is not None:
+                if (
+                    archive_import_run_id is not None
+                    and existing.archive_import_run_id is None
+                ):
+                    existing.archive_import_run_id = archive_import_run_id
+                    session.commit()
                 logger.info(
                     "Skipping duplicate SCADA import for %s with hash %s",
                     source_filename,
@@ -170,6 +178,7 @@ class ScadaImportService:
             }
 
             import_run = ScadaImportRun(
+                archive_import_run_id=archive_import_run_id,
                 source_filename=source_filename,
                 source_path=source_path,
                 source_hash=source_hash,
@@ -189,6 +198,7 @@ class ScadaImportService:
                 measurement_payload = dict(measurement)
                 metadata = json.loads(str(measurement_payload.pop("source_metadata")))
                 metadata["source_path"] = source_path
+                metadata.update(source_metadata_overrides or {})
                 session.add(
                     ScadaRawMeasurement(
                         import_run_id=import_run.id,
@@ -227,7 +237,24 @@ class ScadaImportService:
         return self.parse_measurements_bytes(payload).measurements
 
     def parse_measurements_bytes(self, payload: bytes) -> ScadaParseResult:
-        return self._read_measurements_text(payload.decode("utf-8-sig"))
+        errors: list[Exception] = []
+        first_parse_error: ValueError | None = None
+        for encoding in ("utf-8-sig", "utf-16", "cp1252"):
+            try:
+                text = payload.decode(encoding)
+            except UnicodeDecodeError as exc:
+                errors.append(exc)
+                continue
+            try:
+                return self._read_measurements_text(text)
+            except ValueError as exc:
+                first_parse_error = first_parse_error or exc
+                errors.append(exc)
+        if first_parse_error is not None:
+            raise first_parse_error
+        raise ValueError(
+            "SCADA CSV could not be decoded and parsed as UTF-8, UTF-16, or CP1252"
+        ) from errors[-1]
 
     def _read_measurements_text(
         self,

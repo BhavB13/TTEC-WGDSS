@@ -97,6 +97,11 @@ class RiskHorizonAssessment:
     decision_deadline_minutes: int | None
     decision_deadline_at: datetime | None
     urgency: str
+    expected_online_capacity_mw: float
+    expected_available_capacity_mw: float | None
+    expected_spinning_reserve_mw: float | None
+    demand_ramp_mw_per_hour: float
+    capacity_projection_basis: str
 
 
 @dataclass(frozen=True)
@@ -162,13 +167,19 @@ class OperatingRiskResult:
     probability_method: str = "NORMAL_RESIDUAL_EXCEEDANCE"
     aggregation_method: str = "MAX_HORIZON_PROBABILITY"
     capacity_basis: str = "TRA_ONLY"
-    formula_version: str = "wgdss-operating-risk-v3"
-    engine_version: str = "operating-risk-v3"
+    expected_online_capacity_mw: float = 0.0
+    expected_available_capacity_mw: float | None = None
+    expected_spinning_reserve_mw: float | None = None
+    demand_ramp_mw_per_hour: float = 0.0
+    capacity_projection_basis: str = "CURRENT_SCADA_HELD_CONSTANT_NO_DISPATCH_PLAN"
+    risk_components: dict[str, float | str | bool | None] = field(default_factory=dict)
+    formula_version: str = "wgdss-operating-risk-v4"
+    engine_version: str = "operating-risk-v4"
     policy_status: str = "PROTOTYPE_UNCONFIRMED"
 
 
 class RiskProbabilityEngine:
-    ENGINE_VERSION = "operating-risk-v3.0"
+    ENGINE_VERSION = "operating-risk-v4.0"
 
     def __init__(self, policy: OperatingPolicy | None = None) -> None:
         self.policy = policy or OperatingPolicy.from_settings()
@@ -257,6 +268,9 @@ class RiskProbabilityEngine:
                 current_demand_mw=risk_input.current_demand_mw,
                 immediate_capacity_mw=immediate_capacity_mw,
                 reserve_margin_threshold=reserve_fraction,
+                online_capacity_mw=risk_input.online_capacity_mw,
+                available_capacity_mw=risk_input.available_capacity_mw,
+                spinning_reserve_mw=risk_input.spinning_reserve_mw,
             )
             for point in profile
         ]
@@ -400,6 +414,34 @@ class RiskProbabilityEngine:
             reducing_factors=reducing_factors,
             quality_warnings=quality_warnings,
             capacity_basis=capacity_basis,
+            expected_online_capacity_mw=float(selected["expected_online_capacity_mw"]),
+            expected_available_capacity_mw=(
+                float(selected["expected_available_capacity_mw"])
+                if selected["expected_available_capacity_mw"] is not None
+                else None
+            ),
+            expected_spinning_reserve_mw=(
+                float(selected["expected_spinning_reserve_mw"])
+                if selected["expected_spinning_reserve_mw"] is not None
+                else None
+            ),
+            demand_ramp_mw_per_hour=float(selected["demand_ramp_mw_per_hour"]),
+            capacity_projection_basis="CURRENT_SCADA_HELD_CONSTANT_NO_DISPATCH_PLAN",
+            risk_components={
+                "shortfall_probability": probability_score,
+                "forecast_uncertainty_mw": uncertainty,
+                "reserve_adjusted_headroom_mw": float(
+                    selected["reserve_adjusted_headroom_mw"]
+                ),
+                "demand_ramp_mw_per_hour": float(
+                    selected["demand_ramp_mw_per_hour"]
+                ),
+                "forecast_confidence": selected_point.confidence,
+                "data_quality_status": risk_input.data_quality_status,
+                "capacity_projection_basis": (
+                    "CURRENT_SCADA_HELD_CONSTANT_NO_DISPATCH_PLAN"
+                ),
+            },
             engine_version=self.ENGINE_VERSION,
             policy_status=self.policy.status,
         )
@@ -478,6 +520,9 @@ class RiskProbabilityEngine:
         current_demand_mw: float,
         immediate_capacity_mw: float,
         reserve_margin_threshold: float,
+        online_capacity_mw: float,
+        available_capacity_mw: float | None,
+        spinning_reserve_mw: float | None,
     ) -> dict[str, object]:
         required_reserve = (
             max(current_demand_mw, point.forecast_demand_mw)
@@ -519,6 +564,10 @@ class RiskProbabilityEngine:
         )
         conservative_demand = forecast_upper
         conservative_shortfall = max(0.0, conservative_demand - safe_capacity)
+        horizon_hours = max(point.horizon_minutes / 60.0, 1.0 / 60.0)
+        demand_ramp_mw_per_hour = (
+            point.forecast_demand_mw - current_demand_mw
+        ) / horizon_hours
         startup_lead_time = self._startup_lead_time(conservative_shortfall)
         deadline_minutes = (
             point.horizon_minutes - startup_lead_time
@@ -552,6 +601,13 @@ class RiskProbabilityEngine:
             "decision_deadline_minutes": deadline_minutes,
             "decision_deadline_at": deadline_at,
             "urgency": self._urgency(deadline_minutes, conservative_shortfall),
+            "expected_online_capacity_mw": online_capacity_mw,
+            "expected_available_capacity_mw": available_capacity_mw,
+            "expected_spinning_reserve_mw": spinning_reserve_mw,
+            "demand_ramp_mw_per_hour": demand_ramp_mw_per_hour,
+            "capacity_projection_basis": (
+                "CURRENT_SCADA_HELD_CONSTANT_NO_DISPATCH_PLAN"
+            ),
         }
 
     def _startup_lead_time(self, conservative_shortfall_mw: float) -> int:
@@ -615,6 +671,25 @@ class RiskProbabilityEngine:
                 deadline_at if isinstance(deadline_at, datetime) else None
             ),
             urgency=str(assessment["urgency"]),
+            expected_online_capacity_mw=float(
+                assessment["expected_online_capacity_mw"]
+            ),
+            expected_available_capacity_mw=(
+                float(assessment["expected_available_capacity_mw"])
+                if assessment["expected_available_capacity_mw"] is not None
+                else None
+            ),
+            expected_spinning_reserve_mw=(
+                float(assessment["expected_spinning_reserve_mw"])
+                if assessment["expected_spinning_reserve_mw"] is not None
+                else None
+            ),
+            demand_ramp_mw_per_hour=float(
+                assessment["demand_ramp_mw_per_hour"]
+            ),
+            capacity_projection_basis=str(
+                assessment["capacity_projection_basis"]
+            ),
         )
 
     def _severity_level(self, conservative_shortfall_mw: float) -> str:

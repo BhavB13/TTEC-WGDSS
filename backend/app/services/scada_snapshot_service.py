@@ -51,6 +51,9 @@ EXCLUDING_INTERVAL_ANOMALIES = {
     "non_positive_interval",
     "non_finite_average",
 }
+CLEANING_EXCLUDED_INTERVAL_ANOMALIES = {
+    "outside_expected_reporting_window",
+}
 SNAPSHOT_DEGRADING_ANOMALIES = {
     "min_value_greater_than_max_value",
     "average_below_minimum",
@@ -155,6 +158,11 @@ class ScadaSnapshotService:
                 _measurement_value(measurement, "source_filename") or "SCADA CSV"
             )
             anomaly_flags = _measurement_anomalies(measurement)
+
+            # Reporting-window spillovers remain in the raw provenance layer but
+            # never enter the cleaned hourly timeline.
+            if CLEANING_EXCLUDED_INTERVAL_ANOMALIES & anomaly_flags:
+                continue
 
             if not isinstance(end_time, datetime) or end_time <= start_time:
                 hour = _hour_bucket(start_time)

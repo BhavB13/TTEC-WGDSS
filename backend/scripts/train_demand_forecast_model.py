@@ -28,11 +28,18 @@ def main() -> int:
     )
     print(f"Demand forecast horizons evaluated: {len(result.results)}")
     for item in result.results:
+        baseline = (item.candidate_metrics or {}).get("baseline", {})
         print(
             f"{item.horizon_hours}h: {item.active_model} "
             f"{item.forecast_demand_mw:.2f} MW "
             f"+/- {item.forecast_uncertainty_mw:.2f} MW "
-            f"({item.mode})"
+            f"({item.mode}); "
+            f"MAE {item.metrics.mae:.2f}, "
+            f"RMSE {item.metrics.rmse:.2f}, "
+            f"MAPE {item.metrics.mape:.2f}%, "
+            f"peak error {item.metrics.peak_error_mw:.2f} MW; "
+            f"baseline {baseline.get('model', item.best_baseline)} "
+            f"MAE {float(baseline.get('mae', item.metrics.mae)):.2f}"
         )
     return 0
 

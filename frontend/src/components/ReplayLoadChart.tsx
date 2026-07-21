@@ -14,6 +14,11 @@ import type { ReplayDashboard } from "../types/dashboard";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Filler, Tooltip);
 
+const DEFAULT_SCALE_MIN_MW = 700;
+const DEFAULT_SCALE_MAX_MW = 1500;
+const SCALE_STEP_MW = 100;
+const SCALE_PADDING_RATIO = 0.06;
+
 export default function ReplayLoadChart({
   replay,
   theme = "dark",
@@ -52,6 +57,19 @@ export default function ReplayLoadChart({
   }, [points, replay.operational_history]);
   const hasRevealedGeneration = revealedGeneration.some(
     (value) => value !== null,
+  );
+  const yAxisBounds = useMemo(
+    () =>
+      getChartBounds([
+        ...points.flatMap((point) => [
+          point.forecast_demand_mw - point.uncertainty_mw,
+          point.forecast_demand_mw + point.uncertainty_mw,
+          point.historical_average_mw,
+          point.actual_demand_mw,
+        ]),
+        ...revealedGeneration,
+      ]),
+    [points, revealedGeneration],
   );
 
   const data = useMemo(() => {
@@ -134,20 +152,23 @@ export default function ReplayLoadChart({
   }, [compact, generationSeriesLabel, hasRevealedGeneration, points, revealedGeneration]);
 
   return (
-    <section className="flex h-full min-h-0 w-full min-w-0 flex-col rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
-      <div className="flex items-start justify-between gap-3">
-        <div>
+    <section className="grid h-full min-h-0 w-full min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">Full-Day Load Forecast</p>
           <h2 className="mt-0.5 text-sm font-semibold text-white">
             {usesTraGeneration
               ? "Demand forecast with revealed demand and TRA"
               : "Demand forecast with revealed demand and generation"}
           </h2>
-          <p className="mt-0.5 text-[9px] text-slate-400">
+          <p className="mt-0.5 break-words text-[9px] leading-tight text-slate-400">
             {replay.summary.forecast_model} · MAE {replay.summary.forecast_mae_mw.toFixed(1)} MW · {replay.summary.training_rows} prior rows
+            {replay.summary.forecast_trained_through
+              ? ` · data through ${formatHour(replay.summary.forecast_trained_through)}`
+              : ""}
           </p>
         </div>
-        <span className="rounded-full border border-cyan-500/25 bg-cyan-500/10 px-2 py-1 text-[9px] font-semibold text-cyan-100">
+        <span className="shrink-0 whitespace-nowrap rounded-full border border-cyan-500/25 bg-cyan-500/10 px-2 py-1 text-[9px] font-semibold text-cyan-100">
           Peak {replay.summary.current_day_peak_forecast_mw.toFixed(0)} MW
         </span>
       </div>
@@ -155,13 +176,26 @@ export default function ReplayLoadChart({
         generationLabel={usesTraGeneration ? "Generation (TRA)" : "Generation output"}
         showGeneration={hasRevealedGeneration}
       />
-      <div className="mt-1 min-h-[12rem] flex-1 cursor-crosshair">
+      <div
+        className={`relative mt-1.5 h-full min-w-0 cursor-crosshair overflow-hidden ${
+          compact ? "min-h-0" : "min-h-[16rem] xl:min-h-0"
+        }`}
+      >
         <Line
+          aria-label="Full-day demand forecast chart"
+          role="img"
+          className="!h-full !w-full"
+          style={{ width: "100%", height: "100%" }}
           data={data}
           options={{
             responsive: true,
             maintainAspectRatio: false,
+            resizeDelay: 80,
             animation: false,
+            normalized: true,
+            layout: {
+              padding: { top: 4, right: 8, bottom: 0, left: 2 },
+            },
             interaction: { mode: "index", intersect: false, axis: "x" },
             hover: { mode: "index", intersect: false },
             plugins: {
@@ -250,8 +284,34 @@ export default function ReplayLoadChart({
               },
             },
             scales: {
-              x: { ticks: { color: text, maxTicksLimit: 12, font: { size: 9 } }, grid: { color: grid } },
-              y: { min: 650, max: 1500, ticks: { color: text, callback: (value) => `${value} MW`, font: { size: 9 } }, grid: { color: grid } },
+              x: {
+                offset: true,
+                ticks: {
+                  autoSkip: true,
+                  autoSkipPadding: 10,
+                  color: text,
+                  maxRotation: 0,
+                  maxTicksLimit: compact ? 10 : 12,
+                  minRotation: 0,
+                  padding: 5,
+                  font: { size: compact ? 8 : 9 },
+                },
+                grid: { color: grid },
+              },
+              y: {
+                min: yAxisBounds.min,
+                max: yAxisBounds.max,
+                ticks: {
+                  autoSkip: true,
+                  color: text,
+                  maxTicksLimit: 10,
+                  padding: 5,
+                  stepSize: SCALE_STEP_MW,
+                  callback: (value) => `${value} MW`,
+                  font: { size: compact ? 8 : 9 },
+                },
+                grid: { color: grid },
+              },
             },
           }}
         />
@@ -270,7 +330,9 @@ function ChartKey({
   return (
     <div
       aria-label="Load forecast chart key"
-      className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-slate-700/50 pt-1.5 text-[10px] font-medium text-slate-300"
+      className={`mt-1.5 grid w-full min-w-0 grid-cols-2 items-stretch gap-1 border-t border-slate-700/50 pt-1.5 text-[9px] font-medium text-slate-300 ${
+        showGeneration ? "sm:grid-cols-5" : "sm:grid-cols-4"
+      }`}
     >
       <ChartKeyItem label="90% forecast range" variant="band" />
       <ChartKeyItem label="Forecast demand" variant="forecast" />
@@ -299,11 +361,37 @@ function ChartKeyItem({
   }[variant];
 
   return (
-    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+    <span className="inline-flex min-w-0 items-center justify-center gap-1.5 text-center leading-tight">
       <span aria-hidden="true" className={`w-4 shrink-0 ${indicatorClass}`} />
-      <span>{label}</span>
+      <span className="min-w-0 break-words">{label}</span>
     </span>
   );
+}
+
+function getChartBounds(values: Array<number | null | undefined>): { min: number; max: number } {
+  const finiteValues = values.filter(
+    (value): value is number => value != null && Number.isFinite(value),
+  );
+  if (finiteValues.length === 0) {
+    return { min: DEFAULT_SCALE_MIN_MW, max: DEFAULT_SCALE_MAX_MW };
+  }
+
+  const observedMin = Math.min(...finiteValues);
+  const observedMax = Math.max(...finiteValues);
+  const padding = Math.max(observedMax - observedMin, SCALE_STEP_MW) * SCALE_PADDING_RATIO;
+  return {
+    min:
+      observedMin < DEFAULT_SCALE_MIN_MW
+        ? Math.max(
+            0,
+            Math.floor((observedMin - padding) / SCALE_STEP_MW) * SCALE_STEP_MW,
+          )
+        : DEFAULT_SCALE_MIN_MW,
+    max:
+      observedMax > DEFAULT_SCALE_MAX_MW
+        ? Math.ceil((observedMax + padding) / SCALE_STEP_MW) * SCALE_STEP_MW
+        : DEFAULT_SCALE_MAX_MW,
+  };
 }
 
 function formatHour(value: string): string {

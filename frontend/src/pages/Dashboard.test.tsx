@@ -115,8 +115,8 @@ describe("Dashboard", () => {
 
     await user.click(screen.getByRole("button", { name: "Analytics" }));
     expect(screen.getByText("Calibration Summary")).toBeInTheDocument();
-    expect(screen.getByText("Model Status")).toBeInTheDocument();
-    expect(screen.getByText("Baseline Active")).toBeInTheDocument();
+    expect(screen.getByText("Forecast Assurance")).toBeInTheDocument();
+    expect(screen.getByText("Source / Hour Alignment")).toBeInTheDocument();
   });
 
   it("shows the API error state and retries", async () => {

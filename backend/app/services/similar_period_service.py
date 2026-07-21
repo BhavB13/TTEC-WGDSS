@@ -53,61 +53,48 @@ def similar_period_forecast(
         return SimilarPeriodForecast(None, None, ())
 
     query_context = calendar_context(query.target_timestamp, extra_holiday_dates)
-    ranked = sorted(
-        (
-            (
-                _distance(row, query, query_context.day_type, extra_holiday_dates),
-                row,
-            )
-            for row in candidates
-        ),
-        key=lambda item: (item[0], item[1].target_timestamp),
-    )
-
-    preferred = [
-        item
-        for item in ranked
+    same_hour = [
+        row
+        for row in candidates
         if _circular_hour_distance(
-            item[1].target_timestamp.hour,
+            row.target_timestamp.hour,
             query.target_timestamp.hour,
         )
         == 0
-        and _temperature_difference(item[1], query) <= TEMPERATURE_TOLERANCE_C
-        and calendar_context(
-            item[1].target_timestamp,
+    ]
+    same_hour_temperature = [
+        row
+        for row in same_hour
+        if _temperature_difference(row, query) <= TEMPERATURE_TOLERANCE_C
+    ]
+    preferred = [
+        row
+        for row in same_hour_temperature
+        if calendar_context(
+            row.target_timestamp,
             extra_holiday_dates,
         ).day_type
         == query_context.day_type
     ]
-    same_hour_temperature = [
-        item
-        for item in ranked
-        if _circular_hour_distance(
-            item[1].target_timestamp.hour,
-            query.target_timestamp.hour,
-        )
-        == 0
-        and _temperature_difference(item[1], query) <= TEMPERATURE_TOLERANCE_C
-    ]
-    same_hour = [
-        item
-        for item in ranked
-        if _circular_hour_distance(
-            item[1].target_timestamp.hour,
-            query.target_timestamp.hour,
-        )
-        == 0
-    ]
-    pool = (
+    candidate_pool = (
         preferred
         if len(preferred) >= 3
         else same_hour_temperature
         if len(same_hour_temperature) >= 3
         else same_hour
         if len(same_hour) >= 3
-        else ranked
+        else candidates
     )
-    selected = pool[: max(1, limit)]
+    selected = sorted(
+        (
+            (
+                _distance(row, query, query_context.day_type, extra_holiday_dates),
+                row,
+            )
+            for row in candidate_pool
+        ),
+        key=lambda item: (item[0], item[1].target_timestamp),
+    )[: max(1, limit)]
     weights = [math.exp(-min(20.0, distance)) for distance, _ in selected]
     if sum(weights) <= 0:
         weights = [1.0 for _ in selected]

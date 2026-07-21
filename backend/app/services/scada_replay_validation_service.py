@@ -275,7 +275,7 @@ class ScadaReplayValidationService:
     ) -> RiskReadinessSummary:
         horizons = {row.horizon_hours for row in forecasts}
         blockers: list[str] = []
-        missing_horizons = sorted({1, 2, 6} - horizons)
+        missing_horizons = sorted({1, 2, 3, 4, 5, 6} - horizons)
         if missing_horizons:
             blockers.append(
                 "missing cutoff-safe forecast horizon(s): "
@@ -285,14 +285,17 @@ class ScadaReplayValidationService:
             select(ScadaGridSnapshot)
             .where(
                 or_(
-                    ScadaGridSnapshot.available_at == source_cursor,
+                    ScadaGridSnapshot.available_at <= source_cursor,
                     (
                         ScadaGridSnapshot.available_at.is_(None)
-                        & (ScadaGridSnapshot.timestamp == source_cursor)
+                        & (ScadaGridSnapshot.timestamp <= source_cursor)
                     ),
                 )
             )
-            .order_by(ScadaGridSnapshot.timestamp.desc())
+            .order_by(
+                ScadaGridSnapshot.available_at.desc(),
+                ScadaGridSnapshot.timestamp.desc(),
+            )
         )
         if snapshot is None:
             blockers.append("missing SCADA snapshot for replay forecast cursor")

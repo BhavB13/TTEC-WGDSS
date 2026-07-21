@@ -8,7 +8,12 @@ from app.models.grid_data import GridData
 from app.models.historical_analysis import HistoricalAnalysis
 from app.models.probability_results import ProbabilityResult
 from app.models.recommendation import Recommendation
-from app.models.scada import ScadaGridSnapshot, ScadaImportRun, ScadaRawMeasurement
+from app.models.scada import (
+    ScadaArchiveImportRun,
+    ScadaGridSnapshot,
+    ScadaImportRun,
+    ScadaRawMeasurement,
+)
 from app.models.users import User
 from app.models.weather import Weather
 
@@ -25,6 +30,7 @@ __all__ = [
     "GridData",
     "HistoricalAnalysis",
     "ScadaTemperatureSample",
+    "ScadaArchiveImportRun",
     "ScadaImportRun",
     "ScadaRawMeasurement",
     "ScadaGridSnapshot",

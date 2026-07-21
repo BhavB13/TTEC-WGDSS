@@ -120,6 +120,13 @@ export interface DemandForecastHorizon {
   confidence_lower_mw?: number | null;
   confidence_upper_mw?: number | null;
   confidence_level?: number | null;
+  p10_demand_mw?: number | null;
+  p50_demand_mw?: number | null;
+  p90_demand_mw?: number | null;
+  training_start_at?: string | null;
+  training_end_at?: string | null;
+  feature_importance?: Record<string, number>;
+  fallback_reason?: string | null;
   temperature_load_correlation?: number | null;
   similar_period_forecast_mw?: number | null;
   similar_examples?: Array<{
@@ -154,6 +161,10 @@ export interface ModelStatus {
   train_row_count?: number | null;
   test_row_count?: number | null;
   candidate_metrics?: Record<string, unknown>;
+  feature_importance?: Record<string, number>;
+  fallback_reason?: string | null;
+  training_start_at?: string | null;
+  training_end_at?: string | null;
   metrics: {
     mae?: number | null;
     rmse?: number | null;
@@ -172,6 +183,7 @@ export interface ScadaStatus {
   source_system?: string;
   source_provider?: string;
   aggregation?: string;
+  observation_time_basis?: string;
   latest_snapshot?: string | null;
   available_at?: string | null;
   quality_status: string;
@@ -181,6 +193,23 @@ export interface ScadaStatus {
   anomaly_flags?: string[];
   field_provenance?: Record<string, unknown>;
   formula_version?: string | null;
+  archive_source?: string | null;
+  archive_import_status?: string | null;
+  archive_validation_status?: string | null;
+  archive_data_start_at?: string | null;
+  archive_data_end_at?: string | null;
+  period_reports?: Array<{
+    period: string;
+    validation_status: string;
+    missing_tags: string[];
+    clean_row_count: number;
+    out_of_period_rows: number;
+  }>;
+  known_data_gaps?: string[];
+  alignment_validation_status?: string | null;
+  alignment_selected_method?: string | null;
+  alignment_mismatch_count?: number | null;
+  alignment_method_metrics?: Array<Record<string, unknown>>;
 }
 
 export interface ReplayStatus {
@@ -249,6 +278,7 @@ export interface ReplayDashboard {
     baseline_mae_mw: number;
     residual_std_mw: number;
     training_rows: number;
+    forecast_trained_through?: string | null;
     weather_features: string[];
   };
 }
@@ -296,6 +326,11 @@ export interface RiskHorizon {
   decision_deadline_minutes?: number | null;
   decision_deadline_at?: string | null;
   urgency: string;
+  expected_online_capacity_mw?: number;
+  expected_available_capacity_mw?: number | null;
+  expected_spinning_reserve_mw?: number | null;
+  demand_ramp_mw_per_hour?: number;
+  capacity_projection_basis?: string;
 }
 
 export interface ProbabilityData {
@@ -340,6 +375,12 @@ export interface ProbabilityData {
   probability_method?: string;
   aggregation_method?: string;
   capacity_basis?: string;
+  expected_online_capacity_mw?: number;
+  expected_available_capacity_mw?: number | null;
+  expected_spinning_reserve_mw?: number | null;
+  demand_ramp_mw_per_hour?: number;
+  capacity_projection_basis?: string;
+  risk_components?: Record<string, number | string | boolean | null>;
   formula_version?: string;
 }
 

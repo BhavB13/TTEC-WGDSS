@@ -11,8 +11,8 @@ This upgrade moves WGDSS from mostly rule-based, mock-grid decision support towa
 
 ### Implemented Mathematical Hardening
 
-The current `demand-forecast-v3.0` implementation and
-`operating-risk-v3.0` engine add these integrity controls:
+The current `demand-forecast-v5.0` implementation and
+`operating-risk-v4.0` engine add these integrity controls:
 
 - Baseline and ML evaluation use chronological outer holdout data.
 - Baseline choice and ML parameter choice use expanding-window walk-forward validation inside the training period, leaving the outer holdout untouched until final evaluation.
@@ -20,10 +20,10 @@ The current `demand-forecast-v3.0` implementation and
 - Daily and weekly cycles use sine/cosine encoding so midnight and adjacent days remain mathematically close.
 - Model features retain target-hour forecast humidity, wind speed, precipitation probability, and current pressure instead of discarding fields already supplied by the weather providers.
 - Contemporaneous SCADA spinning reserve, available capacity, online capacity,
-  reserve margin, and online spare values are retained in the auditable dataset
-  and used by operating risk. June benchmarks showed that these dispatch-response
-  variables worsened demand generalization, so the default demand-model vector
-  excludes them.
+  reserve margin, and online spare values are retained in the auditable dataset,
+  used by operating risk, and supplied as current-time model context. Future
+  operating values remain forbidden. Chronological candidate selection decides
+  whether their learned contribution generalizes at each horizon.
 - Cooling-degree, temperature/humidity interaction, forecast-temperature delta, transformed rainfall, source-quality, and missing-value indicators are generated without changing the stored training schema.
 - Forecast weather is eligible for a training row only when its `created_at` timestamp proves it was available at the feature timestamp.
 - Bad SCADA feature/target rows are excluded from model fitting; weather-degraded rows remain usable with explicit missingness indicators.
@@ -34,18 +34,19 @@ The current `demand-forecast-v3.0` implementation and
 - Calendar context separates Trinidad weekdays, weekends, public holidays, and
   wet/dry seasons. Variable holiday dates can be supplied through
   `FORECAST_EXTRA_HOLIDAY_DATES`.
-- Forecast artifacts expose calibrated 90% bounds, per-horizon metrics,
+- Forecast artifacts expose residual-calibrated prototype bounds, per-horizon metrics,
   temperature/load correlation, comparable historical periods, and major
   contributing factors.
 - ML fitting uses a 14-day exponential recency half-life and lower weights for weather-degraded rows, allowing the model to adapt while keeping all split and feature chronology intact.
-- Forecast uncertainty is calibrated from residual standard deviation, MAE/RMSE floors, demand/horizon floors, and the empirical 90th-percentile absolute error.
+- Forecast uncertainty is calibrated from cutoff-safe expanding-window residuals,
+  while holdout interval coverage is retained as model evidence.
 - Historical replay/backtest forecasts cannot drive the live dashboard recommendation. Live use requires fresh generation time, fresh SCADA, good quality, and a forecast target strictly after the latest SCADA timestamp.
-- After model/baseline selection, the active method is refit on all eligible historical rows and applied to a separate inference row built from the newest good SCADA snapshot. The stored timestamp is therefore a genuine future 1h, 2h, or 6h target when current inference inputs exist.
+- After model/baseline selection, the active method is refit on all eligible historical rows and applied to a separate inference row built from the newest good SCADA snapshot. The stored timestamp is therefore a genuine future 1h through 6h target when current inference inputs exist.
 - When no archived provider-issued forecast is available, target-hour weather
   uses an explicitly labelled baseline built only from past observations. It is
   down-weighted and receives degraded uncertainty treatment; future observed
   weather is never used.
-- The offline replay pipeline stores exact-cursor 1h/2h/6h results. Dashboard
+- The offline replay pipeline stores exact-cursor 1h-through-6h results. Dashboard
   replay uses them only when the artifact cursor matches the simulated source
   cursor; later artifacts cannot drive an earlier replay decision.
 - The rule-based fallback now estimates demand transparently and sends it through the operating-risk probability engine; it no longer presents an arbitrary additive score as a probability.
@@ -70,7 +71,7 @@ The upgraded mathematical engine should answer:
 
 - What is current system demand?
 - What is the current reserve position?
-- What demand is likely in 1h, 2h, and 6h?
+- What demand is likely at each hourly horizon from 1h through 6h?
 - How uncertain is that forecast?
 - What is the probability that demand exceeds safe online capacity?
 - What operational recommendation should be shown?
@@ -955,6 +956,43 @@ Make the mathematical assumptions and operational limits clear.
 
 Low.
 
+## Irregular-Interval Alignment Audit (2026-07-20)
+
+The source exports are interval summaries and do not land exactly on civil-hour
+boundaries. WGDSS therefore preserves every raw `Start Time`, `End Time`, `Avg
+Value`, and `Quality`, then derives each civil-hour value using duration-weighted
+overlap:
+
+```text
+hour_value = sum(interval_avg * seconds_overlapping_hour)
+             / sum(seconds_overlapping_hour)
+```
+
+Nearest-row and midpoint assignment were evaluated but not selected. On the
+supplied June demand series, overlap weighting had the lowest mean chronological
+1h-through-6h baseline error (42.812 MW MAE and 53.464 MW RMSE) versus
+46.520/58.217 MW for containing-interval midpoint and 46.447/58.190 MW for
+nearest-interval midpoint. It also preserves the meaning of an interval average.
+
+Three clocks must never be conflated:
+
+1. **Observation bucket:** the civil hour represented by the derived value.
+2. **Source availability:** the exact end of the latest contributing interval.
+3. **Forecast issue:** the model clock when that source availability has passed.
+
+Historical replay display uses the observation bucket. Training and inference
+use exact source availability for as-of filtering, so post-event chart truth
+cannot leak into an earlier forecast. The importer/replay pipeline recomputes
+hourly demand from raw intervals and persists a reconciliation report with
+candidate errors, duplicate counts, matched hours, and mismatches above the
+0.1 MW numerical-integrity tolerance. That tolerance checks implementation
+consistency only; it is not a T&TEC operating threshold.
+
+The June 20 02:00 regression case combines 3,550 seconds at 1,028.35 MW and
+50 seconds at 1,000.70 MW, yielding 1,027.966 MW. A displayed value near
+745 MW indicates a replay fallback or timestamp-keying defect, not the source
+measurement.
+
 ## Implemented Backend Pipeline Status
 
 The backend now supports the following offline/prototype SCADA math pipeline:
@@ -976,8 +1014,9 @@ The backend now supports the following offline/prototype SCADA math pipeline:
    Spin, reserve, uncertainty, and startup constraints.
 
 Phases 1-7 are implemented as a historical-export prototype. This is not a live
-SCADA stream, the June model remains `PROTOTYPE`, and engineering review plus a
-representative 12-month dataset are required before operational trust.
+SCADA stream. The October 2025-June 2026 derived history and its June replay
+remain `PROTOTYPE`; engineering review plus a representative, quality-approved
+operating dataset are required before operational trust.
 
 ## Dashboard Snapshot Additions
 
@@ -993,7 +1032,7 @@ The dashboard snapshot may now include these optional objects:
         "forecast_demand_mw": 1040,
         "forecast_uncertainty_mw": 30,
         "model_name": "persistence",
-        "model_version": "demand-forecast-v3.0",
+        "model_version": "demand-forecast-v5.0",
         "baseline_name": "persistence",
         "baseline_forecast_mw": 1030,
         "quality_status": "BASELINE_ACTIVE"
@@ -1002,7 +1041,7 @@ The dashboard snapshot may now include these optional objects:
   },
   "model_status": {
     "active_model": "persistence",
-    "model_version": "demand-forecast-v3.0",
+    "model_version": "demand-forecast-v5.0",
     "mode": "BASELINE_ACTIVE",
     "trained_through": "2026-06-30T09:00:00Z",
     "metrics": {

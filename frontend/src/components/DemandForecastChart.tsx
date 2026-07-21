@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import {
   CategoryScale,
   Chart as ChartJS,
+  Filler,
   LineElement,
   Legend,
   LinearScale,
@@ -17,7 +18,7 @@ import type {
   ProbabilityData,
 } from "../types/dashboard";
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend);
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Filler, Tooltip, Legend);
 
 interface DemandForecastChartProps {
   gridStatus: GridStatus;
@@ -125,7 +126,7 @@ export default function DemandForecastChart({
         (hour) => normalizeHour(hour) === targetHour,
       );
       if (targetIndex >= 0) {
-        data[targetIndex] = horizon.forecast_demand_mw;
+        data[targetIndex] = horizon.p50_demand_mw ?? horizon.forecast_demand_mw;
       }
     }
 
@@ -135,6 +136,33 @@ export default function DemandForecastChart({
     )
       ? data
       : null;
+  }, [displayedDayEstimate, gridStatus.current_demand_mw, validatedModelHorizons]);
+  const modelBounds = useMemo(() => {
+    if (!displayedDayEstimate || validatedModelHorizons.length === 0) {
+      return null;
+    }
+    const lower = displayedDayEstimate.estimatedDemand.map(() => null as number | null);
+    const upper = displayedDayEstimate.estimatedDemand.map(() => null as number | null);
+    lower[displayedDayEstimate.currentIndex] = gridStatus.current_demand_mw;
+    upper[displayedDayEstimate.currentIndex] = gridStatus.current_demand_mw;
+    for (const horizon of validatedModelHorizons) {
+      const targetHour = getTrinidadHourAt(horizon.forecast_timestamp);
+      const targetIndex = displayedDayEstimate.hours.findIndex(
+        (hour) => normalizeHour(hour) === targetHour,
+      );
+      if (targetIndex < 0) {
+        continue;
+      }
+      lower[targetIndex] =
+        horizon.p10_demand_mw ??
+        horizon.confidence_lower_mw ??
+        Math.max(0, horizon.forecast_demand_mw - 1.2816 * horizon.forecast_uncertainty_mw);
+      upper[targetIndex] =
+        horizon.p90_demand_mw ??
+        horizon.confidence_upper_mw ??
+        horizon.forecast_demand_mw + 1.2816 * horizon.forecast_uncertainty_mw;
+    }
+    return lower.some((value) => value !== null) ? { lower, upper } : null;
   }, [displayedDayEstimate, gridStatus.current_demand_mw, validatedModelHorizons]);
 
   const chartConfig = useMemo(() => {
@@ -198,10 +226,35 @@ export default function DemandForecastChart({
           },
           ...(modelOverlay
             ? [
+                ...(modelBounds
+                  ? [
+                      {
+                        label: "_P10",
+                        data: modelBounds.lower,
+                        borderColor: "rgba(167, 139, 250, 0)",
+                        backgroundColor: "rgba(167, 139, 250, 0)",
+                        borderWidth: 0,
+                        pointRadius: 0,
+                        spanGaps: true,
+                        yAxisID: "demand",
+                      },
+                      {
+                        label: "P10-P90 Forecast Band",
+                        data: modelBounds.upper,
+                        borderColor: "rgba(167, 139, 250, 0.3)",
+                        backgroundColor: "rgba(167, 139, 250, 0.12)",
+                        borderWidth: 1,
+                        pointRadius: 0,
+                        fill: "-1",
+                        spanGaps: true,
+                        yAxisID: "demand",
+                      },
+                    ]
+                  : []),
                 {
                   label: modelIsActive
-                    ? "Validated ML Forecast"
-                    : "Validated Baseline Forecast",
+                    ? "P50 ML Forecast"
+                    : "P50 Baseline Forecast",
                   data: modelOverlay,
                   borderColor: "rgba(167, 139, 250, 1)",
                   backgroundColor: "rgba(167, 139, 250, 0.18)",
@@ -269,6 +322,7 @@ export default function DemandForecastChart({
     gridStatus.current_generation_mw,
     generationSeriesLabel,
     modelIsActive,
+    modelBounds,
     modelOverlay,
     probability.forecast_demand_30m,
     probability.forecast_demand_60m,
@@ -291,7 +345,13 @@ export default function DemandForecastChart({
             font: {
               size: 9,
             },
+            filter: (item: { text: string }) => item.text !== "_P10",
           },
+        },
+        tooltip: {
+          mode: "index" as const,
+          intersect: false,
+          filter: (item: { dataset: { label?: string } }) => item.dataset.label !== "_P10",
         },
       },
       scales: displayedDayEstimate

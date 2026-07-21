@@ -323,6 +323,84 @@ def test_interval_overlap_resampling_weights_irregular_exports_by_timestamp(tmp_
     assert len(provenance["current_demand_mw"]["source_intervals"]) == 2
 
 
+def test_june_20_0200_irregular_demand_interval_is_overlap_weighted(tmp_path):
+    session_factory = _session_factory(tmp_path)
+    import_run_id = _seed_import_run(session_factory)
+    hour = datetime(2026, 6, 20, 2, tzinfo=TRINIDAD_TZ)
+    with session_factory() as session:
+        _add_measurement(
+            session,
+            import_run_id,
+            "PTL132 GENERATION TOTALS",
+            datetime(2026, 6, 20, 1, 40, 29, tzinfo=TRINIDAD_TZ),
+            1028.35,
+            quality="Other",
+            end_time=datetime(2026, 6, 20, 2, 59, 10, tzinfo=TRINIDAD_TZ),
+        )
+        _add_measurement(
+            session,
+            import_run_id,
+            "PTL132 GENERATION TOTALS",
+            datetime(2026, 6, 20, 2, 59, 10, tzinfo=TRINIDAD_TZ),
+            1000.70,
+            quality="Other",
+            pen_index=2,
+            end_time=datetime(2026, 6, 20, 4, 17, 51, tzinfo=TRINIDAD_TZ),
+        )
+        for pen_index, (tag, value) in enumerate(
+            (
+                ("MHO132 AVERAGE AMBIENT TEMPERATURE", 27.0),
+                ("GSYS SYSTEM_CORRECTED_SPIN_TOTAL", 120.0),
+                ("GSYS SYSTEM_AVAIL_TOTAL", 1500.0),
+            ),
+            start=3,
+        ):
+            _add_measurement(
+                session,
+                import_run_id,
+                tag,
+                hour,
+                value,
+                pen_index=pen_index,
+                end_time=hour + timedelta(hours=1),
+            )
+        _add_measurement(
+            session,
+            import_run_id,
+            "GSYS SYSTEM_ONLN_TOTAL",
+            datetime(2026, 6, 20, 0, 59, tzinfo=TRINIDAD_TZ),
+            1124.1,
+            pen_index=6,
+            end_time=datetime(2026, 6, 20, 2, 2, tzinfo=TRINIDAD_TZ),
+        )
+        _add_measurement(
+            session,
+            import_run_id,
+            "GSYS SYSTEM_ONLN_TOTAL",
+            datetime(2026, 6, 20, 2, 2, tzinfo=TRINIDAD_TZ),
+            1106.0,
+            pen_index=7,
+            end_time=datetime(2026, 6, 20, 3, 5, tzinfo=TRINIDAD_TZ),
+        )
+        session.commit()
+
+    ScadaSnapshotService(session_factory=session_factory).build_hourly_snapshots(
+        import_run_id=import_run_id
+    )
+
+    with session_factory() as session:
+        snapshot = session.scalar(
+            select(ScadaGridSnapshot).where(
+                ScadaGridSnapshot.timestamp == hour.replace(tzinfo=None)
+            )
+        )
+    assert snapshot is not None
+    assert snapshot.current_demand_mw == 1027.966
+    assert snapshot.online_capacity_mw == 1106.6033
+    assert snapshot.timestamp == datetime(2026, 6, 20, 2)
+    assert snapshot.available_at == datetime(2026, 6, 20, 4, 17, 51)
+
+
 def test_other_quality_is_preserved_as_conditionally_usable_not_good(tmp_path):
     session_factory = _session_factory(tmp_path)
     import_run_id = _seed_import_run(session_factory)

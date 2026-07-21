@@ -6,10 +6,52 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 
+class ScadaArchiveImportRun(Base):
+    __tablename__ = "scada_archive_import_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    file_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    source_row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    normalized_row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    duplicate_row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    out_of_period_row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    import_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="PENDING"
+    )
+    data_start_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    data_end_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    validation_report: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    import_runs: Mapped[list["ScadaImportRun"]] = relationship(
+        back_populates="archive_import_run"
+    )
+
+    __table_args__ = (
+        Index("idx_scada_archive_import_runs_source_hash", "source_hash"),
+        Index("idx_scada_archive_import_runs_imported_at", "imported_at"),
+    )
+
+
 class ScadaImportRun(Base):
     __tablename__ = "scada_import_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    archive_import_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("scada_archive_import_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     source_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     source_path: Mapped[str] = mapped_column(String(500), nullable=False)
     source_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
@@ -28,9 +70,13 @@ class ScadaImportRun(Base):
         back_populates="import_run",
         cascade="all, delete-orphan",
     )
+    archive_import_run: Mapped[ScadaArchiveImportRun | None] = relationship(
+        back_populates="import_runs"
+    )
 
     __table_args__ = (
         Index("idx_scada_import_runs_source_hash", "source_hash"),
+        Index("idx_scada_import_runs_archive", "archive_import_run_id"),
         Index("idx_scada_import_runs_imported_at", "imported_at"),
     )
 

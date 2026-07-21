@@ -417,7 +417,7 @@ async def test_dashboard_snapshot_exposes_model_scada_status_and_operating_risk(
     assert snapshot.model_status.metrics.mae == 10
     assert snapshot.scada_status is not None
     assert snapshot.scada_status.quality_status == "GOOD"
-    assert snapshot.probability.engine_version == "operating-risk-v3.0"
+    assert snapshot.probability.engine_version == "operating-risk-v4.0"
     assert snapshot.probability.risk_profile
     assert snapshot.probability.probability_method == "NORMAL_RESIDUAL_EXCEEDANCE"
     assert snapshot.probability.policy_status == "PROTOTYPE_UNCONFIRMED"

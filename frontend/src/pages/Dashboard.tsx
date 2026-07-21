@@ -1019,7 +1019,7 @@ function DemandForecastTab({
   const demandDelta60 = probability.forecast_demand_60m - grid.current_demand_mw;
 
   return (
-    <div className="grid h-full min-h-0 w-full min-w-0 grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)]">
+    <div className="grid h-full min-h-0 w-full min-w-0 grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1fr)_clamp(15rem,25%,18rem)]">
       {replay ? (
         <ReplayLoadChart replay={replay} theme={theme} />
       ) : (
@@ -1149,20 +1149,24 @@ function RiskGaugeTab({
             />
             <MiniMetric label="Decision Deadline" value={deadline} />
             <MiniMetric
-              label="Severity"
-              value={formatEnumLabel(probability.severity_level ?? "NONE")}
+              label="Expected TRA"
+              value={`${(probability.expected_online_capacity_mw ?? probability.immediate_online_capacity_mw ?? 0).toFixed(0)} MW`}
             />
             <MiniMetric
               label="Forecast Confidence"
               value={`${((probability.decision_confidence ?? 0) * 100).toFixed(1)}%`}
             />
             <MiniMetric
-              label="Recommended Capacity"
-              value={`${(probability.recommended_capacity_mw ?? 0).toFixed(0)} MW`}
+              label="Corrected Spin"
+              value={
+                probability.expected_spinning_reserve_mw == null
+                  ? "Unavailable"
+                  : `${probability.expected_spinning_reserve_mw.toFixed(0)} MW`
+              }
             />
             <MiniMetric
-              label="Action"
-              value={probability.decision_action ?? "NO ACTION"}
+              label="Demand Ramp"
+              value={`${(probability.demand_ramp_mw_per_hour ?? 0) >= 0 ? "+" : ""}${(probability.demand_ramp_mw_per_hour ?? 0).toFixed(1)} MW/h`}
             />
           </div>
         </PanelCard>
@@ -1570,46 +1574,74 @@ function ModelStatusPanel({
   scadaStatus: ScadaStatus | null;
 }) {
   const primaryHorizon = demandForecast?.horizons?.[0] ?? null;
+  const accuracyRows = [...(demandForecast?.horizons ?? [])].sort(
+    (left, right) => left.horizon_hours - right.horizon_hours,
+  );
+  const knownGaps = scadaStatus?.known_data_gaps ?? [];
+  const topFeatures = Object.entries(modelStatus?.feature_importance ?? {})
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 3);
 
   return (
-    <PanelCard title="Model Status" className="min-h-0">
-      <div className="grid h-full min-h-0 auto-rows-fr grid-cols-2 gap-2">
-        <MiniMetric
-          label="Mode"
-          value={modelStatus?.mode ? formatStatusLabel(modelStatus.mode) : "Unavailable"}
-        />
-        <MiniMetric
-          label="Active Model"
-          value={modelStatus?.active_model ?? "Unavailable"}
-        />
-        <MiniMetric
-          label="1h Forecast"
-          value={
-            primaryHorizon
-              ? `${primaryHorizon.forecast_demand_mw.toFixed(0)} MW`
-              : "Unavailable"
-          }
-        />
-        <MiniMetric
-          label="Uncertainty"
-          value={
-            primaryHorizon
-              ? `±${primaryHorizon.forecast_uncertainty_mw.toFixed(0)} MW`
-              : "Unavailable"
-          }
-        />
-        <MiniMetric
-          label="SCADA Snapshot"
-          value={
-            scadaStatus?.latest_snapshot
-              ? formatShortDateTime(scadaStatus.latest_snapshot)
-              : "Unavailable"
-          }
-        />
-        <MiniMetric
-          label="SCADA Quality"
-          value={scadaStatus?.quality_status ?? "Unavailable"}
-        />
+    <PanelCard title="Forecast Assurance" className="min-h-0">
+      <div className="grid h-full min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] gap-1.5">
+        <div className="grid grid-cols-2 gap-1.5">
+          <MiniMetric
+            label="Model / Version"
+            value={modelStatus?.model_version ?? modelStatus?.active_model ?? "Unavailable"}
+          />
+          <MiniMetric
+            label="Data Mode"
+            value={scadaStatus?.mode ? formatStatusLabel(scadaStatus.mode) : "Unavailable"}
+          />
+          <MiniMetric
+            label="1h P50 / P10-P90"
+            value={
+              primaryHorizon
+                ? `${(primaryHorizon.p50_demand_mw ?? primaryHorizon.forecast_demand_mw).toFixed(0)} MW · ${(primaryHorizon.p10_demand_mw ?? primaryHorizon.confidence_lower_mw ?? 0).toFixed(0)}-${(primaryHorizon.p90_demand_mw ?? primaryHorizon.confidence_upper_mw ?? 0).toFixed(0)}`
+                : "Unavailable"
+            }
+          />
+          <MiniMetric
+            label="Source / Hour Alignment"
+            value={
+              scadaStatus?.alignment_validation_status
+                ? `${scadaStatus.alignment_validation_status} · ${scadaStatus.alignment_mismatch_count ?? 0} mismatch${(scadaStatus.alignment_mismatch_count ?? 0) === 1 ? "" : "es"}`
+                : scadaStatus?.archive_validation_status ?? scadaStatus?.quality_status ?? "Unavailable"
+            }
+          />
+        </div>
+
+        {knownGaps.length ? (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[9px] leading-snug text-amber-100">
+            Historical gap: {knownGaps.join("; ")}. Demand rows remain lower-weight; capacity risk is unavailable where TRA is absent.
+          </div>
+        ) : null}
+
+        <div className="min-h-0 overflow-auto rounded-lg border border-slate-800 bg-slate-950/45">
+          <div className="grid grid-cols-[0.55fr_1.25fr_repeat(3,0.8fr)] gap-1 border-b border-slate-800 px-2 py-1 text-center text-[8px] uppercase tracking-[0.08em] text-slate-500">
+            <span>Horizon</span><span>Active</span><span>MAE</span><span>RMSE</span><span>MAPE</span>
+          </div>
+          {accuracyRows.length ? accuracyRows.map((row) => (
+            <div key={row.horizon_hours} className="grid grid-cols-[0.55fr_1.25fr_repeat(3,0.8fr)] gap-1 border-b border-slate-900 px-2 py-1 text-center text-[9px] text-slate-200 last:border-0">
+              <span>+{row.horizon_hours}h</span>
+              <span className="truncate" title={row.model_name}>{row.model_name}</span>
+              <span>{row.mae?.toFixed(1) ?? "--"}</span>
+              <span>{row.rmse?.toFixed(1) ?? "--"}</span>
+              <span>{row.mape?.toFixed(1) ?? "--"}%</span>
+            </div>
+          )) : (
+            <p className="p-2 text-center text-[10px] text-slate-500">Horizon metrics unavailable.</p>
+          )}
+        </div>
+
+        <div className="text-[9px] leading-snug text-slate-500">
+          {topFeatures.length
+            ? `Top model evidence: ${topFeatures.map(([name, value]) => `${name.replace(/_/g, " ")} ${(value * 100).toFixed(0)}%`).join(" · ")}`
+            : modelStatus?.fallback_reason ?? "Feature evidence unavailable."}
+          {scadaStatus?.latest_snapshot ? ` · Snapshot ${formatShortDateTime(scadaStatus.latest_snapshot)}` : ""}
+          {scadaStatus?.available_at ? ` · Finalized ${formatShortDateTime(scadaStatus.available_at)}` : ""}
+        </div>
       </div>
     </PanelCard>
   );

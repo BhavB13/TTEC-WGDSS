@@ -31,6 +31,13 @@ class DemandForecastHorizonResponse(BaseModel):
     confidence_lower_mw: float | None = None
     confidence_upper_mw: float | None = None
     confidence_level: float | None = None
+    p10_demand_mw: float | None = None
+    p50_demand_mw: float | None = None
+    p90_demand_mw: float | None = None
+    training_start_at: datetime | None = None
+    training_end_at: datetime | None = None
+    feature_importance: dict[str, float] = Field(default_factory=dict)
+    fallback_reason: str | None = None
     temperature_load_correlation: float | None = None
     similar_period_forecast_mw: float | None = None
     similar_examples: list[SimilarHistoricalExampleResponse] = Field(
@@ -41,6 +48,7 @@ class DemandForecastHorizonResponse(BaseModel):
     rmse: float | None = None
     mape: float | None = None
     residual_std: float | None = None
+    peak_error_mw: float | None = None
 
 
 class DemandForecastBundleResponse(BaseModel):
@@ -52,6 +60,7 @@ class ModelMetricsResponse(BaseModel):
     rmse: float | None = None
     mape: float | None = None
     residual_std: float | None = None
+    peak_error_mw: float | None = None
 
 
 class BaselineComparisonResponse(BaseModel):
@@ -71,10 +80,22 @@ class ModelStatusResponse(BaseModel):
     train_row_count: int | None = None
     test_row_count: int | None = None
     candidate_metrics: dict[str, object] = Field(default_factory=dict)
+    feature_importance: dict[str, float] = Field(default_factory=dict)
+    fallback_reason: str | None = None
+    training_start_at: datetime | None = None
+    training_end_at: datetime | None = None
     metrics: ModelMetricsResponse = Field(default_factory=ModelMetricsResponse)
     baseline_comparison: BaselineComparisonResponse = Field(
         default_factory=BaselineComparisonResponse
     )
+
+
+class ScadaPeriodStatusResponse(BaseModel):
+    period: str
+    validation_status: str
+    missing_tags: list[str] = Field(default_factory=list)
+    clean_row_count: int = 0
+    out_of_period_rows: int = 0
 
 
 class ScadaStatusResponse(BaseModel):
@@ -83,6 +104,7 @@ class ScadaStatusResponse(BaseModel):
     source_system: str = "AspenTech OSI trend export"
     source_provider: str = "csv_trend_export"
     aggregation: str = "interval_overlap_hourly"
+    observation_time_basis: str = "civil_hour_start"
     latest_snapshot: datetime | None = None
     available_at: datetime | None = None
     quality_status: str = "UNAVAILABLE"
@@ -92,3 +114,14 @@ class ScadaStatusResponse(BaseModel):
     anomaly_flags: list[str] = Field(default_factory=list)
     field_provenance: dict[str, object] = Field(default_factory=dict)
     formula_version: str | None = None
+    archive_source: str | None = None
+    archive_import_status: str | None = None
+    archive_validation_status: str | None = None
+    archive_data_start_at: datetime | None = None
+    archive_data_end_at: datetime | None = None
+    period_reports: list[ScadaPeriodStatusResponse] = Field(default_factory=list)
+    known_data_gaps: list[str] = Field(default_factory=list)
+    alignment_validation_status: str | None = None
+    alignment_selected_method: str | None = None
+    alignment_mismatch_count: int | None = None
+    alignment_method_metrics: list[dict[str, object]] = Field(default_factory=list)

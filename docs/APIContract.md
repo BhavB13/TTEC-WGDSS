@@ -73,9 +73,9 @@ The response contains:
         "forecast_uncertainty_mw": 30.9,
         "confidence_lower_mw": 1223.6,
         "confidence_upper_mw": 1325.2,
-        "confidence_level": 0.9,
+        "confidence_level": 0.8,
         "model_name": "ExtraTreesRegressor+SimilarPeriods",
-        "model_version": "demand-forecast-v3.0",
+        "model_version": "demand-forecast-v5.0",
         "mae": 17.9,
         "rmse": 23.1,
         "mape": 1.5,
@@ -88,10 +88,10 @@ The response contains:
   },
   "model_status": {
     "active_model": "persistence",
-    "model_version": "demand-forecast-v3.0",
+    "model_version": "demand-forecast-v5.0",
     "mode": "BASELINE_ACTIVE",
     "trained_through": "2026-06-30T09:00:00Z",
-    "feature_profile": "demand_weather_similarity_v3",
+    "feature_profile": "demand_weather_grid_state_v5",
     "validation_status": "PROTOTYPE",
     "training_span_hours": 550,
     "train_row_count": 440,
@@ -101,6 +101,7 @@ The response contains:
       "mae": 10,
       "rmse": 12,
       "mape": 1.2,
+      "peak_error_mw": 18.4,
       "residual_std": 30
     },
     "baseline_comparison": {

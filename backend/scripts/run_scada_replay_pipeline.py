@@ -23,6 +23,10 @@ from app.services.scada_import_service import (
     ScadaImportService,
     parse_reporting_datetime,
 )
+from app.services.scada_alignment_service import (
+    ScadaAlignmentService,
+    ScadaAlignmentValidationReport,
+)
 from app.services.scada_archive_service import ScadaArchiveReport, ScadaArchiveService
 from app.services.scada_replay_validation_service import (
     ScadaReplayValidationReport,
@@ -51,6 +55,7 @@ class ScadaReplayPipelineResult:
     validation_report: ScadaReplayValidationReport
     weather_backfill_result: HistoricalWeatherBackfillResult | None = None
     replay_forecast_result: ScadaReplayForecastRefreshResult | None = None
+    alignment_report: ScadaAlignmentValidationReport | None = None
 
     @property
     def files_imported(self) -> int:
@@ -98,16 +103,24 @@ def run_pipeline(
         raise ValueError(
             "SCADA replay preflight failed: " + "; ".join(preflight_report.blockers)
         )
+    archive_import_run_id: int | None = None
     if archive_report is not None:
-        import_results = list(
-            archive_service.import_archive(paths[0]).import_results
-        )
+        archive_import_result = archive_service.import_archive(paths[0])
+        import_results = list(archive_import_result.import_results)
+        archive_import_run_id = archive_import_result.archive_import_run_id
     else:
         import_results = [import_service.import_csv(path) for path in paths]
 
     snapshot_result = ScadaSnapshotService(
         session_factory=session_factory
     ).build_hourly_snapshots(import_run_id=None, replace_existing=True)
+    alignment_report = (
+        ScadaAlignmentService(session_factory=session_factory).validate_archive_import(
+            archive_import_run_id
+        )
+        if archive_import_run_id is not None
+        else None
+    )
     weather_backfill_result = (
         HistoricalWeatherBackfillService(
             session_factory=session_factory
@@ -137,6 +150,7 @@ def run_pipeline(
         validation_report=validation_report,
         weather_backfill_result=weather_backfill_result,
         replay_forecast_result=replay_forecast_result,
+        alignment_report=alignment_report,
     )
 
 
@@ -188,6 +202,27 @@ def format_summary(result: ScadaReplayPipelineResult) -> str:
     ]
     if result.preflight_report.warnings:
         lines.append("preflight warnings: " + "; ".join(result.preflight_report.warnings))
+    if result.alignment_report is not None:
+        lines.extend(
+            [
+                (
+                    "alignment validation: "
+                    f"{result.alignment_report.validation_status} "
+                    f"({result.alignment_report.selected_method})"
+                ),
+                (
+                    "source/hour reconciliation: "
+                    f"{result.alignment_report.reconciled_hours} matched, "
+                    f"{result.alignment_report.mismatch_count} mismatched"
+                ),
+            ]
+        )
+        for method in result.alignment_report.method_metrics:
+            lines.append(
+                f"alignment candidate {method.method}: "
+                f"mean MAE={method.mean_mae_mw:.4f}, "
+                f"mean RMSE={method.mean_rmse_mw:.4f}"
+            )
     if result.weather_backfill_result is not None:
         lines.append(
             "historical weather rows stored: "

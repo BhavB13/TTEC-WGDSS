@@ -43,12 +43,24 @@ class ForecastTrainingRow(Base):
     lag_24h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     lag_48h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     lag_168h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    target_lag_24h_demand_mw: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    target_lag_48h_demand_mw: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    target_lag_168h_demand_mw: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
     rolling_3h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     rolling_6h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     rolling_12h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     rolling_24h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     rolling_168h_demand_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     same_hour_7d_average_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    target_same_hour_7d_average_mw: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
     demand_volatility_6h_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     demand_rate_1h_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
     demand_rate_3h_mw: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -163,7 +175,18 @@ class DemandForecastResult(Base):
     candidate_metrics: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     confidence_lower_mw: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     confidence_upper_mw: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    confidence_level: Mapped[float] = mapped_column(Float, nullable=False, default=0.9)
+    confidence_level: Mapped[float] = mapped_column(Float, nullable=False, default=0.8)
+    p10_demand_mw: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    p50_demand_mw: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    p90_demand_mw: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    training_start_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    training_end_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    feature_importance: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    fallback_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     temperature_load_correlation: Mapped[float | None] = mapped_column(
         Float,
         nullable=True,
@@ -234,7 +257,18 @@ class ScadaReplayForecastResult(Base):
     candidate_metrics: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     confidence_lower_mw: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     confidence_upper_mw: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    confidence_level: Mapped[float] = mapped_column(Float, nullable=False, default=0.9)
+    confidence_level: Mapped[float] = mapped_column(Float, nullable=False, default=0.8)
+    p10_demand_mw: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    p50_demand_mw: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    p90_demand_mw: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    training_start_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    training_end_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    feature_importance: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    fallback_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     temperature_load_correlation: Mapped[float | None] = mapped_column(
         Float,
         nullable=True,

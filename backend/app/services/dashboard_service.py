@@ -281,6 +281,12 @@ class DashboardService:
             "probability_method",
             "aggregation_method",
             "capacity_basis",
+            "expected_online_capacity_mw",
+            "expected_available_capacity_mw",
+            "expected_spinning_reserve_mw",
+            "demand_ramp_mw_per_hour",
+            "capacity_projection_basis",
+            "risk_components",
             "formula_version",
         )
         return {field: payload[field] for field in fields if field in payload}

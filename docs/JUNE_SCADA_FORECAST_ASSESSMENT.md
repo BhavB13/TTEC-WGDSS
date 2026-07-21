@@ -70,15 +70,16 @@ issued at or before `t` are eligible.
 | TA, TRA, and Spin at `t` and earlier | Challenger only | Yes | Future operating values are forbidden |
 | TA, TRA, Spin, demand, or actual weather at `t+h` | No | No | Target leakage |
 
-TRA has a 0.959 correlation with demand in this archive because online plant is
-dispatched in response to load. Although current TRA is technically known, it
-can teach a demand model an operational response rather than a causal demand
-driver. TA, TRA, and Spin are therefore retained as timestamped context and as
-explicit risk inputs, but are not in the default demand feature profile.
+TRA has a 0.959 correlation with demand in the June archive because online
+plant is dispatched in response to load. Current TA, TRA, and Spin are now
+retained as timestamped model context together with their one-hour lags/rates
+and demand-normalized ratios. They remain operational-response variables, not
+causal demand drivers, so future values are forbidden and model activation is
+still controlled by chronological baseline comparison.
 
-All three horizons use the same availability-safe source fields but train and
-select independently. The target clock and target-weather baseline are computed
-for each horizon. The vector includes short/long demand lags and rates,
+All six 1-6 hour horizons use the same availability-safe source fields but train
+and select independently. The target clock and target-weather baseline are
+computed for each horizon. The vector includes short/long demand lags and rates,
 current/forecast cooling degree, temperature-humidity interaction, explicit
 cooling-degree x current-load interaction, and temperature-rate x demand-rate
 interaction. At 1h the recent trajectory can dominate; at 2h/6h each separate
@@ -119,6 +120,58 @@ This is a prototype result from less than one month, not a production claim.
 The active model for each horizon must beat the selected chronological baseline
 on both MAE and RMSE before replacing it.
 
+## July 21, 2026 V5 Hardening Benchmark
+
+The current derived database combines historical export snapshots from October
+2025 through June 2026: 6,554 hourly snapshots and 26,478 direct 1-6 hour rows.
+It remains replay/calibration evidence, not a live historian feed.
+
+V5 corrected a target-alignment defect in the seasonal baselines. For an `h`
+hour forecast, same-hour-yesterday must read demand at `target_timestamp - 24h`,
+not `feature_timestamp - 24h`. The former error was small at 1h but increasingly
+misaligned at longer horizons. V5 stores target-relative 24h, 48h, 168h, and
+seven-day same-hour history separately from issue-time load-state lags, with an
+availability check on every source interval.
+
+The untouched newest 20% chronological holdout produced:
+
+| Horizon | V4 active | V4 MAE / RMSE | V5 active | V5 MAE / RMSE | Decision |
+|---:|---|---:|---|---:|---|
+| 1h | Similar periods | 22.50 / 30.76 MW | Similar periods | 22.51 / 30.76 MW | Keep baseline |
+| 2h | Similar periods | 23.32 / 31.26 MW | Similar periods | 23.29 / 31.22 MW | Keep baseline |
+| 3h | Similar periods | 25.18 / 33.90 MW | Similar periods | 25.22 / 33.92 MW | Keep baseline |
+| 4h | Similar periods | 26.48 / 35.60 MW | Similar periods | 26.53 / 35.66 MW | Keep baseline |
+| 5h | Similar periods | 27.48 / 36.76 MW | Similar periods | 27.56 / 36.83 MW | Keep baseline |
+| 6h | Random Forest + similar periods | 26.50 / 35.09 MW | Extra Trees + 25% similar periods | 24.18 / 33.60 MW | Activate V5 ML |
+
+The 6h challenger improves holdout MAE by 8.8% and RMSE by 4.3%. ML candidates
+at 1-5h did not clear the required 2% improvement on both MAE and RMSE, so they
+remain inactive. Small baseline metric movement comes from rebuilding rows with
+the corrected availability/target alignment; it is not presented as an ML gain.
+
+Temperature handling is learned inside each training cutoff. V5 selects a
+balance point from training-temperature quantiles, computes hour/season normal
+temperature, and adds nonlinear cooling/heating degree, humidity interaction,
+temperature deviation, lag, and rate features. It stores a no-temperature
+ablation, candidate balance-point errors, adjusted correlation, and active
+permutation importance. The replay forecaster no longer contains a fixed
+MW-per-degree adjustment.
+
+Input values are median-filled and clipped to training-only 0.5/99.5 percentile
+bounds. Forecast artifacts include missing/outlier evidence. An isolated demand
+jump is constrained by historical spread and holdout RMSE, while the full-day
+replay profile uses the median of six recent profile residuals so sustained load
+movement is still followed. Ridge penalty and blend weight are selected on a
+middle chronological tuning block before activation is judged on a separate
+newest holdout. On the deterministic Jun 15 replay regression, the repository
+baseline scored 20.42 MW MAE and the hardened replay model scored 5.56 MW; at
+14:00 the forecast moved from 1,165.68 MW to 1,104.00 MW against 1,105.22 MW
+actual.
+
+V5 prediction bounds use expanding-window calibration residuals rather than an
+uncalibrated display constant. Candidate evidence reports holdout interval
+coverage and peak-demand error in addition to MAE, RMSE, and MAPE.
+
 ## Recommended Architecture
 
 ### 1. Reusable Ingestion
@@ -137,14 +190,15 @@ on both MAE and RMSE before replacing it.
 
 ### 2. Leakage-Safe Feature Dataset
 
-- Create direct 1h, 2h, and 6h target rows.
+- Create direct target rows for every hourly horizon from 1h through 6h.
 - Add demand lags (1h, 2h, 3h, 6h, 24h, 48h, 168h), rolling averages (3h, 6h,
   12h, 24h, 168h), same-hour seven-day history, six-hour volatility, and demand
   rates (1h, 3h, 6h).
 - Add SCADA-temperature lag, rolling mean, rate, cooling degree, and
   temperature-demand interaction.
-- Retain current and lagged TA/TRA/Spin for audit and challenger evaluation, but
-  keep them out of the default demand feature profile.
+- Retain current and lagged TA/TRA/Spin for audit and current-time model context;
+  prohibit future operating values and require chronological evidence before
+  their contribution can activate an ML candidate.
 - Add current external humidity, rain, cloud, wind, and pressure.
 - Add target-hour provider forecast fields only when their issuance timestamp
   proves availability at feature time. Otherwise use the past-only weather
@@ -190,7 +244,7 @@ at or before that replay cursor for model fitting and feature generation.
 Future June demand, TA, TRA, Spin, and observed weather remain hidden. The
 dashboard must label this source as historical SCADA replay/simulation.
 
-The offline pipeline stores direct 1h, 2h, and 6h results keyed by
+The offline pipeline stores direct 1h-through-6h results keyed by
 `source_cursor_at`. The dashboard mounts those results only on an exact cursor
 match, maps their target times into the display replay year, and uses the same
 profile for operating risk. A mismatched future artifact is ignored.
@@ -214,8 +268,9 @@ Open-Meteo archive data is used under its CC BY 4.0 terms. Endpoint reference:
 
 ## Limitations
 
-- The common TA/TRA window is only about 24 days and has limited weekday and
-  weather-regime diversity.
+- The original June common TA/TRA window is only about 24 days. The current
+  database adds October 2025-May 2026 exports, but nine months still does not
+  cover a complete annual cycle or enough rare operating/weather regimes.
 - No outage schedule, unit commitment plan, approved variable-holiday calendar,
   or archived provider-issuance snapshots were supplied. The model includes
   fixed and Easter-relative Trinidad holidays plus configurable extra dates,

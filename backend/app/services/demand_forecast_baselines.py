@@ -39,7 +39,27 @@ def rolling_trend_forecast(row: ForecastTrainingRow) -> float | None:
 
 
 def same_hour_yesterday_forecast(row: ForecastTrainingRow) -> float | None:
-    return row.lag_24h_demand_mw
+    return (
+        row.target_lag_24h_demand_mw
+        if row.target_lag_24h_demand_mw is not None
+        else row.lag_24h_demand_mw
+    )
+
+
+def seasonal_naive_weekly_forecast(row: ForecastTrainingRow) -> float | None:
+    """Use the same hour from the previous week without future information."""
+
+    return (
+        row.target_lag_168h_demand_mw
+        if row.target_lag_168h_demand_mw is not None
+        else row.lag_168h_demand_mw
+    )
+
+
+def target_same_hour_average_forecast(
+    row: ForecastTrainingRow,
+) -> float | None:
+    return row.target_same_hour_7d_average_mw
 
 
 def hourly_average_lookup(rows: list[ForecastTrainingRow]) -> dict[int, float]:

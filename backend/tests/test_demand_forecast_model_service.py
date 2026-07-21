@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -15,11 +16,17 @@ from app.models.weather import Weather
 from app.services.demand_forecast_baselines import (
     hourly_average_forecast,
     hourly_average_lookup,
+    same_hour_yesterday_forecast,
+    seasonal_naive_weekly_forecast,
 )
 from app.services.demand_forecast_model_service import (
     DemandForecastModelService,
     _feature_fill_values,
+    _feature_names,
     _feature_vector,
+    _fit_feature_transform,
+    _input_quality_diagnostics,
+    _metrics,
     _temperature_load_correlation,
     _training_sample_weights,
 )
@@ -92,11 +99,15 @@ def test_demand_forecast_model_service_uses_chronological_baseline_and_persists(
     assert horizon.forecast_uncertainty_mw > 0
     assert horizon.confidence_lower_mw < horizon.forecast_demand_mw
     assert horizon.confidence_upper_mw > horizon.forecast_demand_mw
-    assert horizon.confidence_level == 0.9
+    assert horizon.confidence_level == 0.8
     assert horizon.similar_period_forecast_mw is not None
     assert horizon.similar_examples
     assert horizon.contributing_factors
     assert horizon.metrics.mae >= 0
+    assert horizon.metrics.peak_error_mw >= 0
+    assert horizon.candidate_metrics["active"]["interval_coverage"] >= 0
+    assert horizon.candidate_metrics["temperature_analysis"]["sample_count"] > 0
+    assert horizon.candidate_metrics["input_quality"]["status"]
     assert horizon.forecast_timestamp == datetime(2026, 6, 2, 6)
 
     with session_factory() as session:
@@ -107,14 +118,14 @@ def test_demand_forecast_model_service_uses_chronological_baseline_and_persists(
     assert stored.horizon_hours == 1
     assert stored.forecast_demand_mw == horizon.forecast_demand_mw
     assert stored.forecast_uncertainty_mw == horizon.forecast_uncertainty_mw
-    assert stored.feature_profile == "demand_weather_similarity_v3"
+    assert stored.feature_profile == "demand_weather_grid_state_v5"
     assert stored.validation_status == "PROTOTYPE"
     assert stored.train_row_count == horizon.train_rows
     assert stored.test_row_count == horizon.test_rows
     assert json.loads(stored.candidate_metrics)["active"]["model"] == horizon.active_model
     assert stored.confidence_lower_mw < stored.forecast_demand_mw
     assert stored.confidence_upper_mw > stored.forecast_demand_mw
-    assert stored.confidence_level == 0.9
+    assert stored.confidence_level == 0.8
     assert json.loads(stored.contributing_factors)
 
 
@@ -149,7 +160,7 @@ def test_demand_forecast_model_keeps_baseline_when_ml_loses(monkeypatch, tmp_pat
     _seed_training_rows(session_factory, count=30)
     service = DemandForecastModelService(session_factory=session_factory)
 
-    def bad_ml_predictions(train_rows, test_rows):
+    def bad_ml_predictions(train_rows, test_rows, **_kwargs):
         return [0.0 for _ in test_rows], 0.0
 
     monkeypatch.setattr(service, "_try_ml_model", bad_ml_predictions)
@@ -183,7 +194,9 @@ def test_model_compares_ridge_boosting_and_forest_chronologically(tmp_path):
     assert horizon.candidate_metrics is not None
     assert {
         "ridge_alpha_10",
+        "ridge_load_state_residual",
         "hist_gradient_boosting",
+        "hist_gradient_boosting_load_state_residual",
         "random_forest",
         "extra_trees",
     }.issubset(horizon.candidate_metrics)
@@ -195,7 +208,8 @@ def test_model_compares_ridge_boosting_and_forest_chronologically(tmp_path):
     selected = [
         metrics
         for name, metrics in horizon.candidate_metrics.items()
-        if name not in {"active", "baseline"} and metrics["selected"] is True
+        if name not in {"active", "baseline"}
+        and metrics.get("selected") is True
     ]
     assert len(selected) == 1
     assert all(
@@ -273,6 +287,26 @@ def test_hourly_average_baseline_uses_target_hour_not_feature_hour(tmp_path):
     assert test_row.feature_timestamp.hour == 0
     assert test_row.target_timestamp.hour == 6
     assert hourly_average_forecast(test_row, lookup) == lookup[6]
+
+
+def test_seasonal_baselines_use_history_relative_to_target_hour():
+    row = ForecastTrainingRow(
+        feature_timestamp=datetime(2026, 6, 20, 2),
+        target_timestamp=datetime(2026, 6, 20, 8),
+        horizon_hours=6,
+        target_demand_mw=1100,
+        current_demand_mw=900,
+        lag_24h_demand_mw=810,
+        lag_168h_demand_mw=820,
+        target_lag_24h_demand_mw=1080,
+        target_lag_168h_demand_mw=1070,
+        hour_of_day=2,
+        day_of_week=5,
+        source_quality_status="GOOD",
+    )
+
+    assert same_hour_yesterday_forecast(row) == 1080
+    assert seasonal_naive_weekly_forecast(row) == 1070
 
 
 def test_model_excludes_bad_scada_targets_but_keeps_weather_degraded_rows(tmp_path):
@@ -491,7 +525,7 @@ def test_ml_sample_weights_favor_recent_complete_rows(tmp_path):
     assert round(sum(weights) / len(weights), 10) == 1.0
 
 
-def test_ml_feature_vector_excludes_scada_generation_context(tmp_path):
+def test_ml_feature_vector_includes_scada_generation_context(tmp_path):
     session_factory = _session_factory(tmp_path)
     _seed_training_rows(session_factory, count=3)
     with session_factory() as session:
@@ -519,7 +553,7 @@ def test_ml_feature_vector_excludes_scada_generation_context(tmp_path):
     without_generation_context = _feature_vector(rows[0], fill_values)
 
     assert len(with_generation_context) == len(without_generation_context)
-    assert with_generation_context == without_generation_context
+    assert with_generation_context != without_generation_context
 
 
 def test_ml_feature_vector_responds_to_known_and_forecast_weather(tmp_path):
@@ -547,6 +581,100 @@ def test_ml_feature_vector_responds_to_known_and_forecast_weather(tmp_path):
 
     assert len(normal_weather) == len(adverse_weather)
     assert normal_weather != adverse_weather
+
+
+def test_ml_feature_names_match_vector_and_outliers_are_clipped(tmp_path):
+    session_factory = _session_factory(tmp_path)
+    _seed_training_rows(session_factory, count=72)
+    with session_factory() as session:
+        rows = list(
+            session.scalars(
+                select(ForecastTrainingRow).order_by(
+                    ForecastTrainingRow.feature_timestamp
+                )
+            )
+        )
+
+    transform = _fit_feature_transform(rows)
+    normal_vector = _feature_vector(rows[-1], transform)
+    rows[-1].current_demand_mw = 100_000
+    extreme_vector = _feature_vector(rows[-1], transform)
+
+    assert len(normal_vector) == len(_feature_names())
+    assert len(extreme_vector) == len(_feature_names())
+    assert extreme_vector[0] == transform.upper_bounds["current_demand_mw"]
+    clipped_count_index = _feature_names().index("clipped_input_count")
+    assert extreme_vector[clipped_count_index] >= 1
+
+
+def test_temperature_balance_point_is_learned_on_chronological_training_data():
+    rows: list[ForecastTrainingRow] = []
+    start = datetime(2026, 1, 1)
+    for day in range(20):
+        daily_offset = float(day % 10)
+        for hour in range(24):
+            feature_timestamp = start + timedelta(days=day, hours=hour)
+            temperature = 23.0 + daily_offset + 2.0 * math.sin(
+                2.0 * math.pi * hour / 24.0
+            )
+            target_timestamp = feature_timestamp + timedelta(hours=1)
+            profile_demand = 850.0 + target_timestamp.hour * 3.0
+            demand = profile_demand + max(0.0, temperature - 27.0) * 18.0
+            rows.append(
+                ForecastTrainingRow(
+                    feature_timestamp=feature_timestamp,
+                    target_timestamp=target_timestamp,
+                    horizon_hours=1,
+                    target_demand_mw=demand,
+                    current_demand_mw=demand - 3.0,
+                    temperature_c=temperature,
+                    forecast_temperature_c=temperature,
+                    humidity_percent=75.0,
+                    forecast_humidity_percent=75.0,
+                    hour_of_day=feature_timestamp.hour,
+                    day_of_week=feature_timestamp.weekday(),
+                    source_quality_status="GOOD",
+                )
+            )
+
+    profile = _fit_feature_transform(rows).temperature_profile
+
+    assert 24.0 <= profile.balance_point_c <= 29.0
+    assert profile.selection_mae_mw is not None
+    assert profile.no_temperature_mae_mw is not None
+    assert profile.selection_mae_mw < profile.no_temperature_mae_mw
+
+
+def test_metrics_report_peak_demand_error():
+    metrics = _metrics(
+        [900.0, 1000.0, 1200.0],
+        [910.0, 980.0, 1150.0],
+    )
+
+    assert metrics.mae == round((10.0 + 20.0 + 50.0) / 3.0, 4)
+    assert metrics.peak_error_mw == 50.0
+
+
+def test_input_quality_flags_isolated_current_demand_jump(tmp_path):
+    session_factory = _session_factory(tmp_path)
+    _seed_training_rows(session_factory, count=72)
+    with session_factory() as session:
+        rows = list(
+            session.scalars(
+                select(ForecastTrainingRow).order_by(
+                    ForecastTrainingRow.feature_timestamp
+                )
+            )
+        )
+
+    query = rows[-1]
+    query.current_demand_mw = 5000.0
+    query.demand_volatility_6h_mw = 10.0
+    diagnostics = _input_quality_diagnostics(query, rows[:-1])
+
+    assert diagnostics["status"] == "OUTLIER_GUARDED"
+    assert diagnostics["abnormal_current_demand"] is True
+    assert "current_demand_mw" in diagnostics["outlier_features"]
 
 
 def test_ml_feature_vector_separates_holiday_from_normal_weekday(tmp_path):

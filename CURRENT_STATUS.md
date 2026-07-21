@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-07-16
+Last updated: 2026-07-20
 
 ## Snapshot
 
@@ -31,13 +31,33 @@ archive. Neither path is a live T&TEC feed.
 - Historical replay keeps demand, TRA generation, TA available capacity, and
   corrected System Spin as separate quantities. The dashboard displays the
   corrected spin tag in MW and retains TRA-minus-demand only as a diagnostic.
-- Hourly SCADA grid snapshots aligned by timestamp, never row number.
+- Revealed demand and TRA chart lines now share the same observation-hour
+  source timeline. Forecast/risk history remains a separate availability-gated
+  copy, preventing synthetic fallback values from contaminating the TRA display
+  or post-event actuals from leaking into model inputs.
+- Raw irregular SCADA intervals are preserved unchanged. Derived civil-hour
+  snapshots use duration-weighted interval overlap, never row number, nearest
+  row, or exact-hour lookup.
+- Source-to-snapshot reconciliation recomputes hourly demand from raw intervals,
+  records duplicate removal, compares candidate alignment methods on an
+  untouched chronological holdout, and flags numerical mismatches above 0.1 MW.
+- Observation hour, exact source availability, and model issue time are handled
+  as separate timestamps. Replay charts show post-event values at their actual
+  observation hour; forecast features are unavailable until every contributing
+  interval has finalized.
 - Snapshot availability comes from the latest contributing source interval end;
   forecast issue times are rounded forward only after that exact availability,
   preventing future interval aggregates from leaking into model features.
-- Leakage-safe direct 1h, 2h, and 6h forecast rows with demand lags, rolling
+- Leakage-safe direct 1h through 6h forecast rows with demand lags, rolling
   trends, SCADA temperature, observed weather, and issued-or-past-only weather
   outlook features.
+- Target-hour historical features are now distinct from issue-hour load-state
+  features. Same-hour-yesterday, same-hour-weekly, and seven-day target-hour
+  averages are keyed to `target_timestamp` and are included only when their
+  source interval was available by forecast issue time.
+- The current derived dataset contains 26,478 direct-horizon rows from 6,554
+  hourly SCADA snapshots spanning October 2025 through June 2026. This remains
+  historical replay/calibration data, not a live SCADA stream.
 - Per-horizon comparison of persistence/time-series baselines, Ridge,
   `HistGradientBoostingRegressor`, `RandomForestRegressor`, and
   `ExtraTreesRegressor` using nested
@@ -48,9 +68,19 @@ archive. Neither path is a live T&TEC feed.
   other candidate per horizon.
 - Trinidad calendar features separate weekdays, weekends, fixed/movable public
   holidays, configurable variable holidays, and wet/dry seasons.
-- Forecast responses include 90% confidence bounds, horizon MAE/RMSE/MAPE,
-  adjusted temperature/load correlation, comparable historical examples, and
-  major contributing factors.
+- Forecast responses include 80% prototype prediction bounds, horizon MAE/RMSE/MAPE,
+  peak-demand error, adjusted temperature/load correlation, comparable
+  historical examples, and major contributing factors. Bounds use residuals
+  from cutoff-safe expanding-window calibration and report holdout coverage.
+- Temperature balance points and hour/season normals are learned inside each
+  training cutoff. Nonlinear cooling/heating degrees, humidity interaction,
+  temperature deviation/rate, permutation importance, and a no-temperature
+  ablation are retained as model evidence; no fixed MW-per-degree adjustment is
+  active in the replay forecaster.
+- Model inputs are median-filled and clipped to training-only 0.5/99.5
+  percentile bounds. Missing/outlier diagnostics are stored per forecast, and
+  an isolated abnormal current-demand reading is constrained by validated
+  similar-period spread and holdout RMSE.
 - Exact-cursor replay forecast artifacts with calibrated uncertainty, model
   version, candidate metrics, feature profile, and prototype/validated status.
 - SCADA replay preflight gate requiring all five tags, Good-quality samples, and
@@ -63,9 +93,26 @@ archive. Neither path is a live T&TEC feed.
 - June replay cursor with Play/Pause/Step/Reset, configurable interval/rate, and
   persistent progress.
 - Full-day weather-informed load forecast, revealed actuals, historical hourly
-  baseline, 48-hour trends, and 12-month analytics. Persisted 1h/2h/6h artifacts
+  baseline, 48-hour trends, and 12-month analytics. Persisted 1h-through-6h artifacts
   replace the corresponding chart points only when their source cursor matches
   exactly; mismatched or future artifacts are ignored.
+- The replay full-day model now includes exact 1/2/3/6/24/48/168-hour demand lags,
+  trailing 3/6/12/24-hour means, short load ramps, and the residual between the
+  recent load state and the historical hourly profile. Its level correction is
+  the median of six recent profile residuals, which follows sustained movement
+  without allowing one bad interval to dominate. A regularized
+  load-state/weather residual model and blend tune on a middle chronological
+  partition and activate only when they beat the preselected statistical method
+  on a separate newest holdout; otherwise the moving profile remains active.
+  Ridge inputs and residual corrections are clipped to
+  robust ranges learned from the training partition. Current Spin, TA, TRA, and
+  weather are model context; future chart points recurse on prior predictions
+  and never read unrevealed source demand.
+- Forecast training is source-regime strict. A SCADA-backed day uses only
+  finalized SCADA intervals and keeps model issue time separate from the later
+  chart reveal time. A day outside complete SCADA coverage uses the synthetic
+  archive, synthetic weather context, and `simulation` label; SCADA rows are
+  never silently mixed with synthetic fallback values.
 - Three-source, per-field hourly weather consensus with timestamp synchronization
   and explicit degradation when any source is unavailable.
 - Current-clock June alignment with real-time automatic playback and manual
@@ -104,18 +151,40 @@ forecast feature.
 
 ## Latest Validation
 
-- The real June ZIP pipeline imports filename-independent CSV members, creates
-  722 hourly buckets, 2,157 direct-horizon training rows, 744 Open-Meteo weather
-  observations, and three cutoff-safe replay forecast artifacts.
+- The June 20 02:00 demand source interval is 1,028.35 MW. Because the following
+  interval begins at 02:59:10, the correct duration-weighted 02:00-03:00 value is
+  1,027.966 MW. The prior 745 MW dashboard value was a synthetic fallback caused
+  by keying replay rows to rounded availability time; the corrected replay keys
+  them to observation hour and keeps availability only for as-of gating.
+- On the supplied June demand export, interval-overlap hourly alignment produced
+  lower mean 1h-through-6h chronological baseline error (42.812 MW MAE,
+  53.464 MW RMSE) than containing-interval midpoint (46.520/58.217 MW)
+  and nearest-interval midpoint (46.447/58.190 MW) methods.
+
+- The real June ZIP pipeline imports filename-independent CSV members and
+  creates 722 hourly buckets. The active combined historical store currently
+  contains 26,478 leakage-gated direct 1h-through-6h training rows; June data
+  remains historical replay/calibration input rather than a live feed.
 - A provenance audit of the five-member archive reads 2,750 unique interval
   rows, 1,631 `good`, 6 `uncertain`, and 1,113 `unknown` normalized quality
   values. With an explicit June reporting boundary it flags one spillover
   interval, two out-of-interval minima, and two out-of-interval maxima without
   deleting or silently repairing them.
-- On the untouched chronological June holdout, v3 records 14.88 MW MAE at 1h,
-  19.43 MW at 2h, and 19.67 MW at 6h. The selected methods are independently
-  gated per horizon; these are prototype results, not production guarantees.
-- Backend suite: 134 tests pass, including ingestion, resampling, leakage,
+- After rebuilding against the corrected observation/availability alignment,
+  untouched chronological holdout MAE is 22.50, 23.32, 25.18, 26.48, 27.48,
+  and 26.50 MW for horizons 1 through 6. Similar-period baselines remain active
+  at 1-5h. At 6h, a Random Forest/similar-period blend improves on the selected
+  baseline from 28.44 to 26.50 MW MAE. Methods remain independently gated per
+  horizon; these are prototype results, not production guarantees.
+- For the full-day replay selector, rolling chronological holdout MAE at the
+  June 15, June 20, and June 25 10:00 checkpoints is 11.67, 8.37, and 10.31 MW,
+  compared with 37.04, 28.26, and 31.49 MW for the hourly-average baseline.
+  These are one-month replay results, not seasonal or production validation.
+- The June 30 screenshot exposed a source-regime mismatch: a 569-row SCADA
+  model was being compared with a synthetic day outside complete SCADA
+  coverage. Source routing reduced chart MAE against revealed values from
+  187.15 MW to 8.91 MW and maximum absolute error from 353.85 MW to 71.11 MW.
+- Backend suite: 143 tests pass, including ingestion, resampling, leakage,
   forecasting, replay, dashboard, continuous operating risk, exact 20/50/80%
   probabilities, and chronological Brier-score backtesting.
 - Frontend Vitest suite: 10 tests pass.
@@ -124,9 +193,9 @@ forecast feature.
   horizontal overflow, or overlapping gauge/timeline/evidence panels.
 - Both the current database and a clean database upgraded from revision zero
   pass `alembic check`.
-- A real Uvicorn request to `/api/dashboard/snapshot` returns the v3.0 1h/2h/6h
-  exact-cursor bundle, confidence bounds, metrics, similar examples, and factors
-  in under one second on the development machine.
+- A real Uvicorn request to `/api/dashboard/snapshot` returns all direct
+  1h-through-6h exact-cursor horizons, confidence bounds, alignment evidence,
+  metrics, similar examples, and operating-risk-v4.0 output.
 
 ## Next Operational Step
 

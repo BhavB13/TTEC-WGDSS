@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -168,8 +169,80 @@ def test_replay_dashboard_exposes_history_forecast_and_no_future_actuals(replay_
     assert context["grid"]["source_provider"] == "SyntheticReplayProvider"
     assert [
         row.horizon_hours for row in context["demand_forecast"].horizons
-    ] == [1, 2, 6]
-    assert context["model_status"].feature_profile == "replay_weather_features"
+    ] == [1, 2, 3, 4, 5, 6]
+    assert (
+        context["model_status"].feature_profile
+        == "replay_weather_load_state_v4"
+    )
+
+
+def test_full_day_forecast_never_mixes_scada_and_simulation_training(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'forecast-regimes.db'}")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    service = DemoReplayService(
+        session_factory=session_factory,
+        clock=lambda: datetime(
+            2026,
+            7,
+            15,
+            10,
+            tzinfo=ZoneInfo("America/Port_of_Spain"),
+        ),
+    )
+    service.ensure_seeded()
+    calls: list[dict[str, object]] = []
+
+    class CapturingForecastService:
+        def forecast_day(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(model_name="captured")
+
+    service.forecast_service = CapturingForecastService()
+    with session_factory() as session:
+        state = session.get(DemoReplayState, 1)
+        assert state is not None
+
+        old_scada = {
+            state.cursor_at - timedelta(days=10, hours=offset): SimpleNamespace(
+                timestamp=state.cursor_at - timedelta(days=10, hours=offset),
+                source="SCADA",
+            )
+            for offset in range(60)
+        }
+        service._full_day_forecast(session, state, [], old_scada, old_scada)
+        simulation_call = calls[-1]
+        assert len(simulation_call["history"]) > 1000
+        assert all(
+            isinstance(row, DemoObservation)
+            for row in simulation_call["history"]
+        )
+        assert simulation_call["cursor_at"] == state.cursor_at
+
+        current_scada = {
+            state.cursor_at - timedelta(hours=offset): SimpleNamespace(
+                timestamp=state.cursor_at - timedelta(hours=offset),
+                source="SCADA",
+            )
+            for offset in range(60)
+        }
+        finalized_scada = {
+            timestamp: row
+            for timestamp, row in current_scada.items()
+            if timestamp <= state.cursor_at - timedelta(hours=3)
+        }
+        service._full_day_forecast(
+            session,
+            state,
+            [],
+            current_scada,
+            finalized_scada,
+        )
+        scada_call = calls[-1]
+        assert len(scada_call["history"]) == 57
+        assert all(row.source == "SCADA" for row in scada_call["history"])
+        assert scada_call["cursor_at"] == state.cursor_at - timedelta(hours=3)
+        assert scada_call["actual_reveal_at"] == state.cursor_at
 
 
 def test_simulated_grid_uses_live_three_source_forecast_when_injected(replay_service):
@@ -364,7 +437,9 @@ def test_june_scada_overlay_maps_completed_interval_without_future_leakage(tmp_p
     context = service.get_dashboard_context()
 
     assert context is not None
-    assert context["grid"]["current_demand_mw"] == 1059
+    # Replay charts display the post-event value at its observation hour. The
+    # forecast path separately gates this row by its exact available_at time.
+    assert context["grid"]["current_demand_mw"] == 9999
     assert context["grid"]["current_generation_mw"] == 1300
     assert context["grid"]["spinning_reserve_mw"] == 200
     assert (
@@ -373,8 +448,12 @@ def test_june_scada_overlay_maps_completed_interval_without_future_leakage(tmp_p
     )
     assert context["grid"]["source_provider"] == "HistoricalScadaReplay"
     assert context["grid"]["quality_status"] == "UNCERTAIN"
-    assert context["weather"]["temperature_c"] == 29.45
+    assert context["weather"]["temperature_c"] == 29.5
     assert context["weather"]["humidity_percent"] == 78
+    assert context["risk_payload"]["probability_score"] < 1
+    # Operator history displays post-event source truth at its observation
+    # hour, matching the revealed demand line. Model and risk inputs remain
+    # separately gated by available_at.
     assert context["replay"].operational_history[-1].generation_mw == 1300
     assert context["replay"].operational_history[-1].spinning_reserve_mw == 200
     assert all(
@@ -398,8 +477,8 @@ def test_june_scada_overlay_maps_completed_interval_without_future_leakage(tmp_p
     ] == [1, 2, 6]
     assert context["model_status"].active_model == "HistGradientBoostingRegressor"
     assert context["model_status"].baseline_comparison.ml_beats_baseline is True
-    assert context["scada_status"].latest_snapshot == datetime(2026, 6, 15, 9)
-    assert context["scada_status"].available_at == datetime(2026, 6, 15, 10)
+    assert context["scada_status"].latest_snapshot == datetime(2026, 6, 15, 10)
+    assert context["scada_status"].available_at == datetime(2026, 6, 15, 11)
     assert context["scada_status"].mode == "historical_replay"
 
     ensemble_context = DemoReplayService(
@@ -430,3 +509,58 @@ def test_june_scada_overlay_maps_completed_interval_without_future_leakage(tmp_p
         ensemble_context["risk_payload"]["forecast_demand_60m"]
         == ensemble_chart[11].forecast_demand_mw
     )
+
+
+def test_irregular_scada_overlay_keeps_observation_hours_when_availability_collides(
+    tmp_path,
+):
+    engine = create_engine(f"sqlite:///{tmp_path / 'irregular-overlay.db'}")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    service = DemoReplayService(
+        session_factory=session_factory,
+        clock=lambda: datetime(
+            2026,
+            7,
+            20,
+            2,
+            tzinfo=ZoneInfo("America/Port_of_Spain"),
+        ),
+        replay_weather_provider=UnavailableReplayWeatherProvider(),
+    )
+    service.ensure_seeded()
+    with session_factory() as session:
+        for hour, demand in ((2, 1027.966), (3, 1000.70)):
+            session.add(
+                ScadaGridSnapshot(
+                    timestamp=datetime(2026, 6, 20, hour),
+                    available_at=datetime(2026, 6, 20, 4, 17, 51),
+                    current_demand_mw=demand,
+                    temperature_c=27,
+                    spinning_reserve_mw=120,
+                    available_capacity_mw=1500,
+                    online_capacity_mw=1250,
+                    reserve_margin_mw=1500 - demand,
+                    reserve_margin_percent=(1500 - demand) / demand * 100,
+                    online_spare_mw=1250 - demand,
+                    quality_status="USABLE_WITH_WARNING",
+                    missing_fields="",
+                    coverage_percent=100,
+                    quality_notes="Conditionally accepted Other quality",
+                    resampling_method="interval_overlap_hourly",
+                    source="June Load demand 2026.csv",
+                )
+            )
+        session.commit()
+        state = session.get(DemoReplayState, 1)
+        assert state is not None
+        overlay = service._scada_overlay(session, state)
+        available = service._available_scada_overlay(
+            overlay,
+            datetime(2025, 6, 20, 2),
+        )
+
+    assert overlay[datetime(2025, 6, 20, 2)].demand_mw == 1027.966
+    assert overlay[datetime(2025, 6, 20, 3)].demand_mw == 1000.70
+    assert datetime(2025, 6, 20, 2) not in available
+    assert datetime(2025, 6, 20, 3) not in available

@@ -99,6 +99,15 @@ class ScadaReplayForecastService:
                         confidence_lower_mw=result.confidence_lower_mw,
                         confidence_upper_mw=result.confidence_upper_mw,
                         confidence_level=result.confidence_level,
+                        p10_demand_mw=result.p10_demand_mw,
+                        p50_demand_mw=result.p50_demand_mw,
+                        p90_demand_mw=result.p90_demand_mw,
+                        training_start_at=result.training_start_at,
+                        training_end_at=result.training_end_at,
+                        feature_importance=json.dumps(
+                            result.feature_importance or {}, sort_keys=True
+                        ),
+                        fallback_reason=result.fallback_reason,
                         temperature_load_correlation=(
                             result.temperature_load_correlation
                         ),

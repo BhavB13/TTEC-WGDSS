@@ -95,6 +95,18 @@ export default function RiskTimelineChart({
           pointHoverRadius: 4,
           tension: 0.15,
         },
+        {
+          label: "Corrected spin (current held)",
+          data: profile.map((point) => point.expected_spinning_reserve_mw ?? null),
+          borderColor: "#34d399",
+          backgroundColor: "#34d399",
+          borderWidth: 1.8,
+          borderDash: [3, 4],
+          pointRadius: 2,
+          pointHoverRadius: 4,
+          tension: 0,
+          yAxisID: "reserve",
+        },
       ],
     }),
     [labels, profile],
@@ -149,7 +161,12 @@ export default function RiskTimelineChart({
                   `Shortfall probability: ${(point.probability * 100).toFixed(1)}%`,
                 ];
               }
-              return `Safe capacity: ${point.safe_online_capacity_mw.toFixed(1)} MW`;
+              if (context.datasetIndex === 3) {
+                return `Safe capacity: ${point.safe_online_capacity_mw.toFixed(1)} MW`;
+              }
+              return point.expected_spinning_reserve_mw == null
+                ? "Corrected spin unavailable"
+                : `Corrected spin: ${point.expected_spinning_reserve_mw.toFixed(1)} MW (current held)`;
             },
           },
         },
@@ -164,6 +181,16 @@ export default function RiskTimelineChart({
           ticks: {
             color: textColor,
             font: { size: 10 },
+            callback: (value) => `${Number(value).toFixed(0)} MW`,
+          },
+        },
+        reserve: {
+          position: "right",
+          beginAtZero: true,
+          grid: { drawOnChartArea: false },
+          ticks: {
+            color: "#6ee7b7",
+            font: { size: 9 },
             callback: (value) => `${Number(value).toFixed(0)} MW`,
           },
         },
@@ -182,7 +209,7 @@ export default function RiskTimelineChart({
             Six-Hour Risk Timeline
           </p>
           <h2 className="mt-0.5 truncate text-sm font-semibold text-white">
-            Demand, uncertainty, and safe capacity
+            Demand, corrected spin, and operating risk
           </h2>
         </div>
         <span className="shrink-0 rounded-full border border-cyan-400/25 bg-cyan-500/10 px-2 py-1 text-[9px] font-semibold text-cyan-100">
@@ -197,9 +224,9 @@ export default function RiskTimelineChart({
           </div>
           <div
             className="mt-1.5 grid gap-1.5"
-            style={{ gridTemplateColumns: `repeat(${Math.min(profile.length, 5)}, minmax(0, 1fr))` }}
+            style={{ gridTemplateColumns: `repeat(${Math.min(profile.length, 6)}, minmax(0, 1fr))` }}
           >
-            {profile.slice(0, 5).map((point) => (
+            {profile.slice(0, 6).map((point) => (
               <div
                 key={`${point.horizon_minutes}-${point.forecast_timestamp ?? "risk"}`}
                 className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/55 px-1.5 py-1 text-center"

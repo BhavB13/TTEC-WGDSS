@@ -9,13 +9,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.database.session import SessionLocal
 from app.core.config import settings
 from app.models.demand_forecast import DemandForecastResult
-from app.models.scada import ScadaGridSnapshot
+from app.models.scada import ScadaArchiveImportRun, ScadaGridSnapshot
 from app.schemas.model_status import (
     BaselineComparisonResponse,
     DemandForecastBundleResponse,
     DemandForecastHorizonResponse,
     ModelMetricsResponse,
     ModelStatusResponse,
+    ScadaPeriodStatusResponse,
     ScadaStatusResponse,
 )
 from app.services.risk_probability_engine import (
@@ -77,6 +78,25 @@ class ModelStatusService:
                     confidence_lower_mw=row.confidence_lower_mw,
                     confidence_upper_mw=row.confidence_upper_mw,
                     confidence_level=row.confidence_level,
+                    p10_demand_mw=(
+                        row.p10_demand_mw
+                        if row.p10_demand_mw > 0
+                        else row.confidence_lower_mw
+                    ),
+                    p50_demand_mw=(
+                        row.p50_demand_mw
+                        if row.p50_demand_mw > 0
+                        else row.forecast_demand_mw
+                    ),
+                    p90_demand_mw=(
+                        row.p90_demand_mw
+                        if row.p90_demand_mw > 0
+                        else row.confidence_upper_mw
+                    ),
+                    training_start_at=row.training_start_at,
+                    training_end_at=row.training_end_at,
+                    feature_importance=_json_float_object(row.feature_importance),
+                    fallback_reason=row.fallback_reason,
                     temperature_load_correlation=(
                         row.temperature_load_correlation
                     ),
@@ -89,6 +109,10 @@ class ModelStatusService:
                     rmse=row.rmse,
                     mape=row.mape,
                     residual_std=row.residual_std,
+                    peak_error_mw=_candidate_metric(
+                        row.candidate_metrics,
+                        "peak_error_mw",
+                    ),
                 )
                 for row in latest_by_horizon.values()
             ]
@@ -124,11 +148,19 @@ class ModelStatusService:
             train_row_count=latest.train_row_count,
             test_row_count=latest.test_row_count,
             candidate_metrics=_json_object(latest.candidate_metrics),
+            feature_importance=_json_float_object(latest.feature_importance),
+            fallback_reason=latest.fallback_reason,
+            training_start_at=latest.training_start_at,
+            training_end_at=latest.training_end_at,
             metrics=ModelMetricsResponse(
                 mae=latest.mae,
                 rmse=latest.rmse,
                 mape=latest.mape,
                 residual_std=latest.residual_std,
+                peak_error_mw=_candidate_metric(
+                    latest.candidate_metrics,
+                    "peak_error_mw",
+                ),
             ),
             baseline_comparison=BaselineComparisonResponse(
                 best_baseline=latest.baseline_name,
@@ -142,6 +174,25 @@ class ModelStatusService:
         if latest is None:
             return None
 
+        try:
+            with self.session_factory() as session:
+                archive = session.scalar(
+                    select(ScadaArchiveImportRun).order_by(
+                        ScadaArchiveImportRun.imported_at.desc()
+                    )
+                )
+        except SQLAlchemyError:
+            archive = None
+        archive_report = _json_object(archive.validation_report) if archive else {}
+        alignment_report = archive_report.get("alignment_validation")
+        alignment_report = alignment_report if isinstance(alignment_report, dict) else {}
+        alignment_metrics = alignment_report.get("method_metrics")
+        period_reports = _scada_period_reports(archive_report)
+        known_gaps = [
+            f"{item.period}: missing {', '.join(item.missing_tags)}"
+            for item in period_reports
+            if item.missing_tags
+        ]
         return ScadaStatusResponse(
             mode="historical_replay",
             source=latest.source,
@@ -154,6 +205,37 @@ class ModelStatusService:
             anomaly_flags=_json_string_list(latest.anomaly_flags),
             field_provenance=_json_object(latest.field_provenance),
             formula_version=latest.formula_version,
+            archive_source=archive.source_filename if archive else None,
+            archive_import_status=archive.import_status if archive else None,
+            archive_validation_status=(
+                str(archive_report.get("validation_status"))
+                if archive_report.get("validation_status")
+                else None
+            ),
+            archive_data_start_at=archive.data_start_at if archive else None,
+            archive_data_end_at=archive.data_end_at if archive else None,
+            period_reports=period_reports,
+            known_data_gaps=known_gaps,
+            alignment_validation_status=(
+                str(alignment_report.get("validation_status"))
+                if alignment_report.get("validation_status")
+                else None
+            ),
+            alignment_selected_method=(
+                str(alignment_report.get("selected_method"))
+                if alignment_report.get("selected_method")
+                else None
+            ),
+            alignment_mismatch_count=(
+                int(alignment_report.get("mismatch_count", 0))
+                if alignment_report
+                else None
+            ),
+            alignment_method_metrics=(
+                [item for item in alignment_metrics if isinstance(item, dict)]
+                if isinstance(alignment_metrics, list)
+                else []
+            ),
         )
 
     def get_operating_risk_payload(
@@ -314,6 +396,22 @@ def _json_object(value: str) -> dict[str, object]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _json_float_object(value: str) -> dict[str, float]:
+    return {
+        str(key): float(item)
+        for key, item in _json_object(value).items()
+        if isinstance(item, (int, float))
+    }
+
+
+def _candidate_metric(value: str, name: str) -> float | None:
+    active = _json_object(value).get("active")
+    if not isinstance(active, dict):
+        return None
+    metric = active.get(name)
+    return float(metric) if isinstance(metric, (int, float)) else None
+
+
 def _json_list(value: str) -> list[dict[str, object]]:
     try:
         parsed = json.loads(value or "[]")
@@ -328,3 +426,30 @@ def _json_string_list(value: str) -> list[str]:
     except (TypeError, ValueError):
         return []
     return [item for item in parsed if isinstance(item, str)] if isinstance(parsed, list) else []
+
+
+def _scada_period_reports(
+    archive_report: dict[str, object],
+) -> list[ScadaPeriodStatusResponse]:
+    raw = archive_report.get("period_reports")
+    if not isinstance(raw, list):
+        return []
+    reports: list[ScadaPeriodStatusResponse] = []
+    for item in raw:
+        if not isinstance(item, dict) or not isinstance(item.get("period"), str):
+            continue
+        missing = item.get("missing_tags")
+        reports.append(
+            ScadaPeriodStatusResponse(
+                period=item["period"],
+                validation_status=str(item.get("validation_status", "UNKNOWN")),
+                missing_tags=(
+                    [str(value) for value in missing]
+                    if isinstance(missing, list)
+                    else []
+                ),
+                clean_row_count=int(item.get("clean_row_count", 0) or 0),
+                out_of_period_rows=int(item.get("out_of_period_rows", 0) or 0),
+            )
+        )
+    return reports

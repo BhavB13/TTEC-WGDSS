@@ -32,6 +32,11 @@ class RiskHorizonResponse(BaseModel):
     decision_deadline_minutes: int | None = None
     decision_deadline_at: datetime | None = None
     urgency: str
+    expected_online_capacity_mw: float
+    expected_available_capacity_mw: float | None = None
+    expected_spinning_reserve_mw: float | None = None
+    demand_ramp_mw_per_hour: float
+    capacity_projection_basis: str
 
 
 class ProbabilityResponse(BaseModel):
@@ -76,4 +81,10 @@ class ProbabilityResponse(BaseModel):
     probability_method: str = "NORMAL_RESIDUAL_EXCEEDANCE"
     aggregation_method: str = "MAX_HORIZON_PROBABILITY"
     capacity_basis: str = "TRA_ONLY"
-    formula_version: str = "wgdss-operating-risk-v3"
+    expected_online_capacity_mw: float = 0.0
+    expected_available_capacity_mw: float | None = None
+    expected_spinning_reserve_mw: float | None = None
+    demand_ramp_mw_per_hour: float = 0.0
+    capacity_projection_basis: str = "CURRENT_SCADA_HELD_CONSTANT_NO_DISPATCH_PLAN"
+    risk_components: dict[str, float | str | bool | None] = Field(default_factory=dict)
+    formula_version: str = "wgdss-operating-risk-v4"

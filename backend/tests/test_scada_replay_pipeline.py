@@ -156,17 +156,17 @@ def test_full_scada_replay_pipeline_handles_duplicates_and_reports_quality(tmp_p
     assert result.raw_rows_stored == 44
     assert result.snapshot_result.snapshots_created == 9
     assert result.snapshot_result.degraded_snapshots == 1
-    assert result.dataset_result.rows_created == 18
-    assert result.dataset_result.skipped_rows == 9
-    assert len(result.training_result.results) == 3
+    assert result.dataset_result.rows_created == 27
+    assert result.dataset_result.skipped_rows == 27
+    assert len(result.training_result.results) == 5
 
     report = result.validation_report
     assert report.import_status.import_runs == 1
     assert report.import_status.raw_measurements == 44
     assert report.snapshot_quality.degraded_snapshots == 1
     assert report.snapshot_quality.missing_fields == {"online_capacity_mw": 1}
-    assert report.training_rows.by_horizon == {1: 8, 2: 7, 6: 3}
-    assert [item.horizon_hours for item in report.model_metrics] == [1, 2, 6]
+    assert report.training_rows.by_horizon == {1: 7, 2: 6, 3: 5, 4: 4, 5: 3, 6: 2}
+    assert [item.horizon_hours for item in report.model_metrics] == [1, 2, 3, 4, 5]
     assert report.risk_readiness.ready is True
 
     with session_factory() as session:
@@ -182,7 +182,7 @@ def test_full_scada_replay_pipeline_handles_duplicates_and_reports_quality(tmp_p
     assert "files imported: 1" in summary
     assert "preflight aligned usable hours: 8" in summary
     assert "duplicates skipped: 1" in summary
-    assert "model horizons evaluated: 3" in summary
+    assert "model horizons evaluated: 5" in summary
     assert "1h ML beats baseline: false" in summary
 
 
@@ -214,8 +214,8 @@ def test_scada_replay_pipeline_accepts_filename_agnostic_zip_archive(tmp_path):
     assert result.preflight_report.aligned_hour_count == 9
     assert result.files_imported == 1
     assert result.snapshot_result.snapshots_created == 9
-    assert result.dataset_result.rows_created == 18
-    assert [item.horizon_hours for item in result.training_result.results] == [1, 2, 6]
+    assert result.dataset_result.rows_created == 27
+    assert [item.horizon_hours for item in result.training_result.results] == [1, 2, 3, 4, 5]
 
 
 def test_future_archive_pipeline_crosses_year_boundary_without_filename_logic(

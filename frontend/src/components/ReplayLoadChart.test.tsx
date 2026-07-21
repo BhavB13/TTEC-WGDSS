@@ -92,9 +92,24 @@ describe("ReplayLoadChart", () => {
             };
           };
         };
+        scales: {
+          x: { offset: boolean; ticks: { maxTicksLimit: number } };
+          y: {
+            min: number;
+            max: number;
+            ticks: { stepSize: number };
+          };
+        };
       };
     };
     expect(options.options.plugins.legend.display).toBe(false);
+    expect(options.options.scales.x.offset).toBe(true);
+    expect(options.options.scales.x.ticks.maxTicksLimit).toBe(12);
+    expect(options.options.scales.y).toMatchObject({
+      min: 700,
+      max: 1500,
+      ticks: { stepSize: 100 },
+    });
     expect(
       options.options.plugins.tooltip.filter({
         dataset: { label: "Forecast uncertainty" },
@@ -115,5 +130,39 @@ describe("ReplayLoadChart", () => {
         "Spin adjustment: -5 MW",
       ]),
     );
+  });
+
+  it("keeps the standard operating scale and expands for visible extremes", () => {
+    const replay = replayDashboardFixture.replay;
+    if (!replay) {
+      throw new Error("Replay fixture is required");
+    }
+
+    render(
+      <ReplayLoadChart
+        replay={{
+          ...replay,
+          status: { ...replay.status, mode: "historical_replay" },
+          operational_history: [
+            {
+              timestamp: "2025-06-01T00:00:00-04:00",
+              demand_mw: 795,
+              generation_mw: 1725,
+              spinning_reserve_mw: 25,
+              available_capacity_mw: 1800,
+              reserve_margin_percent: 51,
+              temperature_c: 25,
+              rainfall_mm_hr: 0,
+              data_phase: "REPLAY_REVEALED",
+            },
+          ],
+        }}
+      />,
+    );
+
+    const chartProps = lineChartSpy.mock.calls.at(-1)?.[0] as {
+      options: { scales: { y: { min: number; max: number } } };
+    };
+    expect(chartProps.options.scales.y).toMatchObject({ min: 700, max: 1800 });
   });
 });

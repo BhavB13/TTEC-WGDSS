@@ -44,19 +44,39 @@ demo_observations (immutable 12-month archive)
 
 ## Forecast Integrity
 
-The full-day load forecast uses demand observations before the current replay
-cursor, grouped by target hour, plus the target-hour weather outlook. It applies
-temperature, humidity, and rainfall adjustments to that historical baseline.
-Future June demand is never exposed as an actual value before its timestamp is
-revealed. The chart distinguishes:
+The full-day load forecast uses only demand observations available before the
+current replay cursor. It combines the target-hour profile with exact
+1/2/3/6/24/48/168-hour demand lags, trailing 3/6/12/24-hour moving averages,
+short-term ramps, a median recent-profile residual, current grid context, and the
+target-hour weather outlook. Ridge penalty and blend weight are selected on a
+chronological tuning block. The selected load-state/weather challenger is then
+activated only when it improves on the strongest statistical method on a
+separate newest chronological holdout.
+Future hours recurse on prior forecasts rather than reading future June demand.
+When a provider outlook is missing, the model uses its learned hourly weather
+profile instead of holding the last weather observation indefinitely. The chart
+distinguishes:
 
 - forecast demand;
 - historical hourly average;
 - revealed simulation-replay demand;
-- per-hour uncertainty.
+- revealed TRA where the source archive provides it;
+- residual-calibrated per-hour uncertainty.
+
+Model inputs and residual corrections are clipped to bounds learned from the
+fit partition. A six-hour median profile correction follows a sustained load
+shift while limiting the effect of one abnormal current reading.
 
 The complete archive is available for retrospective analytics, but records
 after the cursor are excluded from forecast fitting to prevent future leakage.
+
+Forecast training also stays within one provenance regime. On a SCADA-backed
+replay day, only SCADA intervals finalized by the model issue time are eligible;
+synthetic rows never fill unavailable SCADA gaps. The chart may reveal later
+source values while retaining the earlier model issue time. Outside complete
+SCADA coverage, the entire forecast, weather context, risk input, and UI status
+switch to the synthetic simulation regime instead of carrying the last SCADA
+state forward.
 
 ## Playback
 
@@ -77,7 +97,7 @@ They drive the weather-sensitive demand and operating-risk forecast. If that
 archive is unavailable, the system uses a one-source same-hour baseline built
 only from observations at or before the cursor.
 
-The offline pipeline may store exact-cursor 1h/2h/6h forecast artifacts. The
+The offline pipeline may store exact-cursor 1h-through-6h forecast artifacts. The
 dashboard uses them when the archived issued-weather ensemble is unavailable,
 and only when `source_cursor_at` matches the simulated SCADA cursor and all
 feature/target timestamps are valid. Otherwise it falls back to the cutoff-safe

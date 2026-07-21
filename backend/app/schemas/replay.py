@@ -58,6 +58,7 @@ class ReplaySummaryResponse(BaseModel):
     baseline_mae_mw: float = 0.0
     residual_std_mw: float = 0.0
     training_rows: int = 0
+    forecast_trained_through: datetime | None = None
     weather_features: list[str] = Field(default_factory=list)
 
 
