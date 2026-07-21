@@ -33,9 +33,19 @@ const grid: GridStatus = {
 
 const probability: ProbabilityData = {
   probability_score: 0.4,
+  capacity_risk_percent: 40,
   risk_level: "LOW",
+  capacity_status: "Watch",
   forecast_demand_30m: 970,
   forecast_demand_60m: 985,
+  forecast_demand_mw: 985,
+  forecast_uncertainty_mw: 20,
+  forecast_tra_mw: 1030,
+  projected_reserve_mw: 45,
+  reserve_surplus_mw: 15,
+  reserve_deficit_mw: 0,
+  uncertainty_source: "CALIBRATED_HISTORICAL_RESIDUALS",
+  tra_projection_basis: "CURRENT_TRA_HELD_SCENARIO_NO_DISPATCH_PLAN",
   factors: [],
   reason: "Stable",
 };

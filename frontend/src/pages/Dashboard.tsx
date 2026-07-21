@@ -8,7 +8,6 @@ import ProbabilityGauge from "../components/ProbabilityGauge";
 import ReplayControlBar from "../components/ReplayControlBar";
 import ReplayLoadChart from "../components/ReplayLoadChart";
 import RiskTimelineChart from "../components/RiskTimelineChart";
-import { formatRiskProbability } from "../utils/probability";
 import ScenarioComparisonChart from "../components/ScenarioComparisonChart";
 import WeatherMap from "../components/WeatherMap";
 import { controlReplay, getDashboardSnapshot } from "../services/api";
@@ -64,9 +63,19 @@ const FALLBACK_GRID: DashboardSnapshot["grid"] = {
 
 const FALLBACK_PROBABILITY: DashboardSnapshot["probability"] = {
   probability_score: 0,
-  risk_level: "LOW",
+  capacity_risk_percent: 0,
+  risk_level: "UNAVAILABLE",
+  capacity_status: "Unavailable",
   forecast_demand_30m: 0,
   forecast_demand_60m: 0,
+  forecast_demand_mw: 0,
+  forecast_uncertainty_mw: 0,
+  forecast_tra_mw: 0,
+  projected_reserve_mw: 0,
+  reserve_surplus_mw: 0,
+  reserve_deficit_mw: 0,
+  uncertainty_source: "UNAVAILABLE",
+  tra_projection_basis: "UNAVAILABLE",
   factors: [],
   reason: "No live probability data available.",
 };
@@ -494,7 +503,6 @@ function HomeTab({
 
       <div className="grid min-h-0 flex-1 items-stretch gap-2.5 xl:grid-cols-[minmax(0,1.22fr)_minmax(18rem,0.78fr)]">
         <DecisionBrief
-          grid={grid}
           recommendation={recommendation}
         />
         <div className="grid min-h-0 gap-2.5 xl:grid-rows-2">
@@ -552,23 +560,21 @@ function ReplayWeatherPanel({
 }
 
 function DecisionBrief({
-  grid,
   recommendation,
 }: {
-  grid: DashboardSnapshot["grid"];
   recommendation: DashboardSnapshot["recommendation"];
 }) {
   const factors = recommendation.factors.length > 0
     ? recommendation.factors.slice(0, 4)
     : [recommendation.reason];
-  const capacityHeadroom =
-    grid.total_available_capacity_mw - recommendation.forecast_demand_60m;
   const actionTone =
-    recommendation.risk_level === "HIGH"
+    recommendation.capacity_status === "Add Generation"
       ? "border-rose-400/35 bg-rose-500/10 text-rose-100"
-      : recommendation.risk_level === "MEDIUM"
+      : recommendation.capacity_status === "Prepare Generation"
+        ? "border-orange-400/35 bg-orange-500/10 text-orange-100"
+        : recommendation.capacity_status === "Watch"
         ? "border-amber-400/35 bg-amber-500/10 text-amber-100"
-        : recommendation.risk_level === "UNAVAILABLE"
+        : recommendation.capacity_status === "Unavailable"
           ? "border-slate-600 bg-slate-800/60 text-slate-200"
           : "border-emerald-400/35 bg-emerald-500/10 text-emerald-100";
 
@@ -584,7 +590,7 @@ function DecisionBrief({
           </h2>
         </div>
         <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${actionTone}`}>
-          {recommendation.risk_level}
+          {recommendation.capacity_status}
         </span>
       </div>
 
@@ -598,9 +604,9 @@ function DecisionBrief({
       </div>
 
       <div className="mt-3 grid grid-cols-3 gap-2">
-        <MiniMetric label="Risk Probability" value={formatProbability(recommendation)} />
+        <MiniMetric label="Capacity Risk" value={formatProbability(recommendation)} />
         <MiniMetric label="30m Demand" value={`${recommendation.forecast_demand_30m.toFixed(0)} MW`} />
-        <MiniMetric label="60m Headroom" value={formatSignedMegawatts(capacityHeadroom)} />
+        <MiniMetric label="Projected Reserve" value={`${recommendation.projected_reserve_mw.toFixed(0)} MW`} />
       </div>
 
       <div className="mt-3 min-h-0 flex-1 overflow-auto">
@@ -1110,11 +1116,6 @@ function RiskGaugeTab({
   ).length;
   const topDrivers = selectTopRiskDrivers(drivers, 5);
   const visibleDrivers = showAllDrivers ? drivers : topDrivers;
-  const deadline = formatDecisionDeadline(
-    probability.decision_deadline_at,
-    probability.decision_deadline_minutes,
-  );
-
   return (
     <div className="grid h-full min-h-0 w-full min-w-0 grid-rows-[minmax(0,1.08fr)_minmax(0,0.92fr)] gap-2.5 overflow-hidden">
       <div className="grid min-h-0 min-w-0 gap-2.5 xl:grid-cols-[minmax(17rem,0.36fr)_minmax(0,0.64fr)]">
@@ -1131,42 +1132,41 @@ function RiskGaugeTab({
 
       <div className="grid min-h-0 min-w-0 gap-2.5 overflow-hidden xl:grid-cols-[minmax(0,1.08fr)_minmax(20rem,0.92fr)]">
         <PanelCard
-          title="Operating Risk Evidence"
+          title="Capacity Risk Evidence"
           className="h-full min-h-0 w-full min-w-0"
         >
           <div className="grid h-full min-h-0 grid-cols-2 auto-rows-fr gap-1.5 sm:grid-cols-4">
             <MiniMetric
-              label="Expected Shortfall"
-              value={`${(probability.expected_shortfall_mw ?? 0).toFixed(1)} MW`}
+              label="Capacity Risk"
+              value={formatCapacityRisk(probability)}
             />
             <MiniMetric
-              label="Conservative Shortfall"
-              value={`${(probability.projected_shortfall_mw ?? 0).toFixed(1)} MW`}
+              label="Forecast Demand"
+              value={`${probability.forecast_demand_mw.toFixed(1)} MW`}
             />
             <MiniMetric
-              label="Peak Risk Time"
-              value={formatRiskPeak(probability)}
-            />
-            <MiniMetric label="Decision Deadline" value={deadline} />
-            <MiniMetric
-              label="Expected TRA"
-              value={`${(probability.expected_online_capacity_mw ?? probability.immediate_online_capacity_mw ?? 0).toFixed(0)} MW`}
+              label="Forecast TRA"
+              value={`${probability.forecast_tra_mw.toFixed(1)} MW`}
             />
             <MiniMetric
-              label="Forecast Confidence"
-              value={`${((probability.decision_confidence ?? 0) * 100).toFixed(1)}%`}
+              label="Projected Reserve"
+              value={`${probability.projected_reserve_mw.toFixed(1)} MW`}
             />
             <MiniMetric
-              label="Corrected Spin"
-              value={
-                probability.expected_spinning_reserve_mw == null
-                  ? "Unavailable"
-                  : `${probability.expected_spinning_reserve_mw.toFixed(0)} MW`
-              }
+              label="Required Reserve"
+              value={`${(probability.required_reserve_mw ?? 30).toFixed(1)} MW`}
             />
             <MiniMetric
-              label="Demand Ramp"
-              value={`${(probability.demand_ramp_mw_per_hour ?? 0) >= 0 ? "+" : ""}${(probability.demand_ramp_mw_per_hour ?? 0).toFixed(1)} MW/h`}
+              label="Reserve Balance"
+              value={formatReserveBalance(probability)}
+            />
+            <MiniMetric
+              label="First Insufficiency"
+              value={formatReserveInsufficiency(probability)}
+            />
+            <MiniMetric
+              label="Forecast Error Sigma"
+              value={`${probability.forecast_uncertainty_mw.toFixed(1)} MW`}
             />
           </div>
         </PanelCard>
@@ -1275,23 +1275,36 @@ function riskDriverDot(direction: string): string {
   return "bg-slate-400";
 }
 
-function formatRiskPeak(probability: DashboardSnapshot["probability"]): string {
-  if (probability.peak_risk_timestamp) {
-    return formatShortDateTime(probability.peak_risk_timestamp);
+function formatCapacityRisk(
+  probability: DashboardSnapshot["probability"],
+): string {
+  if (
+    probability.risk_level === "UNAVAILABLE" ||
+    probability.capacity_status === "Unavailable"
+  ) {
+    return "Unavailable";
   }
-  const minutes = probability.peak_risk_horizon_minutes;
-  if (minutes == null) return "Unavailable";
-  return minutes < 60 ? `In ${minutes} min` : `In ${minutes / 60} hr`;
+  return `${probability.capacity_risk_percent.toFixed(1)}%`;
 }
 
-function formatDecisionDeadline(
-  timestamp?: string | null,
-  minutes?: number | null,
+function formatReserveBalance(
+  probability: DashboardSnapshot["probability"],
 ): string {
-  if (timestamp) return formatShortDateTime(timestamp);
-  if (minutes == null) return "No action window";
-  if (minutes <= 0) return "Due now";
-  return `In ${minutes} min`;
+  if (probability.reserve_surplus_mw >= 0) {
+    return `+${probability.reserve_surplus_mw.toFixed(1)} MW`;
+  }
+  return `-${probability.reserve_deficit_mw.toFixed(1)} MW`;
+}
+
+function formatReserveInsufficiency(
+  probability: DashboardSnapshot["probability"],
+): string {
+  if (probability.reserve_insufficient_at) {
+    return formatShortDateTime(probability.reserve_insufficient_at);
+  }
+  const minutes = probability.reserve_insufficient_horizon_minutes;
+  if (minutes == null) return "Not in horizon";
+  return minutes < 60 ? `In ${minutes} min` : `In ${minutes / 60} hr`;
 }
 
 function formatEnumLabel(value: string): string {
@@ -1306,10 +1319,8 @@ function OperationalGuidanceTab({
   const factors = recommendation.factors.slice(0, 6);
   const decisionAvailable = recommendation.risk_level !== "UNAVAILABLE";
   const dispatchAction = recommendation.decision_action ?? recommendation.recommendation;
-  const shortfall = recommendation.projected_shortfall_mw ?? 0;
-  const riseMinutes = recommendation.expected_rise_minutes ?? 0;
-  const startupMinutes = recommendation.startup_time_minutes ?? 0;
-  const confidence = recommendation.decision_confidence ?? 0;
+  const reserveTarget = recommendation.required_reserve_mw ?? 30;
+  const reserveHealthy = recommendation.reserve_surplus_mw >= 0;
 
   return (
     <div className="grid h-full min-h-0 w-full min-w-0 gap-2.5 overflow-hidden xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -1331,28 +1342,28 @@ function OperationalGuidanceTab({
 
       <div className="grid min-h-0 grid-cols-2 auto-rows-fr gap-2 rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
             <GuidanceThreshold
-              label="Conservative Shortfall"
-              value={`${shortfall.toFixed(0)} MW`}
-              context="Forecast plus uncertainty above safe capacity"
-              healthy={decisionAvailable && shortfall <= 0}
+              label="Projected Reserve"
+              value={`${recommendation.projected_reserve_mw.toFixed(1)} MW`}
+              context={`Forecast TRA ${recommendation.forecast_tra_mw.toFixed(1)} minus demand ${recommendation.forecast_demand_mw.toFixed(1)} MW`}
+              healthy={decisionAvailable && reserveHealthy}
             />
             <GuidanceThreshold
-              label="Expected Load Rise"
-              value={`${(recommendation.expected_load_rise_mw ?? 0).toFixed(0)} MW`}
-              context={`Expected in ${riseMinutes} minutes`}
-              healthy={(recommendation.expected_load_rise_mw ?? 0) <= 0}
+              label="Required Reserve"
+              value={`${reserveTarget.toFixed(1)} MW`}
+              context="Configured operating reserve target"
+              healthy={decisionAvailable}
             />
             <GuidanceThreshold
-              label="Generator Capacity"
-              value={`${(recommendation.recommended_capacity_mw ?? 0).toFixed(0)} MW`}
-              context={startupMinutes > 0 ? `${startupMinutes}-minute startup` : "No startup required"}
-              healthy={(recommendation.recommended_capacity_mw ?? 0) === 0}
+              label="Reserve Balance"
+              value={formatReserveBalance(recommendation)}
+              context={reserveHealthy ? "Surplus above target" : "Deficit below target"}
+              healthy={decisionAvailable && reserveHealthy}
             />
             <GuidanceThreshold
-              label="Decision Confidence"
-              value={`${(confidence * 100).toFixed(0)}%`}
-              context={`Weather effect ${(recommendation.weather_effect_mw ?? 0) >= 0 ? "+" : ""}${(recommendation.weather_effect_mw ?? 0).toFixed(1)} MW`}
-              healthy={confidence >= 0.75}
+              label="Capacity Risk"
+              value={formatCapacityRisk(recommendation)}
+              context={`${recommendation.capacity_status} - ${formatReserveInsufficiency(recommendation)}`}
+              healthy={recommendation.capacity_status === "Normal"}
             />
       </div>
     </div>
@@ -1790,9 +1801,10 @@ function formatSystemSpin(grid: DashboardSnapshot["grid"]): string {
 function formatProbability(
   probability: DashboardSnapshot["probability"],
 ): string {
-  return probability.risk_level === "UNAVAILABLE"
+  return probability.risk_level === "UNAVAILABLE" ||
+    probability.capacity_status === "Unavailable"
     ? "--"
-    : formatRiskProbability(probability.probability_score);
+    : `${probability.capacity_risk_percent.toFixed(1)}%`;
 }
 
 function formatGuidanceForecastTimestamp(value: string): string {

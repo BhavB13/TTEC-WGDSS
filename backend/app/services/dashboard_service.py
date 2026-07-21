@@ -155,6 +155,11 @@ class DashboardService:
             or grid_quality not in acceptable_grid_quality
             or bool(grid_missing_fields)
         )
+        live_model_status = (
+            self.model_status_service.get_model_status()
+            if replay_context is None
+            else None
+        )
         if decision_inhibited:
             probability_payload = self.recommendation_engine.unavailable(
                 float(grid_status["current_demand_mw"]),
@@ -173,6 +178,16 @@ class DashboardService:
                         forecast,
                         reference_time=weather.get("timestamp"),
                         horizon_minutes=60,
+                    ),
+                    historical_validation_mae_mw=(
+                        live_model_status.metrics.mae
+                        if live_model_status is not None
+                        else None
+                    ),
+                    historical_validation_rmse_mw=(
+                        live_model_status.metrics.rmse
+                        if live_model_status is not None
+                        else None
                     ),
                 )
             )
@@ -213,7 +228,7 @@ class DashboardService:
             scada_status = replay_context.get("scada_status")
         else:
             demand_forecast = self.model_status_service.get_demand_forecast_bundle()
-            model_status = self.model_status_service.get_model_status()
+            model_status = live_model_status
             scada_status = self.model_status_service.get_scada_status()
 
         snapshot = DashboardSnapshotResponse(
@@ -286,6 +301,18 @@ class DashboardService:
             "expected_spinning_reserve_mw",
             "demand_ramp_mw_per_hour",
             "capacity_projection_basis",
+            "capacity_risk_percent",
+            "capacity_status",
+            "forecast_demand_mw",
+            "forecast_uncertainty_mw",
+            "forecast_tra_mw",
+            "projected_reserve_mw",
+            "reserve_surplus_mw",
+            "reserve_deficit_mw",
+            "reserve_insufficient_horizon_minutes",
+            "reserve_insufficient_at",
+            "uncertainty_source",
+            "tra_projection_basis",
             "risk_components",
             "formula_version",
         )

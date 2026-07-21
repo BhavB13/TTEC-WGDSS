@@ -76,9 +76,10 @@ class Settings(BaseSettings):
     # Operator-policy assumptions are configurable and remain explicitly
     # unconfirmed until T&TEC control engineering approves them.
     OPERATING_POLICY_STATUS: str = "PROTOTYPE_UNCONFIRMED"
-    OPERATING_RESERVE_FRACTION: float = 0.15
-    RISK_MEDIUM_PROBABILITY_THRESHOLD: float = 0.30
-    RISK_HIGH_PROBABILITY_THRESHOLD: float = 0.65
+    CAPACITY_RISK_REQUIRED_RESERVE_MW: float = 30.0
+    CAPACITY_RISK_WATCH_PROBABILITY_THRESHOLD: float = 0.20
+    CAPACITY_RISK_PREPARE_PROBABILITY_THRESHOLD: float = 0.50
+    CAPACITY_RISK_ADD_GENERATION_PROBABILITY_THRESHOLD: float = 0.80
     FAST_START_UNIT_CAPACITY_MW: float = 15.0
     FAST_START_MAX_CAPACITY_MW: float = 30.0
     FAST_START_LEAD_TIME_MINUTES: int = 20

@@ -106,12 +106,20 @@ describe("Dashboard", () => {
     await user.click(screen.getByRole("button", { name: "Risk Gauge" }));
     expect(screen.getByTestId("probability-gauge")).toBeInTheDocument();
     expect(screen.getByTestId("risk-timeline")).toBeInTheDocument();
-    expect(screen.getByText("Operating Risk Evidence")).toBeInTheDocument();
+    expect(screen.getByText("Capacity Risk Evidence")).toBeInTheDocument();
+    expect(screen.getByText("Forecast Demand")).toBeInTheDocument();
+    expect(screen.getByText("Forecast TRA")).toBeInTheDocument();
+    expect(screen.getByText("Projected Reserve")).toBeInTheDocument();
+    expect(screen.getByText("Required Reserve")).toBeInTheDocument();
+    expect(screen.getByText("Reserve Balance")).toBeInTheDocument();
+    expect(screen.getByText("First Insufficiency")).toBeInTheDocument();
     expect(screen.getByText("Risk Drivers")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Operational Guidance" }));
-    expect(screen.getByText("Conservative Shortfall")).toBeInTheDocument();
-    expect(screen.getByText("Decision Confidence")).toBeInTheDocument();
+    expect(screen.getByText("Projected Reserve")).toBeInTheDocument();
+    expect(screen.getByText("Required Reserve")).toBeInTheDocument();
+    expect(screen.getByText("Reserve Balance")).toBeInTheDocument();
+    expect(screen.getByText("Capacity Risk")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Analytics" }));
     expect(screen.getByText("Calibration Summary")).toBeInTheDocument();

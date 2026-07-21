@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 # an improvement on a separate newest chronological holdout.
 MIN_TRAIN_ROWS = 24 * 7
 MIN_MODEL_IMPROVEMENT = 0.02
+MIN_MODEL_IMPROVEMENT_MW = 0.1
 MIN_UNCERTAINTY_MW = 12.0
 FORECAST_INTERVAL_COVERAGE = 0.90
 MIN_REQUIRED_HISTORY_ROWS = 48
@@ -25,8 +26,9 @@ MIN_LOAD_HISTORY_ROWS = 24
 RIDGE_PENALTIES = (8.0, 16.0, 32.0, 64.0)
 ENSEMBLE_RIDGE_WEIGHTS = (0.25, 0.4, 0.5, 0.6, 0.75)
 DEMO_FORECAST_MODEL_VERSION = "demo-load-forecast-v3.1"
-ML_MODEL_NAMES = frozenset(
-    {"LoadStateWeatherRidge", "LoadStateWeatherEnsemble"}
+ML_MODEL_NAMES = (
+    "LoadStateWeatherRidge",
+    "LoadStateWeatherEnsemble",
 )
 
 
@@ -231,10 +233,13 @@ class DemoLoadForecastService:
             name: _forecast_metrics(tuning_actual, predictions)
             for name, predictions in tuning_candidates.items()
         }
-        statistical_names = {
-            "HourlyHistoricalAverage",
+        # Candidate order is the deterministic tie-breaker. Prefer the adaptive
+        # moving profile when validation metrics are identical instead of
+        # allowing Python hash randomization to choose the baseline family.
+        statistical_names = (
             "MovingAverageProfile",
-        }
+            "HourlyHistoricalAverage",
+        )
         best_statistical = min(
             (name for name in statistical_names if name in tuning_metrics),
             key=lambda name: _metric_sort_key(tuning_metrics[name]),
@@ -309,10 +314,19 @@ class DemoLoadForecastService:
         selected_name = best_statistical
         if tuned_ml_name is not None and tuned_ml_name in metrics:
             ml_metrics = metrics[tuned_ml_name]
+            required_mae_gain = max(
+                MIN_MODEL_IMPROVEMENT_MW,
+                best_statistical_metrics[0] * MIN_MODEL_IMPROVEMENT,
+            )
+            required_rmse_gain = max(
+                MIN_MODEL_IMPROVEMENT_MW,
+                best_statistical_metrics[1] * MIN_MODEL_IMPROVEMENT,
+            )
             if (
-                ml_metrics[0]
-                <= best_statistical_metrics[0] * (1.0 - MIN_MODEL_IMPROVEMENT)
-                and ml_metrics[1] <= best_statistical_metrics[1]
+                best_statistical_metrics[0] - ml_metrics[0]
+                >= required_mae_gain
+                and best_statistical_metrics[1] - ml_metrics[1]
+                >= required_rmse_gain
             ):
                 selected_name = tuned_ml_name
 

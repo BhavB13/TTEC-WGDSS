@@ -117,14 +117,15 @@ archive. Neither path is a live T&TEC feed.
   and explicit degradation when any source is unavailable.
 - Current-clock June alignment with real-time automatic playback and manual
   accelerated controls.
-- Continuous operating-risk probability for every valid horizon through six
-  hours, based on TRA, corrected Spin, residual uncertainty, reserve requirement,
-  weather-informed demand, and startup timing. The API exposes raw probability,
-  demand bounds, safe capacity, headroom, expected/conservative shortfall,
-  peak-risk time, decision deadline, severity, confidence, and structured
-  drivers; the headline uses the maximum correlated-horizon probability.
-  Reserve policy, risk bands, unit blocks, and lead times are configurable and
-  returned as `PROTOTYPE_UNCONFIRMED`; they are not approved utility settings.
+- Continuous capacity-risk probability for every valid horizon through six
+  hours. The engine calculates `projected reserve = forecast TRA - forecast
+  demand` and evaluates the probability that actual reserve falls below the
+  configurable 30 MW project target using calibrated forecast residuals. The
+  API exposes the selected horizon's demand, TRA, projected reserve, target,
+  surplus/deficit, uncertainty provenance, status, and earliest expected
+  insufficiency. Corrected System Spin remains separate SCADA context. Reserve
+  policy, status bands, unit blocks, and lead times are configurable and returned
+  as `PROTOTYPE_UNCONFIRMED`; they are not approved utility settings.
 - Synthetic replay no longer defines corrected Spin as `TRA - demand`; it uses
   a separately generated, explicitly simulated series. Historical replay still
   reads the exported corrected-spin tag directly.
@@ -184,10 +185,10 @@ forecast feature.
   model was being compared with a synthetic day outside complete SCADA
   coverage. Source routing reduced chart MAE against revealed values from
   187.15 MW to 8.91 MW and maximum absolute error from 353.85 MW to 71.11 MW.
-- Backend suite: 143 tests pass, including ingestion, resampling, leakage,
+- Backend suite: 147 tests pass, including ingestion, resampling, leakage,
   forecasting, replay, dashboard, continuous operating risk, exact 20/50/80%
   probabilities, and chronological Brier-score backtesting.
-- Frontend Vitest suite: 10 tests pass.
+- Frontend Vitest suite: 11 tests pass.
 - Frontend production build passes.
 - The Risk workspace was visually verified at 1366x768 with no document scroll,
   horizontal overflow, or overlapping gauge/timeline/evidence panels.
@@ -195,7 +196,7 @@ forecast feature.
   pass `alembic check`.
 - A real Uvicorn request to `/api/dashboard/snapshot` returns all direct
   1h-through-6h exact-cursor horizons, confidence bounds, alignment evidence,
-  metrics, similar examples, and operating-risk-v4.0 output.
+  metrics, similar examples, and capacity-risk-v5.0 output.
 
 ## Next Operational Step
 

@@ -417,13 +417,40 @@ async def test_dashboard_snapshot_exposes_model_scada_status_and_operating_risk(
     assert snapshot.model_status.metrics.mae == 10
     assert snapshot.scada_status is not None
     assert snapshot.scada_status.quality_status == "GOOD"
-    assert snapshot.probability.engine_version == "operating-risk-v4.0"
+    assert snapshot.probability.engine_version == "capacity-risk-v5.0"
     assert snapshot.probability.risk_profile
     assert snapshot.probability.probability_method == "NORMAL_RESIDUAL_EXCEEDANCE"
     assert snapshot.probability.policy_status == "PROTOTYPE_UNCONFIRMED"
-    assert snapshot.probability.risk_level == "HIGH"
+    assert snapshot.probability.risk_level == "LOW"
+    assert snapshot.probability.capacity_status == "Normal"
     assert snapshot.probability.forecast_demand_30m == 970
-    assert snapshot.recommendation.recommendation == "START HEAVY GENERATOR SET"
+    assert snapshot.probability.forecast_demand_mw == 1040
+    assert snapshot.probability.forecast_tra_mw == 1120
+    assert snapshot.probability.projected_reserve_mw == 80
+    assert snapshot.probability.required_reserve_mw == 30
+    assert snapshot.probability.reserve_surplus_mw == 50
+    assert snapshot.probability.reserve_deficit_mw == 0
+    assert snapshot.probability.capacity_risk_percent == pytest.approx(
+        snapshot.probability.probability_score * 100
+    )
+    selected = max(
+        snapshot.probability.risk_profile,
+        key=lambda point: point.probability,
+    )
+    assert selected.forecast_demand_mw == snapshot.probability.forecast_demand_mw
+    assert selected.forecast_tra_mw == snapshot.probability.forecast_tra_mw
+    assert selected.projected_reserve_mw == snapshot.probability.projected_reserve_mw
+    assert selected.reserve_surplus_mw == snapshot.probability.reserve_surplus_mw
+    assert selected.capacity_status == snapshot.probability.capacity_status
+    assert snapshot.recommendation.capacity_risk_percent == snapshot.probability.capacity_risk_percent
+    assert snapshot.recommendation.forecast_demand_mw == snapshot.probability.forecast_demand_mw
+    assert snapshot.recommendation.forecast_tra_mw == snapshot.probability.forecast_tra_mw
+    assert snapshot.recommendation.projected_reserve_mw == snapshot.probability.projected_reserve_mw
+    assert snapshot.recommendation.required_reserve_mw == snapshot.probability.required_reserve_mw
+    assert snapshot.recommendation.reserve_surplus_mw == snapshot.probability.reserve_surplus_mw
+    assert snapshot.recommendation.reserve_deficit_mw == snapshot.probability.reserve_deficit_mw
+    assert snapshot.recommendation.capacity_status == snapshot.probability.capacity_status
+    assert snapshot.recommendation.recommendation == "NO ACTION REQUIRED"
     assert snapshot.data_quality.decision_status == "SIMULATION"
 
 

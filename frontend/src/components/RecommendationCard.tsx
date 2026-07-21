@@ -23,14 +23,18 @@ export default function RecommendationCard({
         </div>
         <span
           className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
-            recommendation.risk_level === "HIGH"
+            recommendation.capacity_status === "Add Generation"
               ? "border-rose-500/40 bg-rose-500/10 text-rose-200"
-              : recommendation.risk_level === "MEDIUM"
+              : recommendation.capacity_status === "Prepare Generation"
+                ? "border-orange-500/40 bg-orange-500/10 text-orange-200"
+                : recommendation.capacity_status === "Watch"
                 ? "border-amber-500/40 bg-amber-500/10 text-amber-200"
-                : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                : recommendation.capacity_status === "Unavailable"
+                  ? "border-slate-500/40 bg-slate-500/10 text-slate-200"
+                  : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
           }`}
         >
-          {recommendation.risk_level}
+          {recommendation.capacity_status}
         </span>
       </div>
 
@@ -45,11 +49,11 @@ export default function RecommendationCard({
 
       <div className="mt-2.5 grid gap-2 text-sm sm:grid-cols-2">
         <Metric
-          label="Probability"
+          label="Capacity Risk"
           value={
             recommendation.risk_level === "UNAVAILABLE"
               ? "--"
-              : formatRiskProbability(recommendation.probability_score)
+              : formatRiskProbability(recommendation.capacity_risk_percent / 100)
           }
         />
         <Metric label="30m Demand" value={`${recommendation.forecast_demand_30m.toFixed(0)} MW`} />

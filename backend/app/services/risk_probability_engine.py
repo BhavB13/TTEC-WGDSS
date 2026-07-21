@@ -11,9 +11,10 @@ from app.core.config import settings
 @dataclass(frozen=True)
 class OperatingPolicy:
     status: str
-    reserve_fraction: float
-    medium_probability_threshold: float
-    high_probability_threshold: float
+    required_reserve_mw: float
+    watch_probability_threshold: float
+    prepare_probability_threshold: float
+    add_generation_probability_threshold: float
     fast_start_unit_capacity_mw: float
     fast_start_max_capacity_mw: float
     fast_start_lead_time_minutes: int
@@ -25,9 +26,16 @@ class OperatingPolicy:
     def from_settings(cls) -> "OperatingPolicy":
         return cls(
             status=settings.OPERATING_POLICY_STATUS,
-            reserve_fraction=settings.OPERATING_RESERVE_FRACTION,
-            medium_probability_threshold=settings.RISK_MEDIUM_PROBABILITY_THRESHOLD,
-            high_probability_threshold=settings.RISK_HIGH_PROBABILITY_THRESHOLD,
+            required_reserve_mw=settings.CAPACITY_RISK_REQUIRED_RESERVE_MW,
+            watch_probability_threshold=(
+                settings.CAPACITY_RISK_WATCH_PROBABILITY_THRESHOLD
+            ),
+            prepare_probability_threshold=(
+                settings.CAPACITY_RISK_PREPARE_PROBABILITY_THRESHOLD
+            ),
+            add_generation_probability_threshold=(
+                settings.CAPACITY_RISK_ADD_GENERATION_PROBABILITY_THRESHOLD
+            ),
             fast_start_unit_capacity_mw=settings.FAST_START_UNIT_CAPACITY_MW,
             fast_start_max_capacity_mw=settings.FAST_START_MAX_CAPACITY_MW,
             fast_start_lead_time_minutes=settings.FAST_START_LEAD_TIME_MINUTES,
@@ -41,13 +49,16 @@ class OperatingPolicy:
 class OperatingForecastPoint:
     horizon_minutes: int
     forecast_demand_mw: float
-    forecast_uncertainty_mw: float
+    forecast_uncertainty_mw: float | None
     weather_effect_mw: float = 0.0
     confidence: float = 1.0
     forecast_timestamp: datetime | None = None
     confidence_lower_mw: float | None = None
     confidence_upper_mw: float | None = None
     confidence_level: float = 0.90
+    forecast_tra_mw: float | None = None
+    tra_projection_basis: str | None = None
+    uncertainty_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -58,8 +69,9 @@ class OperatingRiskInput:
     online_capacity_mw: float | None
     available_capacity_mw: float | None
     spinning_reserve_mw: float | None
-    reserve_margin_threshold: float | None = None
     fallback_uncertainty_mw: float | None = None
+    historical_validation_mae_mw: float | None = None
+    historical_validation_rmse_mw: float | None = None
     forecast_profile: tuple[OperatingForecastPoint, ...] = ()
     available_capacity_is_verified: bool = True
     data_quality_status: str = "GOOD"
@@ -102,6 +114,15 @@ class RiskHorizonAssessment:
     expected_spinning_reserve_mw: float | None
     demand_ramp_mw_per_hour: float
     capacity_projection_basis: str
+    capacity_risk_percent: float
+    forecast_tra_mw: float
+    projected_reserve_mw: float
+    reserve_surplus_mw: float
+    reserve_deficit_mw: float
+    capacity_status: str
+    reserve_expected_insufficient: bool
+    uncertainty_source: str
+    tra_projection_basis: str
 
 
 @dataclass(frozen=True)
@@ -171,15 +192,25 @@ class OperatingRiskResult:
     expected_available_capacity_mw: float | None = None
     expected_spinning_reserve_mw: float | None = None
     demand_ramp_mw_per_hour: float = 0.0
-    capacity_projection_basis: str = "CURRENT_SCADA_HELD_CONSTANT_NO_DISPATCH_PLAN"
+    capacity_projection_basis: str = "CURRENT_TRA_HELD_SCENARIO_NO_DISPATCH_PLAN"
+    capacity_risk_percent: float = 0.0
+    forecast_tra_mw: float = 0.0
+    projected_reserve_mw: float = 0.0
+    reserve_surplus_mw: float = 0.0
+    reserve_deficit_mw: float = 0.0
+    capacity_status: str = "Unavailable"
+    reserve_insufficient_horizon_minutes: int | None = None
+    reserve_insufficient_at: datetime | None = None
+    uncertainty_source: str = "UNAVAILABLE"
+    tra_projection_basis: str = "UNAVAILABLE"
     risk_components: dict[str, float | str | bool | None] = field(default_factory=dict)
-    formula_version: str = "wgdss-operating-risk-v4"
-    engine_version: str = "operating-risk-v4"
+    formula_version: str = "wgdss-capacity-risk-v5"
+    engine_version: str = "capacity-risk-v5"
     policy_status: str = "PROTOTYPE_UNCONFIRMED"
 
 
 class RiskProbabilityEngine:
-    ENGINE_VERSION = "operating-risk-v4.0"
+    ENGINE_VERSION = "capacity-risk-v5.0"
 
     def __init__(self, policy: OperatingPolicy | None = None) -> None:
         self.policy = policy or OperatingPolicy.from_settings()
@@ -239,11 +270,13 @@ class RiskProbabilityEngine:
         assert risk_input.forecast_demand_mw is not None
         assert risk_input.current_demand_mw is not None
         assert risk_input.online_capacity_mw is not None
-        reserve_fraction = self._reserve_fraction(risk_input)
-
+        fallback_uncertainty, fallback_uncertainty_source = (
+            self._resolve_uncertainty(risk_input)
+        )
         profile = self._profile(
             risk_input,
-            self._resolve_uncertainty(risk_input),
+            fallback_uncertainty,
+            fallback_uncertainty_source,
         )
         if not profile:
             return self._unavailable(
@@ -252,22 +285,11 @@ class RiskProbabilityEngine:
             )
 
         immediate_capacity_mw = risk_input.online_capacity_mw
-        capacity_basis = "TRA_ONLY_SPIN_UNAVAILABLE"
-        if risk_input.spinning_reserve_mw is not None:
-            synchronized_capacity_mw = (
-                risk_input.current_demand_mw + risk_input.spinning_reserve_mw
-            )
-            immediate_capacity_mw = min(
-                immediate_capacity_mw,
-                synchronized_capacity_mw,
-            )
-            capacity_basis = "MIN_TRA_AND_DEMAND_PLUS_CORRECTED_SPIN"
+        capacity_basis = "FORECAST_TRA_MINUS_FORECAST_DEMAND"
         assessments = [
             self._assess_point(
                 point,
                 current_demand_mw=risk_input.current_demand_mw,
-                immediate_capacity_mw=immediate_capacity_mw,
-                reserve_margin_threshold=reserve_fraction,
                 online_capacity_mw=risk_input.online_capacity_mw,
                 available_capacity_mw=risk_input.available_capacity_mw,
                 spinning_reserve_mw=risk_input.spinning_reserve_mw,
@@ -286,8 +308,9 @@ class RiskProbabilityEngine:
         assert isinstance(selected_point, OperatingForecastPoint)
         required_reserve_mw = selected["required_reserve_mw"]
         safe_online_capacity_mw = selected["safe_online_capacity_mw"]
-        uncertainty = selected_point.forecast_uncertainty_mw
+        uncertainty = float(selected["forecast_uncertainty_mw"])
         probability_score = float(selected["probability"])
+        capacity_status = str(selected["capacity_status"])
 
         available_capacity = risk_input.available_capacity_mw
         reserve_margin_mw = (
@@ -301,26 +324,18 @@ class RiskProbabilityEngine:
             else None
         )
 
-        risk_level = self._risk_level(probability_score)
-        dispatch = self._dispatch_decision(selected, risk_level, risk_input)
+        risk_level = self._legacy_risk_level(capacity_status)
+        dispatch = self._dispatch_decision(selected, capacity_status, risk_input)
         recommendation = dispatch["recommendation"]
-        selected_input = replace(
-            risk_input,
-            forecast_demand_mw=selected_point.forecast_demand_mw,
-            forecast_uncertainty_mw=selected_point.forecast_uncertainty_mw,
-        )
         reasons = self._reasons(
-            risk_input=selected_input,
-            probability_score=probability_score,
-            safe_online_capacity_mw=safe_online_capacity_mw,
-            required_reserve_mw=required_reserve_mw,
-            uncertainty=uncertainty,
+            risk_input=risk_input,
+            selected=selected,
             reserve_margin_percent=reserve_margin_percent,
         )
         reasons.extend([
             f"Expected load rise is {float(selected['expected_load_rise_mw']):.1f} MW in "
             f"{selected_point.horizon_minutes} minutes",
-            f"Conservative capacity shortfall is {float(selected['projected_shortfall_mw']):.1f} MW",
+            f"Conservative reserve deficit is {float(selected['projected_shortfall_mw']):.1f} MW",
             f"Weather contributes {selected_point.weather_effect_mw:+.1f} MW to the forecast",
             f"Forecast confidence is {selected_point.confidence * 100:.0f}%",
         ])
@@ -358,6 +373,20 @@ class RiskProbabilityEngine:
 
         risk_profile = tuple(
             self._public_assessment(assessment) for assessment in assessments
+        )
+        first_insufficient = next(
+            (
+                assessment
+                for assessment in sorted(
+                    assessments,
+                    key=lambda item: item["point"].horizon_minutes,
+                )
+                if bool(assessment["reserve_expected_insufficient"])
+            ),
+            None,
+        )
+        first_insufficient_point = (
+            first_insufficient["point"] if first_insufficient is not None else None
         )
         projected_shortfall = float(selected["projected_shortfall_mw"])
         severity_level = self._severity_level(projected_shortfall)
@@ -426,20 +455,47 @@ class RiskProbabilityEngine:
                 else None
             ),
             demand_ramp_mw_per_hour=float(selected["demand_ramp_mw_per_hour"]),
-            capacity_projection_basis="CURRENT_SCADA_HELD_CONSTANT_NO_DISPATCH_PLAN",
+            capacity_projection_basis=str(selected["capacity_projection_basis"]),
+            capacity_risk_percent=probability_score * 100.0,
+            forecast_tra_mw=float(selected["forecast_tra_mw"]),
+            projected_reserve_mw=float(selected["projected_reserve_mw"]),
+            reserve_surplus_mw=float(selected["reserve_surplus_mw"]),
+            reserve_deficit_mw=float(selected["reserve_deficit_mw"]),
+            capacity_status=capacity_status,
+            reserve_insufficient_horizon_minutes=(
+                first_insufficient_point.horizon_minutes
+                if isinstance(first_insufficient_point, OperatingForecastPoint)
+                else None
+            ),
+            reserve_insufficient_at=(
+                first_insufficient_point.forecast_timestamp
+                if isinstance(first_insufficient_point, OperatingForecastPoint)
+                else None
+            ),
+            uncertainty_source=str(selected["uncertainty_source"]),
+            tra_projection_basis=str(selected["tra_projection_basis"]),
             risk_components={
-                "shortfall_probability": probability_score,
+                "capacity_risk_probability": probability_score,
+                "capacity_risk_percent": probability_score * 100.0,
                 "forecast_uncertainty_mw": uncertainty,
-                "reserve_adjusted_headroom_mw": float(
-                    selected["reserve_adjusted_headroom_mw"]
-                ),
+                "forecast_demand_mw": selected_point.forecast_demand_mw,
+                "forecast_tra_mw": float(selected["forecast_tra_mw"]),
+                "projected_reserve_mw": float(selected["projected_reserve_mw"]),
+                "required_reserve_mw": float(required_reserve_mw),
+                "reserve_surplus_mw": float(selected["reserve_surplus_mw"]),
+                "reserve_deficit_mw": float(selected["reserve_deficit_mw"]),
                 "demand_ramp_mw_per_hour": float(
                     selected["demand_ramp_mw_per_hour"]
                 ),
                 "forecast_confidence": selected_point.confidence,
                 "data_quality_status": risk_input.data_quality_status,
                 "capacity_projection_basis": (
-                    "CURRENT_SCADA_HELD_CONSTANT_NO_DISPATCH_PLAN"
+                    selected["capacity_projection_basis"]
+                ),
+                "uncertainty_source": selected["uncertainty_source"],
+                "event_definition": (
+                    "TRA_MINUS_ACTUAL_DEMAND_BELOW_"
+                    f"{required_reserve_mw:g}_MW"
                 ),
             },
             engine_version=self.ENGINE_VERSION,
@@ -451,10 +507,14 @@ class RiskProbabilityEngine:
         cls,
         risk_input: OperatingRiskInput,
         fallback_uncertainty: float,
+        fallback_uncertainty_source: str,
     ) -> tuple[OperatingForecastPoint, ...]:
         valid: list[OperatingForecastPoint] = []
         for point in risk_input.forecast_profile:
-            uncertainty = cls._point_uncertainty(point)
+            uncertainty, uncertainty_source = cls._point_uncertainty(point)
+            if not _is_positive_finite(uncertainty):
+                uncertainty = fallback_uncertainty
+                uncertainty_source = fallback_uncertainty_source
             if (
                 not 0 < point.horizon_minutes <= 6 * 60
                 or not _is_finite(point.forecast_demand_mw)
@@ -479,6 +539,7 @@ class RiskProbabilityEngine:
                     forecast_uncertainty_mw=uncertainty,
                     confidence=confidence,
                     confidence_level=confidence_level,
+                    uncertainty_source=uncertainty_source,
                 )
             )
         if valid:
@@ -493,13 +554,17 @@ class RiskProbabilityEngine:
                 horizon_minutes=60,
                 forecast_demand_mw=risk_input.forecast_demand_mw,
                 forecast_uncertainty_mw=fallback_uncertainty,
+                uncertainty_source=fallback_uncertainty_source,
             ),
         )
 
     @staticmethod
-    def _point_uncertainty(point: OperatingForecastPoint) -> float:
+    def _point_uncertainty(point: OperatingForecastPoint) -> tuple[float, str]:
         if _is_positive_finite(point.forecast_uncertainty_mw):
-            return point.forecast_uncertainty_mw
+            return (
+                float(point.forecast_uncertainty_mw),
+                point.uncertainty_source or "CALIBRATED_FORECAST_RESIDUALS",
+            )
         if (
             point.confidence_lower_mw is None
             or point.confidence_upper_mw is None
@@ -508,29 +573,44 @@ class RiskProbabilityEngine:
             or point.confidence_upper_mw <= point.confidence_lower_mw
             or not 0 < point.confidence_level < 1
         ):
-            return 0.0
+            return 0.0, "UNAVAILABLE"
         z_value = NormalDist().inv_cdf((1.0 + point.confidence_level) / 2.0)
-        return (point.confidence_upper_mw - point.confidence_lower_mw) / (
-            2.0 * z_value
+        return (
+            (point.confidence_upper_mw - point.confidence_lower_mw)
+            / (2.0 * z_value),
+            "PREDICTION_INTERVAL_NORMAL_EQUIVALENT",
         )
 
     def _assess_point(
         self,
         point: OperatingForecastPoint,
         current_demand_mw: float,
-        immediate_capacity_mw: float,
-        reserve_margin_threshold: float,
         online_capacity_mw: float,
         available_capacity_mw: float | None,
         spinning_reserve_mw: float | None,
     ) -> dict[str, object]:
-        required_reserve = (
-            max(current_demand_mw, point.forecast_demand_mw)
-            * reserve_margin_threshold
+        assert point.forecast_uncertainty_mw is not None
+        forecast_tra_mw = (
+            float(point.forecast_tra_mw)
+            if _is_positive_finite(point.forecast_tra_mw)
+            else online_capacity_mw
         )
-        safe_capacity = immediate_capacity_mw - required_reserve
+        tra_projection_basis = (
+            point.tra_projection_basis
+            if _is_positive_finite(point.forecast_tra_mw)
+            and point.tra_projection_basis
+            else "FORECAST_TRA_SUPPLIED"
+            if _is_positive_finite(point.forecast_tra_mw)
+            else "CURRENT_TRA_HELD_SCENARIO_NO_DISPATCH_PLAN"
+        )
+        required_reserve = self.policy.required_reserve_mw
+        projected_reserve = forecast_tra_mw - point.forecast_demand_mw
+        reserve_surplus = projected_reserve - required_reserve
+        reserve_deficit = max(0.0, -reserve_surplus)
+        safe_capacity = forecast_tra_mw - required_reserve
         z_score = (safe_capacity - point.forecast_demand_mw) / point.forecast_uncertainty_mw
         probability = max(0.0, min(1.0, _normal_survival(z_score)))
+        capacity_status = self._capacity_status(probability)
         confidence_level = (
             point.confidence_level if 0 < point.confidence_level < 1 else 0.90
         )
@@ -583,14 +663,22 @@ class RiskProbabilityEngine:
         return {
             "point": point,
             "probability": probability,
+            "capacity_risk_percent": probability * 100.0,
+            "forecast_uncertainty_mw": point.forecast_uncertainty_mw,
             "required_reserve_mw": required_reserve,
             "safe_online_capacity_mw": safe_capacity,
             "forecast_lower_mw": max(0.0, forecast_lower),
             "forecast_upper_mw": max(0.0, forecast_upper),
             "confidence_level": confidence_level,
-            "immediate_online_capacity_mw": immediate_capacity_mw,
-            "online_headroom_mw": immediate_capacity_mw - point.forecast_demand_mw,
-            "reserve_adjusted_headroom_mw": safe_capacity - point.forecast_demand_mw,
+            "immediate_online_capacity_mw": online_capacity_mw,
+            "online_headroom_mw": projected_reserve,
+            "reserve_adjusted_headroom_mw": reserve_surplus,
+            "forecast_tra_mw": forecast_tra_mw,
+            "projected_reserve_mw": projected_reserve,
+            "reserve_surplus_mw": reserve_surplus,
+            "reserve_deficit_mw": reserve_deficit,
+            "capacity_status": capacity_status,
+            "reserve_expected_insufficient": projected_reserve <= required_reserve,
             "expected_shortfall_mw": max(0.0, expected_shortfall),
             "projected_shortfall_mw": conservative_shortfall,
             "expected_load_rise_mw": max(
@@ -601,12 +689,14 @@ class RiskProbabilityEngine:
             "decision_deadline_minutes": deadline_minutes,
             "decision_deadline_at": deadline_at,
             "urgency": self._urgency(deadline_minutes, conservative_shortfall),
-            "expected_online_capacity_mw": online_capacity_mw,
+            "expected_online_capacity_mw": forecast_tra_mw,
             "expected_available_capacity_mw": available_capacity_mw,
             "expected_spinning_reserve_mw": spinning_reserve_mw,
             "demand_ramp_mw_per_hour": demand_ramp_mw_per_hour,
-            "capacity_projection_basis": (
-                "CURRENT_SCADA_HELD_CONSTANT_NO_DISPATCH_PLAN"
+            "capacity_projection_basis": tra_projection_basis,
+            "tra_projection_basis": tra_projection_basis,
+            "uncertainty_source": (
+                point.uncertainty_source or "CALIBRATED_FORECAST_RESIDUALS"
             ),
         }
 
@@ -690,6 +780,17 @@ class RiskProbabilityEngine:
             capacity_projection_basis=str(
                 assessment["capacity_projection_basis"]
             ),
+            capacity_risk_percent=float(assessment["capacity_risk_percent"]),
+            forecast_tra_mw=float(assessment["forecast_tra_mw"]),
+            projected_reserve_mw=float(assessment["projected_reserve_mw"]),
+            reserve_surplus_mw=float(assessment["reserve_surplus_mw"]),
+            reserve_deficit_mw=float(assessment["reserve_deficit_mw"]),
+            capacity_status=str(assessment["capacity_status"]),
+            reserve_expected_insufficient=bool(
+                assessment["reserve_expected_insufficient"]
+            ),
+            uncertainty_source=str(assessment["uncertainty_source"]),
+            tra_projection_basis=str(assessment["tra_projection_basis"]),
         )
 
     def _severity_level(self, conservative_shortfall_mw: float) -> str:
@@ -717,13 +818,15 @@ class RiskProbabilityEngine:
         safe_capacity = float(selected["safe_online_capacity_mw"])
         forecast_upper = float(selected["forecast_upper_mw"])
         required_reserve = float(selected["required_reserve_mw"])
+        projected_reserve = float(selected["projected_reserve_mw"])
 
         if reserve_headroom < 0:
             drivers.append(
                 RiskDriver(
                     label=(
-                        "Forecast mean exceeds reserve-adjusted safe capacity by "
-                        f"{abs(reserve_headroom):.1f} MW"
+                        f"Projected reserve is {projected_reserve:.1f} MW, "
+                        f"{abs(reserve_headroom):.1f} MW below the "
+                        f"{required_reserve:.0f} MW target"
                     ),
                     direction="INCREASES_RISK",
                     category="CAPACITY",
@@ -733,7 +836,8 @@ class RiskProbabilityEngine:
             drivers.append(
                 RiskDriver(
                     label=(
-                        "Forecast uncertainty band crosses safe capacity by "
+                        "Forecast uncertainty can reduce reserve below the "
+                        f"{required_reserve:.0f} MW target by "
                         f"{forecast_upper - safe_capacity:.1f} MW"
                     ),
                     direction="INCREASES_RISK",
@@ -743,7 +847,11 @@ class RiskProbabilityEngine:
         else:
             drivers.append(
                 RiskDriver(
-                    label=f"Reserve-adjusted forecast headroom is {reserve_headroom:.1f} MW",
+                    label=(
+                        f"Projected reserve is {projected_reserve:.1f} MW, "
+                        f"{reserve_headroom:.1f} MW above the "
+                        f"{required_reserve:.0f} MW target"
+                    ),
                     direction="REDUCES_RISK",
                     category="CAPACITY",
                 )
@@ -755,7 +863,8 @@ class RiskProbabilityEngine:
                 RiskDriver(
                     label=(
                         f"Corrected spin is {abs(spin_gap):.1f} MW "
-                        f"{'above' if spin_gap >= 0 else 'below'} the configured reserve requirement"
+                        f"{'above' if spin_gap >= 0 else 'below'} the target; "
+                        "it remains separate observed SCADA context"
                     ),
                     direction=(
                         "REDUCES_RISK" if spin_gap >= 0 else "INCREASES_RISK"
@@ -822,7 +931,7 @@ class RiskProbabilityEngine:
             drivers.append(
                 RiskDriver(
                     label=(
-                        "Reserve threshold, risk bands, and startup policy are "
+                        "Reserve target, status bands, and startup policy are "
                         f"{self.policy.status.lower().replace('_', ' ')}"
                     ),
                     direction="QUALITY_WARNING",
@@ -849,12 +958,29 @@ class RiskProbabilityEngine:
             for warning in risk_input.data_quality_warnings
             if warning
         )
-        if capacity_basis == "MIN_TRA_AND_DEMAND_PLUS_CORRECTED_SPIN":
+        if capacity_basis == "FORECAST_TRA_MINUS_FORECAST_DEMAND":
             drivers.append(
                 RiskDriver(
-                    label="Immediate capacity is the lower of TRA and demand plus corrected spin",
+                    label=(
+                        "Capacity risk uses forecast TRA minus forecast demand; "
+                        "corrected System Spin is not redefined by this calculation"
+                    ),
                     direction="CONTEXT",
                     category="METHOD",
+                )
+            )
+        if (
+            selected["tra_projection_basis"]
+            == "CURRENT_TRA_HELD_SCENARIO_NO_DISPATCH_PLAN"
+        ):
+            drivers.append(
+                RiskDriver(
+                    label=(
+                        "No future TRA schedule is available; current TRA is held "
+                        "as an explicit scenario at each forecast horizon"
+                    ),
+                    direction="QUALITY_WARNING",
+                    category="TRA_SCENARIO",
                 )
             )
         return tuple(dict.fromkeys(drivers))
@@ -862,7 +988,7 @@ class RiskProbabilityEngine:
     def _dispatch_decision(
         self,
         assessment: dict[str, object],
-        risk_level: str,
+        capacity_status: str,
         risk_input: OperatingRiskInput,
     ) -> dict[str, object]:
         point = assessment["point"]
@@ -878,18 +1004,32 @@ class RiskProbabilityEngine:
             and risk_input.available_capacity_is_verified
             else None
         )
-        if risk_level == "LOW" or shortfall <= 0:
+        if capacity_status == "Normal":
             return self._dispatch_payload(
                 recommendation="NO ACTION REQUIRED",
                 decision_action="NO ACTION",
                 available_start_capacity_mw=available_start_capacity,
                 projected_shortfall_mw=shortfall,
             )
-        if risk_level == "MEDIUM":
+        if capacity_status == "Watch":
             return self._dispatch_payload(
                 recommendation="MONITOR CONDITIONS",
                 decision_action="MONITOR",
                 available_start_capacity_mw=available_start_capacity,
+                projected_shortfall_mw=shortfall,
+            )
+        if capacity_status == "Prepare Generation":
+            return self._dispatch_payload(
+                recommendation="PREPARE ADDITIONAL GENERATION",
+                decision_action="PREPARE GENERATION",
+                available_start_capacity_mw=available_start_capacity,
+                projected_shortfall_mw=shortfall,
+            )
+        if not risk_input.available_capacity_is_verified:
+            return self._dispatch_payload(
+                recommendation="PREPARE ADDITIONAL GENERATION",
+                decision_action="VERIFY STARTABLE CAPACITY",
+                available_start_capacity_mw=None,
                 projected_shortfall_mw=shortfall,
             )
         if shortfall <= self.policy.fast_start_max_capacity_mw:
@@ -905,7 +1045,7 @@ class RiskProbabilityEngine:
             )
             if startable_capacity < self.policy.fast_start_unit_capacity_mw:
                 return self._dispatch_payload(
-                    recommendation="MONITOR CONDITIONS",
+                    recommendation="PREPARE ADDITIONAL GENERATION",
                     decision_action="ESCALATE CAPACITY AVAILABILITY",
                     available_start_capacity_mw=available_start_capacity,
                     projected_shortfall_mw=shortfall,
@@ -923,14 +1063,14 @@ class RiskProbabilityEngine:
                     if start_now and one_set
                     else f"START BOTH {self.policy.fast_start_unit_capacity_mw:g} MW SMALL SETS"
                     if start_now
-                    else "MONITOR CONDITIONS"
+                    else "PREPARE ADDITIONAL GENERATION"
                 ),
                 decision_action=(
                     "START ONE SMALL SET"
                     if start_now and one_set
                     else "START BOTH SMALL SETS"
                     if start_now
-                    else "MONITOR SMALL-SET WINDOW"
+                    else "PREPARE SMALL-SET WINDOW"
                 ),
                 generator_set=generator_set,
                 recommended_capacity_mw=startable_capacity,
@@ -969,7 +1109,7 @@ class RiskProbabilityEngine:
                         and startable_small < self.policy.fast_start_max_capacity_mw
                         else f"START BOTH {self.policy.fast_start_unit_capacity_mw:g} MW SMALL SETS"
                         if start_now
-                        else "MONITOR CONDITIONS"
+                        else "PREPARE ADDITIONAL GENERATION"
                     ),
                     decision_action=(
                         "START AVAILABLE SMALL SETS AND ESCALATE"
@@ -987,7 +1127,7 @@ class RiskProbabilityEngine:
                     projected_shortfall_mw=shortfall,
                 )
             return self._dispatch_payload(
-                recommendation="MONITOR CONDITIONS",
+                recommendation="PREPARE ADDITIONAL GENERATION",
                 decision_action="ESCALATE CAPACITY AVAILABILITY",
                 available_start_capacity_mw=available_start_capacity,
                 projected_shortfall_mw=shortfall,
@@ -997,12 +1137,12 @@ class RiskProbabilityEngine:
             recommendation=(
                 "START HEAVY GENERATOR SET"
                 if start_now
-                else "MONITOR CONDITIONS"
+                else "PREPARE ADDITIONAL GENERATION"
             ),
             decision_action=(
                 "START HEAVY SET"
                 if start_now
-                else "MONITOR HEAVY-SET WINDOW"
+                else "PREPARE HEAVY-SET WINDOW"
             ),
             generator_set=(
                 "HEAVY "
@@ -1085,17 +1225,15 @@ class RiskProbabilityEngine:
             or risk_input.spinning_reserve_mw < 0
         ):
             invalid.append("nonnegative spinning_reserve_mw")
-        reserve_fraction = self._reserve_fraction(risk_input)
-        if not _is_finite(reserve_fraction) or not (
-            0 <= reserve_fraction <= 1
-        ):
-            invalid.append("reserve_margin_threshold between 0 and 1")
+        if not _is_positive_finite(self.policy.required_reserve_mw):
+            invalid.append("positive required operating reserve target")
         if not (
-            0 <= self.policy.medium_probability_threshold
-            < self.policy.high_probability_threshold
+            0 <= self.policy.watch_probability_threshold
+            < self.policy.prepare_probability_threshold
+            < self.policy.add_generation_probability_threshold
             <= 1
         ):
-            invalid.append("ordered probability policy thresholds between 0 and 1")
+            invalid.append("ordered capacity-status probability thresholds between 0 and 1")
         if min(
             self.policy.fast_start_unit_capacity_mw,
             self.policy.fast_start_max_capacity_mw,
@@ -1116,14 +1254,6 @@ class RiskProbabilityEngine:
         ):
             invalid.append("heavy-start maximum capacity not below minimum capacity")
         if (
-            risk_input.current_demand_mw is not None
-            and risk_input.online_capacity_mw is not None
-            and _is_finite(risk_input.current_demand_mw)
-            and _is_finite(risk_input.online_capacity_mw)
-            and risk_input.current_demand_mw > risk_input.online_capacity_mw
-        ):
-            invalid.append("current_demand_mw not above online_capacity_mw")
-        if (
             risk_input.available_capacity_mw is not None
             and risk_input.online_capacity_mw is not None
             and _is_finite(risk_input.available_capacity_mw)
@@ -1134,18 +1264,37 @@ class RiskProbabilityEngine:
         return list(dict.fromkeys(invalid))
 
     @staticmethod
-    def _resolve_uncertainty(risk_input: OperatingRiskInput) -> float:
+    def _resolve_uncertainty(risk_input: OperatingRiskInput) -> tuple[float, str]:
         if (
             risk_input.forecast_uncertainty_mw is not None
             and _is_positive_finite(risk_input.forecast_uncertainty_mw)
         ):
-            return risk_input.forecast_uncertainty_mw
+            return (
+                risk_input.forecast_uncertainty_mw,
+                "CALIBRATED_FORECAST_RESIDUALS",
+            )
         if (
             risk_input.fallback_uncertainty_mw is not None
             and _is_positive_finite(risk_input.fallback_uncertainty_mw)
         ):
-            return risk_input.fallback_uncertainty_mw
-        return 0.0
+            return risk_input.fallback_uncertainty_mw, "VALIDATED_FALLBACK_STD"
+        if (
+            risk_input.historical_validation_rmse_mw is not None
+            and _is_positive_finite(risk_input.historical_validation_rmse_mw)
+        ):
+            return (
+                risk_input.historical_validation_rmse_mw,
+                "HISTORICAL_VALIDATION_RMSE_AS_SIGMA",
+            )
+        if (
+            risk_input.historical_validation_mae_mw is not None
+            and _is_positive_finite(risk_input.historical_validation_mae_mw)
+        ):
+            return (
+                risk_input.historical_validation_mae_mw * math.sqrt(math.pi / 2.0),
+                "HISTORICAL_VALIDATION_MAE_NORMAL_EQUIVALENT",
+            )
+        return 0.0, "UNAVAILABLE"
 
     def _unavailable(
         self,
@@ -1156,93 +1305,107 @@ class RiskProbabilityEngine:
             risk_input.forecast_demand_mw,
             _safe_nonnegative(risk_input.current_demand_mw, 0.0),
         )
-        uncertainty = self._resolve_uncertainty(risk_input)
+        uncertainty, uncertainty_source = self._resolve_uncertainty(risk_input)
+        forecast_tra = _safe_nonnegative(risk_input.online_capacity_mw, 0.0)
+        projected_reserve = forecast_tra - forecast_demand
+        reserve_surplus = projected_reserve - self.policy.required_reserve_mw
         return OperatingRiskResult(
             probability_score=0.0,
             risk_level="UNAVAILABLE",
             recommendation="DATA UNAVAILABLE",
             forecast_demand_mw=forecast_demand,
             forecast_uncertainty_mw=uncertainty,
-            safe_online_capacity_mw=0.0,
-            required_reserve_mw=0.0,
+            safe_online_capacity_mw=max(
+                0.0,
+                forecast_tra - self.policy.required_reserve_mw,
+            ),
+            required_reserve_mw=self.policy.required_reserve_mw,
             reserve_margin_mw=None,
             reserve_margin_percent=None,
             reasons=[reason],
             decision_action="DATA UNAVAILABLE",
+            capacity_risk_percent=0.0,
+            forecast_tra_mw=forecast_tra,
+            projected_reserve_mw=projected_reserve,
+            reserve_surplus_mw=reserve_surplus,
+            reserve_deficit_mw=max(0.0, -reserve_surplus),
+            capacity_status="Unavailable",
+            uncertainty_source=uncertainty_source,
+            tra_projection_basis="CURRENT_TRA_HELD_SCENARIO_NO_DISPATCH_PLAN",
             engine_version=self.ENGINE_VERSION,
             policy_status=self.policy.status,
         )
 
-    def _risk_level(self, probability_score: float) -> str:
-        if probability_score > self.policy.high_probability_threshold:
-            return "HIGH"
-        if probability_score >= self.policy.medium_probability_threshold:
-            return "MEDIUM"
-        return "LOW"
-
-    def _reserve_fraction(self, risk_input: OperatingRiskInput) -> float:
-        return (
-            risk_input.reserve_margin_threshold
-            if risk_input.reserve_margin_threshold is not None
-            else self.policy.reserve_fraction
-        )
+    def _capacity_status(self, probability_score: float) -> str:
+        # Stabilize exact policy-boundary comparisons against harmless floating
+        # point noise from the normal CDF while preserving the raw probability.
+        status_score = round(probability_score, 12)
+        if status_score >= self.policy.add_generation_probability_threshold:
+            return "Add Generation"
+        if status_score >= self.policy.prepare_probability_threshold:
+            return "Prepare Generation"
+        if status_score >= self.policy.watch_probability_threshold:
+            return "Watch"
+        return "Normal"
 
     @staticmethod
-    def _recommendation(risk_level: str) -> str:
-        if risk_level == "HIGH":
-            return "PREPARE ADDITIONAL GENERATION / START ADDITIONAL TURBINE"
-        if risk_level == "MEDIUM":
-            return "MONITOR CONDITIONS"
-        if risk_level == "LOW":
-            return "NO ACTION REQUIRED"
-        return "DATA UNAVAILABLE"
+    def _legacy_risk_level(capacity_status: str) -> str:
+        if capacity_status in {"Prepare Generation", "Add Generation"}:
+            return "HIGH"
+        if capacity_status == "Watch":
+            return "MEDIUM"
+        if capacity_status == "Normal":
+            return "LOW"
+        return "UNAVAILABLE"
 
     @staticmethod
     def _reasons(
         risk_input: OperatingRiskInput,
-        probability_score: float,
-        safe_online_capacity_mw: float,
-        required_reserve_mw: float,
-        uncertainty: float,
+        selected: dict[str, object],
         reserve_margin_percent: float | None,
     ) -> list[str]:
-        assert risk_input.forecast_demand_mw is not None
+        point = selected["point"]
+        assert isinstance(point, OperatingForecastPoint)
+        probability_score = float(selected["probability"])
+        required_reserve_mw = float(selected["required_reserve_mw"])
+        projected_reserve_mw = float(selected["projected_reserve_mw"])
+        reserve_surplus_mw = float(selected["reserve_surplus_mw"])
+        safe_online_capacity_mw = float(selected["safe_online_capacity_mw"])
+        uncertainty = float(selected["forecast_uncertainty_mw"])
         reasons: list[str] = []
-        if risk_input.forecast_demand_mw > safe_online_capacity_mw:
-            reasons.append("Forecast demand exceeds safe online capacity")
+        if reserve_surplus_mw < 0:
+            reasons.append(
+                f"Projected reserve is {projected_reserve_mw:.1f} MW, "
+                f"{abs(reserve_surplus_mw):.1f} MW below the "
+                f"{required_reserve_mw:.0f} MW target"
+            )
         else:
-            reasons.append("Forecast demand remains within safe online capacity")
+            reasons.append(
+                f"Projected reserve is {projected_reserve_mw:.1f} MW, "
+                f"{reserve_surplus_mw:.1f} MW above the "
+                f"{required_reserve_mw:.0f} MW target"
+            )
 
-        margin_to_safe_capacity = safe_online_capacity_mw - risk_input.forecast_demand_mw
+        margin_to_safe_capacity = safe_online_capacity_mw - point.forecast_demand_mw
         if (
             margin_to_safe_capacity >= 0
             and margin_to_safe_capacity < uncertainty * 1.6448536269514722
         ):
-            reasons.append("Forecast uncertainty overlaps the operating reserve boundary")
+            reasons.append(
+                "Forecast uncertainty overlaps the 30 MW projected-reserve boundary"
+            )
 
         if risk_input.spinning_reserve_mw is not None:
-            if risk_input.spinning_reserve_mw < required_reserve_mw:
-                reasons.append("Corrected spin is below the configured reserve requirement")
-            else:
-                reasons.append("Corrected spin satisfies the configured reserve requirement")
-            synchronized_capacity = (
-                risk_input.current_demand_mw + risk_input.spinning_reserve_mw
-                if risk_input.current_demand_mw is not None
-                else None
+            reasons.append(
+                f"Current corrected System Spin is {risk_input.spinning_reserve_mw:.1f} MW; "
+                "it is retained as observed context and is not redefined as TRA minus demand"
             )
-            if (
-                synchronized_capacity is not None
-                and synchronized_capacity < risk_input.online_capacity_mw
-            ):
-                reasons.append(
-                    "Immediate operating capacity is constrained by corrected spin"
-                )
 
         if risk_input.available_capacity_mw is not None:
             safe_available_capacity = (
                 risk_input.available_capacity_mw - required_reserve_mw
             )
-            if risk_input.forecast_demand_mw > safe_available_capacity:
+            if point.forecast_demand_mw > safe_available_capacity:
                 reasons.append(
                     "Forecast demand exceeds available capacity after reserve requirement"
                 )
@@ -1258,11 +1421,17 @@ class RiskProbabilityEngine:
             )
 
         reasons.append(
-            f"Safe online headroom is {margin_to_safe_capacity:.1f} MW against "
-            f"+/- {uncertainty:.1f} MW forecast uncertainty"
+            f"Demand uncertainty sigma is {uncertainty:.1f} MW from "
+            f"{str(selected['uncertainty_source']).lower().replace('_', ' ')}"
         )
+        if selected["tra_projection_basis"] == "CURRENT_TRA_HELD_SCENARIO_NO_DISPATCH_PLAN":
+            reasons.append(
+                "Current TRA is held across the horizon because no future dispatch schedule is available"
+            )
         reasons.append(
-            f"Operating-risk probability is {_format_probability_percent(probability_score)}"
+            "Probability that TRA minus actual demand falls below "
+            f"{required_reserve_mw:.0f} MW is "
+            f"{_format_probability_percent(probability_score)}"
         )
         return reasons
 
@@ -1275,8 +1444,6 @@ def risk_result_details(result: OperatingRiskResult) -> dict[str, object]:
         "probability_score",
         "risk_level",
         "recommendation",
-        "forecast_demand_mw",
-        "forecast_uncertainty_mw",
         "reserve_margin_mw",
         "reserve_margin_percent",
         "reasons",

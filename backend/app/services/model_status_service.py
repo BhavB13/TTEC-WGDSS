@@ -286,6 +286,7 @@ class ModelStatusService:
                 confidence_lower_mw=row.confidence_lower_mw,
                 confidence_upper_mw=row.confidence_upper_mw,
                 confidence_level=row.confidence_level or 0.90,
+                uncertainty_source="CALIBRATED_HISTORICAL_RESIDUALS",
             )
             for row in sorted(forecast_cohort, key=lambda item: item.horizon_hours)
         )
@@ -298,6 +299,8 @@ class ModelStatusService:
                 online_capacity_mw=scada.online_capacity_mw,
                 available_capacity_mw=scada.available_capacity_mw,
                 spinning_reserve_mw=scada.spinning_reserve_mw,
+                historical_validation_mae_mw=one_hour.mae,
+                historical_validation_rmse_mw=one_hour.rmse,
                 forecast_profile=profile,
                 available_capacity_is_verified=not bool(
                     scada.missing_fields.strip()

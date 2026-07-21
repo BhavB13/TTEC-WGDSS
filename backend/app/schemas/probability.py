@@ -37,13 +37,24 @@ class RiskHorizonResponse(BaseModel):
     expected_spinning_reserve_mw: float | None = None
     demand_ramp_mw_per_hour: float
     capacity_projection_basis: str
+    capacity_risk_percent: float = Field(ge=0.0, le=100.0)
+    forecast_tra_mw: float
+    projected_reserve_mw: float
+    reserve_surplus_mw: float
+    reserve_deficit_mw: float = Field(ge=0.0)
+    capacity_status: str
+    reserve_expected_insufficient: bool
+    uncertainty_source: str
+    tra_projection_basis: str
 
 
 class ProbabilityResponse(BaseModel):
     engine_version: str = "unknown"
     policy_status: str = "PROTOTYPE_UNCONFIRMED"
-    probability_score: float
+    probability_score: float = Field(ge=0.0, le=1.0)
+    capacity_risk_percent: float = Field(default=0.0, ge=0.0, le=100.0)
     risk_level: str
+    capacity_status: str = "Unavailable"
     forecast_demand_30m: float
     forecast_demand_60m: float
     factors: list[str]
@@ -85,6 +96,16 @@ class ProbabilityResponse(BaseModel):
     expected_available_capacity_mw: float | None = None
     expected_spinning_reserve_mw: float | None = None
     demand_ramp_mw_per_hour: float = 0.0
-    capacity_projection_basis: str = "CURRENT_SCADA_HELD_CONSTANT_NO_DISPATCH_PLAN"
+    capacity_projection_basis: str = "CURRENT_TRA_HELD_SCENARIO_NO_DISPATCH_PLAN"
+    forecast_demand_mw: float = 0.0
+    forecast_uncertainty_mw: float = 0.0
+    forecast_tra_mw: float = 0.0
+    projected_reserve_mw: float = 0.0
+    reserve_surplus_mw: float = 0.0
+    reserve_deficit_mw: float = Field(default=0.0, ge=0.0)
+    reserve_insufficient_horizon_minutes: int | None = None
+    reserve_insufficient_at: datetime | None = None
+    uncertainty_source: str = "UNAVAILABLE"
+    tra_projection_basis: str = "UNAVAILABLE"
     risk_components: dict[str, float | str | bool | None] = Field(default_factory=dict)
-    formula_version: str = "wgdss-operating-risk-v4"
+    formula_version: str = "wgdss-capacity-risk-v5"

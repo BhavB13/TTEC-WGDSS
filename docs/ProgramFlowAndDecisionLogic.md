@@ -1,8 +1,8 @@
 # WGDSS Program Flow and Decision Logic
 
-> This document includes legacy rule examples. For SCADA semantics, interval
-> quality, reserve policy, replay/live labeling, and OT security, use
-> `docs/SCADA_OSI_CONTEXT.md` and the confirmation register.
+> For SCADA semantics, interval quality, reserve policy, replay/live labeling,
+> and OT security, use `docs/SCADA_OSI_CONTEXT.md` and the confirmation register.
+> Capacity-risk mathematics is defined in `docs/RecommendationEngine.md`.
 
 ## 1. Document Purpose
 
@@ -297,74 +297,66 @@ database is unavailable or no profiles exist, the engine continues without it.
 
 ### 9.1 Purpose
 
-The probability score represents operational pressure for additional
-generation, not the mathematical probability of a guaranteed event. It is a
-transparent rule-based index between `0.00` and `1.00`.
-
-The engine begins with a baseline score of `0.25`. This represents ordinary
-background uncertainty and prevents normal conditions from being treated as
-absolute zero risk.
+The capacity-risk score is the estimated probability that available projected
+reserve falls below the 30 MW project target. It is a continuous statistical
+probability between `0.00` and `1.00`, not an additive rule index.
 
 ### 9.2 Input effects
 
-| Input condition | Score effect | Operational purpose |
-|---|---|---|
-| Temperature at least 30°C | Add up to `0.22` | Cooling demand generally rises in hotter conditions |
-| Humidity at least 70% | Add up to `0.18` | High humidity increases cooling burden |
-| Rainfall at least 2 mm/hr | Subtract up to `0.12` | Rain can suppress short-term cooling and activity demand |
-| Cloud cover at least 50% | Subtract up to `0.06` | Reduced solar heating can slightly reduce load |
-| Demand exceeds current generation | Add up to `0.35` | Indicates immediate supply pressure |
-| Reserve margin below 30% | Add up to `0.30` | Reduced flexibility increases operational exposure |
-| Demand exceeds available capacity | Add `0.20` | Capacity is insufficient for current demand |
-| Scenario demand exceeds generation | Add up to `0.22` | Imported operating profile indicates higher expected load |
-| Scenario spin below 15% of demand | Add up to `0.12` | Imported reserve profile is below the planning threshold |
-
-The exact weather adjustments are:
-
 ```text
-temperature_boost = min((temperature_c - 29) × 0.05, 0.22)
-humidity_boost    = min((humidity_percent - 68) × 0.015, 0.18)
-rain_reduction    = min(rainfall_mm_hr × 0.03, 0.12)
-cloud_reduction   = min((cloud_cover_percent - 50) × 0.0015, 0.06)
+projected_reserve_h = forecast_TRA_h - forecast_demand_h
+safe_demand_h = forecast_TRA_h - 30 MW
+risk_h = P(actual_demand_h > safe_demand_h)
 ```
 
-Only the applicable conditions are evaluated. The final score is rounded to two
-decimal places and clamped to `0.00-1.00`.
+Demand uncertainty comes from calibrated chronological residuals or a valid
+prediction interval. Historical RMSE can serve as sigma; historical MAE is
+converted with `sigma = MAE * sqrt(pi / 2)` under the documented normal-error
+assumption. Weather affects the load forecast, not the probability through
+fixed score increments. Corrected System Spin remains separate SCADA context.
 
 ### 9.3 Risk classification
 
 ```mermaid
 flowchart TD
-    Score[Probability score and reserve margin]
-    High{Score >= 0.75 OR reserve < 15%?}
-    Medium{Score >= 0.45 OR reserve < 25%?}
-    HighResult[HIGH]
-    MediumResult[MEDIUM]
-    LowResult[LOW]
+    Score[Capacity-risk probability]
+    Add{Score >= 0.80?}
+    Prepare{Score >= 0.50?}
+    Watch{Score >= 0.20?}
+    AddResult[Add Generation]
+    PrepareResult[Prepare Generation]
+    WatchResult[Watch]
+    NormalResult[Normal]
 
-    Score --> High
-    High -->|Yes| HighResult
-    High -->|No| Medium
-    Medium -->|Yes| MediumResult
-    Medium -->|No| LowResult
+    Score --> Add
+    Add -->|Yes| AddResult
+    Add -->|No| Prepare
+    Prepare -->|Yes| PrepareResult
+    Prepare -->|No| Watch
+    Watch -->|Yes| WatchResult
+    Watch -->|No| NormalResult
 ```
 
 ### 9.4 Recommendation selection
 
 ```mermaid
 flowchart TD
-    Inputs[Probability score and reserve margin]
-    Start{Score >= 0.75 OR reserve < 15%?}
-    Monitor{Score >= 0.45?}
-    Turbine[START ADDITIONAL TURBINE]
-    Watch[MONITOR CONDITIONS]
+    Inputs[Capacity status, shortfall, and lead time]
+    Add{Add Generation?}
+    Prepare{Prepare Generation?}
+    Watch{Watch?}
+    Start[Evaluate startable unit and lead time]
+    PrepareAction[PREPARE ADDITIONAL GENERATION]
+    Monitor[MONITOR CONDITIONS]
     Normal[NO ACTION REQUIRED]
 
-    Inputs --> Start
-    Start -->|Yes| Turbine
-    Start -->|No| Monitor
-    Monitor -->|Yes| Watch
-    Monitor -->|No| Normal
+    Inputs --> Add
+    Add -->|Yes| Start
+    Add -->|No| Prepare
+    Prepare -->|Yes| PrepareAction
+    Prepare -->|No| Watch
+    Watch -->|Yes| Monitor
+    Watch -->|No| Normal
 ```
 
 The recommendation deliberately remains small and actionable. The supporting

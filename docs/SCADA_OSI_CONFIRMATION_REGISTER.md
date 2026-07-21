@@ -28,8 +28,8 @@ item below is unresolved.
 | TA and TRA definitions | Treated as total available and total running/online available capacity according to current project terminology | Confirm included assets, outages, derates, response capability, and calculation ownership |
 | Quality `Other` | Preserved and normalized to `unknown`; conditionally usable only in historical prototype workflows | Supply OSI export quality-code meanings and approved modeling policy |
 | Trend bucket construction | Preserved as irregular interval summaries | Supply native scan rate, historian compression/deadband, and fixed export aggregation rules |
-| Operating reserve requirement | Existing 15% demo value is configurable and explicitly unconfirmed | Supply approved reserve requirement, largest credible contingency, and time-dependent rules |
-| Risk thresholds | Existing LOW/MEDIUM/HIGH probability bands are configurable demo policy | Approve operational bands and escalation workflow |
+| Operating reserve requirement | Version 1 uses a configurable 30 MW project target and explicitly labels it unconfirmed | Supply approved reserve requirement, largest credible contingency, and time-dependent rules |
+| Risk thresholds | Configurable Normal/Watch/Prepare Generation/Add Generation probability bands are demo policy | Approve operational bands and escalation workflow |
 | Generator blocks and lead times | Existing 15 MW/20 minute and 60-120 MW/60 minute demo settings are configurable | Confirm unit sizes, start/synchronization times, ramp limits, availability, and operator restrictions |
 | Production data interface | No live connector is implemented; `scada` and `historian` provider selections fail closed | Approve historian replica/export/API/ICCP/OPC UA path, OT zone, certificates, identities, allowlists, and failover behavior |
 | Forecast target | Existing historical prototype predicts the generation-total demand proxy | Approve the operational target definition and model governance process |

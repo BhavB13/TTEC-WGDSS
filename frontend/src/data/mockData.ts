@@ -51,9 +51,19 @@ export const mockGridStatus: GridStatus = {
 
 export const mockRecommendation: RecommendationData = {
   probability_score: 0.82,
+  capacity_risk_percent: 82,
   risk_level: "HIGH",
+  capacity_status: "Add Generation",
   forecast_demand_30m: 980,
   forecast_demand_60m: 1005,
+  forecast_demand_mw: 1005,
+  forecast_uncertainty_mw: 25,
+  forecast_tra_mw: 1020,
+  projected_reserve_mw: 15,
+  reserve_surplus_mw: -15,
+  reserve_deficit_mw: 15,
+  uncertainty_source: "CALIBRATED_HISTORICAL_RESIDUALS",
+  tra_projection_basis: "CURRENT_TRA_HELD_SCENARIO_NO_DISPATCH_PLAN",
   factors: [
     "High temperature increased expected demand",
     "Reserve margin below threshold",

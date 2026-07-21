@@ -42,7 +42,9 @@ export default function RiskTimelineChart({
           (point) =>
             point.horizon_minutes > 0 &&
             point.horizon_minutes <= 360 &&
-            Number.isFinite(point.probability),
+            Number.isFinite(point.probability) &&
+            Number.isFinite(point.forecast_tra_mw) &&
+            Number.isFinite(point.projected_reserve_mw),
         )
         .sort((left, right) => left.horizon_minutes - right.horizon_minutes),
     [probability.risk_profile],
@@ -63,9 +65,10 @@ export default function RiskTimelineChart({
           borderWidth: 0,
           pointRadius: 0,
           tension: 0.25,
+          yAxisID: "demand",
         },
         {
-          label: "Forecast uncertainty band",
+          label: "Demand uncertainty",
           data: profile.map((point) => point.forecast_upper_mw),
           borderColor: "rgba(34,211,238,0.22)",
           backgroundColor: "rgba(34,211,238,0.13)",
@@ -73,6 +76,7 @@ export default function RiskTimelineChart({
           pointRadius: 0,
           fill: "-1",
           tension: 0.25,
+          yAxisID: "demand",
         },
         {
           label: "Forecast demand",
@@ -83,10 +87,11 @@ export default function RiskTimelineChart({
           pointRadius: 3,
           pointHoverRadius: 5,
           tension: 0.25,
+          yAxisID: "demand",
         },
         {
-          label: "Safe online capacity",
-          data: profile.map((point) => point.safe_online_capacity_mw),
+          label: "Forecast TRA",
+          data: profile.map((point) => point.forecast_tra_mw),
           borderColor: "#fbbf24",
           backgroundColor: "#fbbf24",
           borderWidth: 2,
@@ -94,16 +99,27 @@ export default function RiskTimelineChart({
           pointRadius: 2,
           pointHoverRadius: 4,
           tension: 0.15,
+          yAxisID: "demand",
         },
         {
-          label: "Corrected spin (current held)",
-          data: profile.map((point) => point.expected_spinning_reserve_mw ?? null),
+          label: "Projected reserve",
+          data: profile.map((point) => point.projected_reserve_mw),
           borderColor: "#34d399",
           backgroundColor: "#34d399",
-          borderWidth: 1.8,
-          borderDash: [3, 4],
-          pointRadius: 2,
-          pointHoverRadius: 4,
+          borderWidth: 2,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+          tension: 0.2,
+          yAxisID: "reserve",
+        },
+        {
+          label: "Required reserve",
+          data: profile.map((point) => point.required_reserve_mw),
+          borderColor: "#fb7185",
+          backgroundColor: "#fb7185",
+          borderWidth: 1.7,
+          borderDash: [4, 4],
+          pointRadius: 0,
           tension: 0,
           yAxisID: "reserve",
         },
@@ -126,7 +142,7 @@ export default function RiskTimelineChart({
             color: textColor,
             boxWidth: 11,
             boxHeight: 3,
-            padding: 10,
+            padding: 9,
             font: { size: 10 },
             filter: (item) => item.text !== "_lower",
           },
@@ -146,27 +162,32 @@ export default function RiskTimelineChart({
             },
             label: (context) => {
               const point = profile[context.dataIndex];
-              if (!point) {
-                return "";
-              }
+              if (!point) return "";
               if (context.datasetIndex === 1) {
                 const confidenceLevel = Math.round(
                   (point.confidence_level ?? 0.9) * 100,
                 );
-                return `${confidenceLevel}% band: ${point.forecast_lower_mw.toFixed(1)}–${point.forecast_upper_mw.toFixed(1)} MW`;
+                return `${confidenceLevel}% demand range: ${point.forecast_lower_mw.toFixed(1)}-${point.forecast_upper_mw.toFixed(1)} MW`;
               }
               if (context.datasetIndex === 2) {
-                return [
-                  `Forecast: ${point.forecast_demand_mw.toFixed(1)} MW`,
-                  `Shortfall probability: ${(point.probability * 100).toFixed(1)}%`,
-                ];
+                return `Forecast demand: ${point.forecast_demand_mw.toFixed(1)} MW`;
               }
               if (context.datasetIndex === 3) {
-                return `Safe capacity: ${point.safe_online_capacity_mw.toFixed(1)} MW`;
+                return `Forecast TRA: ${point.forecast_tra_mw.toFixed(1)} MW`;
               }
-              return point.expected_spinning_reserve_mw == null
-                ? "Corrected spin unavailable"
-                : `Corrected spin: ${point.expected_spinning_reserve_mw.toFixed(1)} MW (current held)`;
+              if (context.datasetIndex === 4) {
+                return [
+                  `Projected reserve: ${point.projected_reserve_mw.toFixed(1)} MW`,
+                  `Capacity risk: ${point.capacity_risk_percent.toFixed(1)}% (${point.capacity_status})`,
+                ];
+              }
+              const balance = point.reserve_surplus_mw >= 0
+                ? `Surplus: +${point.reserve_surplus_mw.toFixed(1)} MW`
+                : `Deficit: ${point.reserve_deficit_mw.toFixed(1)} MW`;
+              return [
+                `Required reserve: ${point.required_reserve_mw.toFixed(1)} MW`,
+                balance,
+              ];
             },
           },
         },
@@ -176,7 +197,8 @@ export default function RiskTimelineChart({
           grid: { color: gridColor },
           ticks: { color: textColor, font: { size: 10 } },
         },
-        y: {
+        demand: {
+          position: "left",
           grid: { color: gridColor },
           ticks: {
             color: textColor,
@@ -186,7 +208,6 @@ export default function RiskTimelineChart({
         },
         reserve: {
           position: "right",
-          beginAtZero: true,
           grid: { drawOnChartArea: false },
           ticks: {
             color: "#6ee7b7",
@@ -206,10 +227,10 @@ export default function RiskTimelineChart({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300">
-            Six-Hour Risk Timeline
+            Six-Hour Capacity Timeline
           </p>
           <h2 className="mt-0.5 truncate text-sm font-semibold text-white">
-            Demand, corrected spin, and operating risk
+            Demand, TRA, and projected reserve
           </h2>
         </div>
         <span className="shrink-0 rounded-full border border-cyan-400/25 bg-cyan-500/10 px-2 py-1 text-[9px] font-semibold text-cyan-100">
@@ -219,33 +240,34 @@ export default function RiskTimelineChart({
 
       {profile.length ? (
         <>
-          <div className="mt-1.5 min-h-[5.75rem] flex-1">
+          <div className="mt-1 min-h-[4.25rem] flex-1">
             <Line data={chartData} options={options} />
           </div>
           <div
-            className="mt-1.5 grid gap-1.5"
-            style={{ gridTemplateColumns: `repeat(${Math.min(profile.length, 6)}, minmax(0, 1fr))` }}
+            className="mt-1 grid gap-1"
+            style={{
+              gridTemplateColumns: `repeat(${Math.min(profile.length, 6)}, minmax(0, 1fr))`,
+            }}
           >
             {profile.slice(0, 6).map((point) => (
               <div
                 key={`${point.horizon_minutes}-${point.forecast_timestamp ?? "risk"}`}
-                className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/55 px-1.5 py-1 text-center"
+                className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/55 px-1 py-0.5 text-center"
               >
                 <p className="truncate text-[9px] uppercase tracking-[0.1em] text-slate-400">
                   {formatHorizon(point)}
                 </p>
                 <p className="mt-0.5 text-xs font-semibold text-white">
-                  {(point.probability * 100).toFixed(1)}%
+                  {point.capacity_risk_percent.toFixed(1)}%
                 </p>
                 <p
                   className={`truncate text-[9px] ${
-                    point.reserve_adjusted_headroom_mw >= 0
+                    point.reserve_surplus_mw >= 0
                       ? "text-emerald-300"
                       : "text-rose-300"
                   }`}
                 >
-                  {point.reserve_adjusted_headroom_mw >= 0 ? "+" : ""}
-                  {point.reserve_adjusted_headroom_mw.toFixed(0)} MW
+                  Reserve {point.projected_reserve_mw.toFixed(0)} MW
                 </p>
               </div>
             ))}
@@ -253,7 +275,7 @@ export default function RiskTimelineChart({
         </>
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-slate-700 bg-slate-950/40 p-4 text-center text-sm text-slate-400">
-          Per-horizon risk evidence is unavailable for this snapshot.
+          Per-horizon capacity-risk evidence is unavailable for this snapshot.
         </div>
       )}
     </section>
@@ -261,29 +283,21 @@ export default function RiskTimelineChart({
 }
 
 function formatHorizon(point: RiskHorizon): string {
-  if (point.horizon_minutes < 60) {
-    return `+${point.horizon_minutes}m`;
-  }
+  if (point.horizon_minutes < 60) return `+${point.horizon_minutes}m`;
   const hours = point.horizon_minutes / 60;
   return Number.isInteger(hours) ? `+${hours}h` : `+${hours.toFixed(1)}h`;
 }
 
 function formatPeakHorizon(minutes?: number | null): string {
-  if (minutes == null) {
-    return "--";
-  }
+  if (minutes == null) return "--";
   return minutes < 60 ? `+${minutes}m` : `+${minutes / 60}h`;
 }
 
 function formatPointTime(point: RiskHorizon): string {
-  if (!point.forecast_timestamp) {
-    return formatHorizon(point);
-  }
+  if (!point.forecast_timestamp) return formatHorizon(point);
   const date = new Date(point.forecast_timestamp);
-  if (Number.isNaN(date.getTime())) {
-    return formatHorizon(point);
-  }
-  return `${formatHorizon(point)} · ${new Intl.DateTimeFormat("en-TT", {
+  if (Number.isNaN(date.getTime())) return formatHorizon(point);
+  return `${formatHorizon(point)} - ${new Intl.DateTimeFormat("en-TT", {
     hour: "numeric",
     minute: "2-digit",
     timeZone: "America/Port_of_Spain",

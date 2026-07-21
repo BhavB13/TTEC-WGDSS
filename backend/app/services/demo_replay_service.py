@@ -289,6 +289,7 @@ class DemoReplayService:
                             forecast_timestamp=(
                                 observation.timestamp + timedelta(minutes=horizon)
                             ),
+                            uncertainty_source="CALIBRATED_HISTORICAL_RESIDUALS",
                         )
                     )
             profile.extend(
@@ -301,6 +302,7 @@ class DemoReplayService:
                     weather_effect_mw=point.weather_impact_mw,
                     confidence=point.weather_confidence,
                     forecast_timestamp=point.timestamp,
+                    uncertainty_source="CALIBRATED_HISTORICAL_RESIDUALS",
                 )
                 for point in future
             )
@@ -309,9 +311,14 @@ class DemoReplayService:
                 OperatingForecastPoint(
                     horizon_minutes=60,
                     forecast_demand_mw=observation.demand_mw,
-                    forecast_uncertainty_mw=15.0,
+                    forecast_uncertainty_mw=(
+                        replay.summary.residual_std_mw
+                        if replay.summary.residual_std_mw > 0
+                        else None
+                    ),
                     confidence=0.5,
                     forecast_timestamp=observation.timestamp + timedelta(hours=1),
+                    uncertainty_source="CALIBRATED_HISTORICAL_RESIDUALS",
                 )
             )
 
@@ -323,6 +330,16 @@ class DemoReplayService:
                 online_capacity_mw=observation.online_capacity_mw,
                 available_capacity_mw=observation.available_capacity_mw,
                 spinning_reserve_mw=observation.spinning_reserve_mw,
+                historical_validation_mae_mw=(
+                    replay.summary.forecast_mae_mw
+                    if replay.summary.forecast_mae_mw > 0
+                    else None
+                ),
+                historical_validation_rmse_mw=(
+                    replay.summary.residual_std_mw
+                    if replay.summary.residual_std_mw > 0
+                    else None
+                ),
                 forecast_profile=tuple(profile),
                 available_capacity_is_verified=(
                     isinstance(observation, _ScadaReplayObservation)
@@ -388,6 +405,7 @@ class DemoReplayService:
                     confidence_lower_mw=row.confidence_lower_mw,
                     confidence_upper_mw=row.confidence_upper_mw,
                     confidence_level=row.confidence_level,
+                    uncertainty_source="CALIBRATED_HISTORICAL_RESIDUALS",
                 )
             )
         first = profile[0]
@@ -412,6 +430,7 @@ class DemoReplayService:
                     forecast_timestamp=(
                         observation.timestamp + timedelta(minutes=horizon)
                     ),
+                    uncertainty_source="CALIBRATED_HISTORICAL_RESIDUALS",
                 )
             )
         return sorted(profile, key=lambda point: point.horizon_minutes)

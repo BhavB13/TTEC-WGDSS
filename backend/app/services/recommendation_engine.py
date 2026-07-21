@@ -14,9 +14,7 @@ from app.services.risk_probability_engine import (
 class RecommendationEngine:
     """Transparent fallback forecast backed by the operating-risk probability model."""
 
-    ENGINE_VERSION = "rules-operating-v2.1"
-    MIN_UNCERTAINTY_MW = 15.0
-    DEMAND_UNCERTAINTY_RATIO = 0.02
+    ENGINE_VERSION = "rules-capacity-risk-v3.0"
 
     def __init__(self, risk_engine: RiskProbabilityEngine | None = None) -> None:
         self.risk_engine = risk_engine or RiskProbabilityEngine()
@@ -41,6 +39,8 @@ class RecommendationEngine:
         grid_status: dict[str, Any],
         calibration: dict[str, Any] | None = None,
         forecast_weather: dict[str, Any] | None = None,
+        historical_validation_mae_mw: float | None = None,
+        historical_validation_rmse_mw: float | None = None,
     ) -> dict[str, Any]:
         temperature_c = self._safe_float(weather.get("temperature_c"))
         humidity_percent = self._safe_float(weather.get("humidity_percent"))
@@ -67,7 +67,6 @@ class RecommendationEngine:
             "cloud cover": cloud_cover_percent,
             "current demand": current_demand_mw,
             "current generation": current_generation_mw,
-            "available capacity": available_capacity_mw,
         }
         missing = [name for name, value in required_values.items() if value is None]
         if missing or current_demand_mw is None or current_demand_mw <= 0:
@@ -75,12 +74,6 @@ class RecommendationEngine:
                 current_demand_mw or 0.0,
                 "Fallback forecast unavailable; invalid or missing " + ", ".join(missing),
             )
-        if available_capacity_mw is None or available_capacity_mw <= 0:
-            return self.unavailable(
-                current_demand_mw,
-                "Fallback forecast unavailable; available capacity must be positive",
-            )
-
         assert temperature_c is not None
         assert humidity_percent is not None
         assert rainfall_mm_hr is not None
@@ -129,52 +122,42 @@ class RecommendationEngine:
             forecast_rainfall_mm_hr=future_weather[2],
             forecast_cloud_cover_percent=future_weather[3],
         )
-        uncertainty_mw = self._forecast_uncertainty(
-            forecast_demand_mw=forecast_demand_60m,
-            temperature_c=temperature_c,
-            humidity_percent=humidity_percent,
-            rainfall_mm_hr=rainfall_mm_hr,
-            scenario_confidence=scenario[2],
-            weather_confidence=future_weather[4],
-        )
         risk = self.risk_engine.evaluate(
             OperatingRiskInput(
                 forecast_demand_mw=forecast_demand_60m,
-                forecast_uncertainty_mw=uncertainty_mw,
+                forecast_uncertainty_mw=None,
                 current_demand_mw=current_demand_mw,
-                online_capacity_mw=(
-                    current_generation_mw
-                    if has_reported_spin
-                    else available_capacity_mw
-                ),
+                # Current generation is the SCADA TRA value. Total available
+                # capacity (TA) is potential startable capacity and must not be
+                # substituted into the immediate reserve calculation.
+                online_capacity_mw=current_generation_mw,
                 available_capacity_mw=available_capacity_mw,
                 spinning_reserve_mw=(
                     spinning_reserve_mw if has_reported_spin else None
                 ),
+                historical_validation_mae_mw=historical_validation_mae_mw,
+                historical_validation_rmse_mw=historical_validation_rmse_mw,
                 forecast_profile=(
                     OperatingForecastPoint(
                         horizon_minutes=30,
                         forecast_demand_mw=forecast_demand_30m,
-                        forecast_uncertainty_mw=max(
-                            self.MIN_UNCERTAINTY_MW,
-                            uncertainty_mw / math.sqrt(2.0),
-                        ),
+                        forecast_uncertainty_mw=None,
                         confidence=future_weather[4] or 0.5,
                     ),
                     OperatingForecastPoint(
                         horizon_minutes=60,
                         forecast_demand_mw=forecast_demand_60m,
-                        forecast_uncertainty_mw=uncertainty_mw,
+                        forecast_uncertainty_mw=None,
                         confidence=future_weather[4] or 0.5,
                     ),
                 ),
                 available_capacity_is_verified=False,
                 data_quality_status=str(grid_status.get("quality_status", "UNKNOWN")),
+                data_quality_warnings=(
+                    "Fallback demand forecast uses historical validation error for risk uncertainty",
+                ),
             )
         )
-        if risk.risk_level == "UNAVAILABLE":
-            return self.unavailable(current_demand_mw, risk.reasons[0])
-
         factors = self._forecast_factors(
             temperature_c=temperature_c,
             humidity_percent=humidity_percent,
@@ -191,6 +174,20 @@ class RecommendationEngine:
         )
         factors.extend(risk.reasons)
         factors = list(dict.fromkeys(factors))
+        if risk.risk_level == "UNAVAILABLE":
+            reason = "; ".join(factors)
+            return {
+                "engine_version": self.ENGINE_VERSION,
+                "policy_status": risk.policy_status,
+                "probability_score": risk.probability_score,
+                "risk_level": risk.risk_level,
+                "forecast_demand_30m": round(forecast_demand_30m, 2),
+                "forecast_demand_60m": round(forecast_demand_60m, 2),
+                "recommendation": "DATA UNAVAILABLE",
+                "factors": factors,
+                "reason": reason,
+                **risk_result_details(risk),
+            }
         recommendation = self._dashboard_recommendation(risk.recommendation)
         return {
             "engine_version": self.ENGINE_VERSION,
@@ -311,28 +308,6 @@ class RecommendationEngine:
             current_demand_mw * (1.0 - maximum_change),
             min(current_demand_mw * (1.0 + maximum_change), projected),
         )
-
-    def _forecast_uncertainty(
-        self,
-        forecast_demand_mw: float,
-        temperature_c: float,
-        humidity_percent: float,
-        rainfall_mm_hr: float,
-        scenario_confidence: float | None,
-        weather_confidence: float | None,
-    ) -> float:
-        confidence = max(0.0, min(1.0, scenario_confidence or 0.0))
-        uncertainty_ratio = self.DEMAND_UNCERTAINTY_RATIO
-        uncertainty_ratio += (1.0 - confidence) * 0.01
-        if weather_confidence is None:
-            uncertainty_ratio += 0.005
-        else:
-            uncertainty_ratio += (1.0 - max(0.0, min(1.0, weather_confidence))) * 0.01
-        if temperature_c >= 32 or humidity_percent >= 85:
-            uncertainty_ratio += 0.005
-        if rainfall_mm_hr >= 8:
-            uncertainty_ratio += 0.005
-        return max(self.MIN_UNCERTAINTY_MW, forecast_demand_mw * uncertainty_ratio)
 
     @staticmethod
     def _forecast_factors(

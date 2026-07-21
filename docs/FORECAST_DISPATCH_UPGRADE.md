@@ -1,7 +1,7 @@
 # Three-Source Forecast And Generator Dispatch Upgrade
 
-> Dispatch capacities, lead times, and reserve fractions in this historical
-> design note are configurable prototype assumptions. They are not approved
+> Dispatch capacities, lead times, the 30 MW reserve target, and status bands
+> in this design note are configurable prototype assumptions. They are not approved
 > T&TEC policy; see `docs/SCADA_OSI_CONFIRMATION_REGISTER.md`.
 
 ## Recommended Forecast Approach
@@ -51,31 +51,28 @@ labels and never present replay data as live SCADA.
 For each forecast horizon up to six hours:
 
 ```text
-required_reserve_mw = max(current_demand, forecast_demand)
-                      * configured_reserve_fraction
-immediate_capacity_mw = min(online_capacity,
-                            current_demand + spinning_reserve)
-safe_online_capacity_mw = immediate_capacity_mw - required_reserve_mw
-z = (safe_online_capacity_mw - forecast_demand_mw) / uncertainty_mw
+required_reserve_mw = 30 MW
+projected_reserve_mw = forecast_TRA_mw - forecast_demand_mw
+safe_demand_mw = forecast_TRA_mw - required_reserve_mw
+z = (safe_demand_mw - forecast_demand_mw) / uncertainty_mw
 risk_probability = P(Normal(0,1) > z)
 conservative_shortfall_mw = max(0,
-  confidence_upper_mw - safe_online_capacity)
+  confidence_upper_mw - safe_demand_mw)
 ```
 
 The default 90% central interval uses the 95th-percentile upper endpoint
 (`forecast + 1.64485 * sigma`) when the model has not supplied valid bounds.
-The reserve fraction is configurable and unconfirmed. The engine selects the
+The reserve target is configurable and unconfirmed. Corrected System Spin is
+separate SCADA context. The engine selects the
 highest-probability horizon and applies configurable, unconfirmed lead-time
 rules:
 
 | Condition | Decision |
 |---|---|
-| Probability below 0.30 | No action |
-| Probability 0.30-0.65 | Monitor |
-| High risk, shortfall up to 30 MW, more than 20 minutes away | Monitor small-set window |
-| High risk, shortfall up to 30 MW, within 20 minutes | Start 2 x 15 MW fast-start set |
-| High risk, shortfall above 30 MW, more than 60 minutes away | Monitor heavy-set window |
-| High risk, shortfall above 30 MW, within 60 minutes | Start 60/90/120 MW heavy set |
+| Probability below 0.20 | Normal / no action |
+| Probability 0.20 to below 0.50 | Watch / monitor |
+| Probability 0.50 to below 0.80 | Prepare generation |
+| Probability 0.80 or above | Add-generation capacity and lead-time evaluation |
 
 The dashboard response includes action, generator set, recommended MW,
 conservative and expected shortfall, expected rise and lead time, startup time,

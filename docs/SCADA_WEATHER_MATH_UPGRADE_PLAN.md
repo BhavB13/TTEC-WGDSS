@@ -12,7 +12,7 @@ This upgrade moves WGDSS from mostly rule-based, mock-grid decision support towa
 ### Implemented Mathematical Hardening
 
 The current `demand-forecast-v5.0` implementation and
-`operating-risk-v4.0` engine add these integrity controls:
+`capacity-risk-v5.0` engine add these integrity controls:
 
 - Baseline and ML evaluation use chronological outer holdout data.
 - Baseline choice and ML parameter choice use expanding-window walk-forward validation inside the training period, leaving the outer holdout untouched until final evaluation.
@@ -50,6 +50,11 @@ The current `demand-forecast-v5.0` implementation and
   replay uses them only when the artifact cursor matches the simulated source
   cursor; later artifacts cannot drive an earlier replay decision.
 - The rule-based fallback now estimates demand transparently and sends it through the operating-risk probability engine; it no longer presents an arbitrary additive score as a probability.
+- Capacity risk now evaluates `P(forecast TRA - actual demand < 30 MW)` at
+  each horizon. The 30 MW project target is configurable and unconfirmed.
+  Corrected System Spin remains separate SCADA context. Any older percentage-
+  reserve formulas retained in historical phase notes below are superseded by
+  the Capacity Risk section and `docs/RecommendationEngine.md`.
 
 Current SCADA files are historical exports, not a live SCADA stream. The first implementation should support prototype modeling, replay, validation, and calibration. Production SCADA integration should later use automated CSV export, historian database access, PI/OSIsoft, OPC-UA, or a formal SCADA API.
 
@@ -186,32 +191,26 @@ Guardrails:
 The risk event is:
 
 ```text
-actual_demand_mw > safe_online_capacity_mw
+forecast_TRA_mw - actual_demand_mw < required_reserve_mw
 ```
 
 Where:
 
 ```text
-immediate_capacity_mw = min(
-    online_capacity_mw,
-    current_demand_mw + spinning_reserve_mw
-)
-safe_online_capacity_mw = immediate_capacity_mw - required_reserve_mw
+projected_reserve_mw = forecast_TRA_mw - forecast_demand_mw
+safe_demand_mw = forecast_TRA_mw - required_reserve_mw
+required_reserve_mw = 30 MW
 ```
 
-A first version currently evaluates this configurable prototype policy:
-
-```text
-required_reserve_mw = max(current_demand_mw, forecast_demand_mw)
-                      * configured_reserve_fraction
-```
-
-The configured value is not an approved T&TEC operating rule. Its status is
+The 30 MW value is a configurable project target, not an approved T&TEC
+operating rule. Its status is
 returned in the API as `policy_status`; production use requires the utility to
 confirm reserve requirements, credible-contingency treatment, thresholds, unit
 blocks, and lead times.
 
-If a trustworthy spinning-reserve measurement is unavailable, use online capacity as the immediate-capacity boundary and state that limitation in model status. Historical calibration spinning reserve must not be substituted for live spinning reserve.
+If no future TRA schedule is available, hold current TRA as an explicitly
+labelled scenario. Corrected System Spin remains separately reported context;
+historical calibration spin must not be substituted for live spin.
 
 ## Database Design Additions
 
@@ -497,49 +496,45 @@ Inputs:
 
 - forecast demand
 - forecast uncertainty
-- online generation capacity
+- current or forecast TRA
 - available generation capacity
 - spinning reserve
-- reserve margin threshold
+- required 30 MW reserve target
 - model status
 - data quality
 
 Risk event at each valid horizon through six hours:
 
 ```text
-actual_demand_mw + required_reserve_mw > immediate_online_capacity_mw
+forecast_TRA_mw - actual_demand_mw < required_reserve_mw
 ```
 
-With corrected spin available, immediate capacity honors both the TRA ceiling
-and the corrected rapid-response reserve constraint:
+Projected reserve and balance are:
 
 ```text
-immediate_online_capacity_mw = min(
-    TRA,
-    current_demand_mw + corrected_spin_mw
-)
-safe_online_capacity_mw = immediate_online_capacity_mw - required_reserve_mw
+projected_reserve_mw = forecast_TRA_mw - forecast_demand_mw
+reserve_surplus_mw = projected_reserve_mw - required_reserve_mw
+reserve_deficit_mw = max(0, required_reserve_mw - projected_reserve_mw)
 ```
 
 Required reserve:
 
 ```text
-required_reserve_mw = max(current_demand_mw, forecast_demand_mw)
-                      * reserve_margin_threshold
+required_reserve_mw = 30 MW
 ```
 
-The reserve fraction is configurable and explicitly unconfirmed. Do not treat
-the development default as an approved operating threshold. Corrected spin is
-not redefined as `TRA - demand`, and the reserve requirement is subtracted only
-once. TA is not immediate capacity; verified TA headroom only bounds capacity
-that guidance may identify as startable.
+The target is configurable and explicitly unconfirmed. Corrected spin is not
+redefined as `TRA - demand` and does not replace TRA in the probability. TA is
+not immediate capacity; verified TA headroom only bounds capacity that guidance
+may identify as startable.
 
 ### Probability Estimate
 
 For v1, use normal approximation:
 
 ```text
-z = (safe_online_capacity_mw - forecast_demand_mw) / forecast_uncertainty_mw
+safe_demand_mw = forecast_TRA_mw - required_reserve_mw
+z = (safe_demand_mw - forecast_demand_mw) / forecast_uncertainty_mw
 probability = 1 - normal_cdf(z)
 ```
 
@@ -550,28 +545,34 @@ expected positive shortfall and confidence-upper-bound conservative shortfall.
 
 Guardrails:
 
-- If `forecast_uncertainty_mw <= 0`, use residual standard deviation from validation.
-- If uncertainty is unavailable, mark probability quality as degraded.
+- Prefer per-horizon calibrated residual standard deviation or a valid
+  prediction interval.
+- Otherwise use chronological validation RMSE as sigma, or convert validation
+  MAE under a zero-mean normal assumption with
+  `sigma = MAE * sqrt(pi / 2)`.
+- If validated uncertainty is unavailable, mark probability unavailable.
 - If SCADA or weather data is stale/missing, fail safely.
 - Probability must come from operating risk, not arbitrary scoring.
 
 ### Risk Levels
 
 ```text
-LOW < 0.30
-MEDIUM 0.30-0.65
-HIGH > 0.65
+Normal < 0.20
+Watch 0.20-0.49
+Prepare Generation 0.50-0.79
+Add Generation >= 0.80
 ```
 
 ### Recommendations
 
 ```text
-LOW = NO ACTION REQUIRED
-MEDIUM = MONITOR CONDITIONS
-HIGH = PREPARE ADDITIONAL GENERATION / START ADDITIONAL TURBINE
+Normal = NO ACTION REQUIRED
+Watch = MONITOR CONDITIONS
+Prepare Generation = PREPARE ADDITIONAL GENERATION
+Add Generation = evaluate unit capacity and startup lead time
 ```
 
-For compatibility with the current frontend, the backend can continue mapping the high-risk action to the existing displayed string if needed.
+Legacy LOW/MEDIUM/HIGH remains an API compatibility mapping only.
 
 ### Reasoning Output
 
@@ -1071,10 +1072,9 @@ These fields are optional. Frontend and API clients must continue handling snaps
 When both a latest 1-hour demand forecast and a latest SCADA grid snapshot exist, the dashboard can use:
 
 ```text
-safe_online_capacity_mw = immediate_capacity_mw - required_reserve_mw
-required_reserve_mw = max(current_demand_mw, forecast_demand_mw)
-                      * configured_reserve_fraction
-probability = P(actual_demand_mw > safe_online_capacity_mw)
+projected_reserve_mw = forecast_TRA_mw - forecast_demand_mw
+required_reserve_mw = 30 MW
+probability = P(forecast_TRA_mw - actual_demand_mw < required_reserve_mw)
 ```
 
 The probability uses forecast uncertainty from validation residuals. If
@@ -1215,14 +1215,14 @@ Phase 9 keeps the following rules explicit and test-backed:
 - Operating risk is based on:
 
 ```text
-actual_demand_mw > safe_online_capacity_mw
+forecast_TRA_mw - actual_demand_mw < required_reserve_mw
 ```
 
 Where:
 
 ```text
-safe_online_capacity_mw = online_capacity_mw - required_reserve_mw
-required_reserve_mw = current_demand_mw * reserve_margin_threshold
+projected_reserve_mw = forecast_TRA_mw - forecast_demand_mw
+required_reserve_mw = 30 MW
 ```
 
 - If SCADA, weather, forecast, online capacity, or model uncertainty is missing, the engine fails safely with an unavailable status instead of inventing a probability.
@@ -1277,13 +1277,13 @@ The operating-risk engine validates numeric inputs before calculating probabilit
 The probability calculation remains tied to the operating event:
 
 ```text
-actual_demand_mw > safe_online_capacity_mw
+forecast_TRA_mw - actual_demand_mw < 30 MW
 ```
 
-Corrected spin and TRA are separate constraints on immediate capability. TA is
-used only for verified startability context. Weather enters the risk calculation
-through the leakage-safe demand forecast and residual uncertainty, not through
-fixed probability points.
+Corrected spin remains separate observed SCADA context. TRA is the capacity term
+in projected reserve. TA is used only for verified startability context. Weather
+enters the risk calculation through the leakage-safe demand forecast and
+residual uncertainty, not through fixed probability points.
 
 ## Limitations of One Month of SCADA Data
 

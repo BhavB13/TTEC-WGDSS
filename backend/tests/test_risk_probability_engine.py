@@ -1,3 +1,4 @@
+import math
 from datetime import datetime, timedelta
 from statistics import NormalDist
 
@@ -12,437 +13,141 @@ from app.services.risk_probability_engine import (
 )
 
 
-def test_risk_engine_uses_injected_configurable_operating_policy():
-    policy = OperatingPolicy(
-        status="TEST_UNCONFIRMED",
-        reserve_fraction=0.10,
-        medium_probability_threshold=0.20,
-        high_probability_threshold=0.80,
-        fast_start_unit_capacity_mw=10,
-        fast_start_max_capacity_mw=20,
-        fast_start_lead_time_minutes=15,
-        heavy_start_min_capacity_mw=50,
-        heavy_start_max_capacity_mw=100,
-        heavy_start_lead_time_minutes=45,
-    )
-    result = RiskProbabilityEngine(policy=policy).evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=850,
-            forecast_uncertainty_mw=25,
-            current_demand_mw=830,
-            online_capacity_mw=1100,
-            available_capacity_mw=1250,
-            spinning_reserve_mw=180,
-        )
-    )
+def _risk_input(
+    *,
+    forecast_demand_mw: float = 950.0,
+    forecast_uncertainty_mw: float | None = 20.0,
+    current_demand_mw: float = 930.0,
+    forecast_tra_mw: float = 1000.0,
+    available_capacity_mw: float = 1150.0,
+    spinning_reserve_mw: float | None = 50.0,
+    forecast_profile: tuple[OperatingForecastPoint, ...] = (),
+    **overrides: object,
+) -> OperatingRiskInput:
+    payload = {
+        "forecast_demand_mw": forecast_demand_mw,
+        "forecast_uncertainty_mw": forecast_uncertainty_mw,
+        "current_demand_mw": current_demand_mw,
+        "online_capacity_mw": forecast_tra_mw,
+        "available_capacity_mw": available_capacity_mw,
+        "spinning_reserve_mw": spinning_reserve_mw,
+        "forecast_profile": forecast_profile,
+    }
+    payload.update(overrides)
+    return OperatingRiskInput(**payload)
 
-    assert result.required_reserve_mw == 85
+
+def _policy(**overrides: object) -> OperatingPolicy:
+    payload = {
+        "status": "TEST_UNCONFIRMED",
+        "required_reserve_mw": 30.0,
+        "watch_probability_threshold": 0.20,
+        "prepare_probability_threshold": 0.50,
+        "add_generation_probability_threshold": 0.80,
+        "fast_start_unit_capacity_mw": 15.0,
+        "fast_start_max_capacity_mw": 30.0,
+        "fast_start_lead_time_minutes": 20,
+        "heavy_start_min_capacity_mw": 60.0,
+        "heavy_start_max_capacity_mw": 120.0,
+        "heavy_start_lead_time_minutes": 60,
+    }
+    payload.update(overrides)
+    return OperatingPolicy(**payload)
+
+
+def test_risk_engine_uses_injected_configurable_operating_policy():
+    result = RiskProbabilityEngine(
+        policy=_policy(required_reserve_mw=45.0)
+    ).evaluate(_risk_input())
+
+    assert result.required_reserve_mw == 45.0
+    assert result.projected_reserve_mw == 50.0
+    assert result.reserve_surplus_mw == 5.0
     assert result.policy_status == "TEST_UNCONFIRMED"
     assert any("test unconfirmed" in reason for reason in result.reasons)
 
 
 def test_risk_engine_fails_closed_for_invalid_capacity_policy():
-    policy = OperatingPolicy(
-        status="TEST_INVALID",
-        reserve_fraction=0.10,
-        medium_probability_threshold=0.20,
-        high_probability_threshold=0.80,
-        fast_start_unit_capacity_mw=20,
-        fast_start_max_capacity_mw=10,
-        fast_start_lead_time_minutes=15,
-        heavy_start_min_capacity_mw=100,
-        heavy_start_max_capacity_mw=50,
-        heavy_start_lead_time_minutes=45,
-    )
-
-    result = RiskProbabilityEngine(policy=policy).evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=850,
-            forecast_uncertainty_mw=25,
-            current_demand_mw=830,
-            online_capacity_mw=1100,
-            available_capacity_mw=1250,
-            spinning_reserve_mw=180,
+    result = RiskProbabilityEngine(
+        policy=_policy(
+            watch_probability_threshold=0.6,
+            prepare_probability_threshold=0.5,
+            fast_start_unit_capacity_mw=20,
+            fast_start_max_capacity_mw=10,
+            heavy_start_min_capacity_mw=100,
+            heavy_start_max_capacity_mw=50,
         )
-    )
+    ).evaluate(_risk_input())
 
     assert result.risk_level == "UNAVAILABLE"
-    assert result.recommendation == "DATA UNAVAILABLE"
+    assert result.capacity_status == "Unavailable"
+    assert "ordered capacity-status" in result.reasons[0]
     assert "fast-start maximum capacity" in result.reasons[0]
     assert "heavy-start maximum capacity" in result.reasons[0]
 
 
-def test_risk_probability_low_when_forecast_is_below_safe_capacity():
-    result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=850,
-            forecast_uncertainty_mw=25,
-            current_demand_mw=830,
-            online_capacity_mw=1100,
-            available_capacity_mw=1250,
-            spinning_reserve_mw=180,
-        )
-    )
+def test_projected_reserve_above_target_is_normal_with_continuous_probability():
+    result = RiskProbabilityEngine().evaluate(_risk_input())
 
+    expected_probability = NormalDist().cdf((30.0 - 50.0) / 20.0)
+    assert result.probability_score == pytest.approx(expected_probability)
+    assert result.capacity_risk_percent == pytest.approx(expected_probability * 100)
+    assert result.capacity_status == "Normal"
     assert result.risk_level == "LOW"
-    assert result.probability_score < 0.30
     assert result.recommendation == "NO ACTION REQUIRED"
-    assert result.safe_online_capacity_mw == 882.5
-    assert "Forecast demand remains within safe online capacity" in result.reasons
-    assert any("TA could satisfy forecast demand" in reason for reason in result.reasons)
+    assert result.forecast_demand_mw == 950.0
+    assert result.forecast_tra_mw == 1000.0
+    assert result.projected_reserve_mw == 50.0
+    assert result.required_reserve_mw == 30.0
+    assert result.reserve_surplus_mw == 20.0
+    assert result.reserve_deficit_mw == 0.0
 
 
-def test_risk_probability_preserves_a_small_nonzero_tail_probability():
+def test_projected_reserve_at_target_is_fifty_percent_and_prepare_generation():
     result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=959,
-            forecast_uncertainty_mw=20,
-            current_demand_mw=950,
-            online_capacity_mw=1200,
-            available_capacity_mw=1200,
-            spinning_reserve_mw=None,
-        )
+        _risk_input(forecast_demand_mw=970.0)
     )
 
-    assert 0.0 < result.probability_score < 0.0001
-    assert any("Safe online headroom" in reason for reason in result.reasons)
-    assert any("Operating-risk probability is below 0.001%" in reason for reason in result.reasons)
+    assert result.probability_score == pytest.approx(0.5)
+    assert result.capacity_risk_percent == pytest.approx(50.0)
+    assert result.projected_reserve_mw == 30.0
+    assert result.reserve_surplus_mw == 0.0
+    assert result.reserve_deficit_mw == 0.0
+    assert result.capacity_status == "Prepare Generation"
+    assert result.recommendation == "PREPARE ADDITIONAL GENERATION"
+    assert result.reserve_insufficient_horizon_minutes == 60
 
 
-def test_risk_probability_high_when_forecast_exceeds_safe_capacity():
+def test_projected_reserve_below_target_is_add_generation():
     result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=1040,
-            forecast_uncertainty_mw=30,
-            current_demand_mw=900,
-            online_capacity_mw=1120,
-            available_capacity_mw=1260,
-            spinning_reserve_mw=80,
-        )
+        _risk_input(forecast_demand_mw=990.0)
     )
 
+    expected_probability = NormalDist().cdf((30.0 - 10.0) / 20.0)
+    assert result.probability_score == pytest.approx(expected_probability)
+    assert result.capacity_status == "Add Generation"
     assert result.risk_level == "HIGH"
-    assert result.probability_score > 0.65
-    assert result.recommendation == "START HEAVY GENERATOR SET"
-    assert result.generator_set == "HEAVY 60-120 MW SET"
-    assert result.startup_time_minutes == 60
-    assert "Forecast demand exceeds safe online capacity" in result.reasons
-    assert "Corrected spin is below the configured reserve requirement" in result.reasons
-    assert any("TA could satisfy forecast demand" in reason for reason in result.reasons)
+    assert result.projected_reserve_mw == 10.0
+    assert result.reserve_surplus_mw == -20.0
+    assert result.reserve_deficit_mw == 20.0
+    assert result.recommendation in {
+        "START HEAVY GENERATOR SET",
+        "PREPARE ADDITIONAL GENERATION",
+    }
 
 
-def test_risk_probability_medium_when_uncertainty_overlaps_reserve_boundary():
-    result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=955,
-            forecast_uncertainty_mw=60,
-            current_demand_mw=900,
-            online_capacity_mw=1100,
-            available_capacity_mw=1200,
-            spinning_reserve_mw=250,
-        )
-    )
-
-    assert result.risk_level == "MEDIUM"
-    assert 0.30 <= result.probability_score <= 0.65
-    assert result.recommendation == "MONITOR CONDITIONS"
-    assert "Forecast uncertainty overlaps the operating reserve boundary" in result.reasons
-
-
-def test_dispatch_selects_small_set_inside_twenty_minute_start_window():
-    result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=985,
-            forecast_uncertainty_mw=5,
-            current_demand_mw=950,
-            online_capacity_mw=1120,
-            available_capacity_mw=1200,
-            spinning_reserve_mw=170,
-            forecast_profile=(
-                OperatingForecastPoint(
-                    horizon_minutes=20,
-                    forecast_demand_mw=985,
-                    forecast_uncertainty_mw=5,
-                    weather_effect_mw=12,
-                    confidence=0.91,
-                ),
-            ),
-        )
-    )
-
-    assert result.recommendation == "START BOTH 15 MW SMALL SETS"
-    assert result.recommended_capacity_mw == 30
-    assert result.startup_time_minutes == 20
-    assert result.expected_rise_minutes == 20
-    assert result.weather_effect_mw == 12
-
-
-def test_dispatch_selects_one_fifteen_mw_set_for_small_shortfall():
-    result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=978,
-            forecast_uncertainty_mw=5,
-            current_demand_mw=950,
-            online_capacity_mw=1120,
-            available_capacity_mw=1200,
-            spinning_reserve_mw=170,
-            forecast_profile=(OperatingForecastPoint(20, 978, 5),),
-        )
-    )
-
-    assert result.risk_level == "HIGH"
-    assert result.recommendation == "START ONE 15 MW SMALL SET"
-    assert result.generator_set == "1 x 15 MW FAST-START"
-    assert result.recommended_capacity_mw == 15
-    assert result.startup_time_minutes == 20
-
-
-def test_dispatch_monitors_small_set_until_start_window():
-    result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=985,
-            forecast_uncertainty_mw=5,
-            current_demand_mw=950,
-            online_capacity_mw=1120,
-            available_capacity_mw=1200,
-            spinning_reserve_mw=170,
-            forecast_profile=(
-                OperatingForecastPoint(45, 985, 5, confidence=0.88),
-            ),
-        )
-    )
-
-    assert result.recommendation == "MONITOR CONDITIONS"
-    assert result.decision_action == "MONITOR SMALL-SET WINDOW"
-    assert result.startup_time_minutes == 20
-
-
-def test_dispatch_selects_heavy_set_for_large_one_hour_shortfall():
-    result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=1120,
-            forecast_uncertainty_mw=20,
-            current_demand_mw=950,
-            online_capacity_mw=1150,
-            available_capacity_mw=1250,
-            spinning_reserve_mw=200,
-            forecast_profile=(
-                OperatingForecastPoint(
-                    60,
-                    1120,
-                    20,
-                    weather_effect_mw=35,
-                    confidence=0.85,
-                ),
-            ),
-        )
-    )
-
-    assert result.recommendation == "START HEAVY GENERATOR SET"
-    assert 60 <= result.recommended_capacity_mw <= 120
-    assert result.startup_time_minutes == 60
-    assert result.projected_shortfall_mw > 30
-
-
-def test_dispatch_does_not_claim_heavy_set_without_ta_headroom():
-    result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=1100,
-            forecast_uncertainty_mw=15,
-            current_demand_mw=950,
-            online_capacity_mw=1100,
-            available_capacity_mw=1120,
-            spinning_reserve_mw=150,
-            forecast_profile=(OperatingForecastPoint(60, 1100, 15),),
-        )
-    )
-
-    assert result.risk_level == "HIGH"
-    assert result.generator_set == "1 x 15 MW FAST-START"
-    assert result.recommended_capacity_mw == 15
-    assert result.residual_shortfall_mw > 0
-    assert result.decision_action == "ESCALATE CAPACITY AVAILABILITY"
-
-
-def test_risk_probability_fails_safely_when_inputs_are_missing():
-    result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=None,
-            forecast_uncertainty_mw=30,
-            current_demand_mw=900,
-            online_capacity_mw=None,
-            available_capacity_mw=1200,
-            spinning_reserve_mw=150,
-        )
-    )
-
-    assert result.risk_level == "UNAVAILABLE"
-    assert result.probability_score == 0.0
-    assert result.recommendation == "DATA UNAVAILABLE"
-    assert "invalid or missing forecast_demand_mw, online_capacity_mw" in result.reasons[0]
-
-
-def test_risk_probability_unavailable_without_online_capacity():
-    result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=940,
-            forecast_uncertainty_mw=25,
-            current_demand_mw=900,
-            online_capacity_mw=None,
-            available_capacity_mw=1200,
-            spinning_reserve_mw=150,
-        )
-    )
-
-    assert result.risk_level == "UNAVAILABLE"
-    assert result.probability_score == 0.0
-    assert result.recommendation == "DATA UNAVAILABLE"
-    assert "invalid or missing online_capacity_mw" in result.reasons[0]
-
-
-def test_risk_probability_rejects_invalid_numeric_inputs():
-    result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=-1,
-            forecast_uncertainty_mw=float("nan"),
-            current_demand_mw=0,
-            online_capacity_mw=-10,
-            available_capacity_mw=-5,
-            spinning_reserve_mw=-1,
-        )
-    )
-
-    assert result.risk_level == "UNAVAILABLE"
-    assert result.recommendation == "DATA UNAVAILABLE"
-    assert "nonnegative forecast_demand_mw" in result.reasons[0]
-    assert "positive current_demand_mw" in result.reasons[0]
-    assert "positive online_capacity_mw" in result.reasons[0]
-    assert "nonnegative available_capacity_mw" in result.reasons[0]
-    assert "nonnegative spinning_reserve_mw" in result.reasons[0]
-
-
-def test_risk_probability_uses_valid_fallback_uncertainty():
-    result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=850,
-            forecast_uncertainty_mw=float("nan"),
-            fallback_uncertainty_mw=40,
-            current_demand_mw=830,
-            online_capacity_mw=1100,
-            available_capacity_mw=1250,
-            spinning_reserve_mw=180,
-        )
-    )
-
-    assert result.risk_level != "UNAVAILABLE"
-    assert result.forecast_uncertainty_mw == 40
-
-
-def test_risk_probability_scales_reserve_to_higher_forecast_demand():
-    result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=1000,
-            forecast_uncertainty_mw=25,
-            current_demand_mw=800,
-            online_capacity_mw=1200,
-            available_capacity_mw=1300,
-            spinning_reserve_mw=400,
-        )
-    )
-
-    assert result.required_reserve_mw == 150
-    assert result.safe_online_capacity_mw == 1050
-
-
-def test_risk_probability_rejects_inconsistent_capacity_state():
-    result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=900,
-            forecast_uncertainty_mw=25,
-            current_demand_mw=950,
-            online_capacity_mw=900,
-            available_capacity_mw=850,
-            spinning_reserve_mw=100,
-        )
-    )
-
-    assert result.risk_level == "UNAVAILABLE"
-    assert "current_demand_mw not above online_capacity_mw" in result.reasons[0]
-    assert "available_capacity_mw not below online_capacity_mw" in result.reasons[0]
-
-
-def test_risk_probability_increases_monotonically_with_forecast_demand():
+def test_probability_is_continuous_at_status_thresholds():
     engine = RiskProbabilityEngine()
-    scores = [
-        engine.evaluate(
-            OperatingRiskInput(
-                forecast_demand_mw=forecast,
-                forecast_uncertainty_mw=30,
-                current_demand_mw=800,
-                online_capacity_mw=1200,
-                available_capacity_mw=1300,
-                spinning_reserve_mw=400,
-            )
-        ).probability_score
-        for forecast in (800, 900, 1000, 1100)
-    ]
-
-    assert scores == sorted(scores)
-    assert scores[-1] > scores[0]
-
-
-def test_risk_probability_decreases_with_more_spinning_headroom():
-    engine = RiskProbabilityEngine()
-    scores = [
-        engine.evaluate(
-            OperatingRiskInput(
-                forecast_demand_mw=900,
-                forecast_uncertainty_mw=30,
-                current_demand_mw=800,
-                online_capacity_mw=1200,
-                available_capacity_mw=1300,
-                spinning_reserve_mw=spinning_reserve,
-            )
-        ).probability_score
-        for spinning_reserve in (150, 250, 400)
-    ]
-
-    assert scores == sorted(scores, reverse=True)
-
-
-def test_risk_probability_is_half_at_the_operating_boundary():
-    boundary_demand = 1200 / 1.15
-    result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=boundary_demand,
-            forecast_uncertainty_mw=30,
-            current_demand_mw=800,
-            online_capacity_mw=1200,
-            available_capacity_mw=1300,
-            spinning_reserve_mw=400,
-        )
-    )
-
-    assert result.probability_score == 0.5
-
-
-def test_risk_probability_returns_calibrated_intermediate_values():
-    engine = RiskProbabilityEngine()
-    uncertainty = 30.0
+    sigma = 20.0
 
     def demand_for_probability(probability: float) -> float:
-        z_score = NormalDist().inv_cdf(1.0 - probability)
-        return (1200.0 - z_score * uncertainty) / 1.15
+        return 1000.0 - 30.0 + sigma * NormalDist().inv_cdf(probability)
 
     results = [
         engine.evaluate(
-            OperatingRiskInput(
+            _risk_input(
                 forecast_demand_mw=demand_for_probability(probability),
-                forecast_uncertainty_mw=uncertainty,
-                current_demand_mw=800,
-                online_capacity_mw=1200,
-                available_capacity_mw=1300,
-                spinning_reserve_mw=400,
+                forecast_uncertainty_mw=sigma,
             )
         )
         for probability in (0.20, 0.50, 0.80)
@@ -452,155 +157,272 @@ def test_risk_probability_returns_calibrated_intermediate_values():
         [0.20, 0.50, 0.80],
         abs=1e-12,
     )
+    assert [result.capacity_status for result in results] == [
+        "Watch",
+        "Prepare Generation",
+        "Add Generation",
+    ]
 
 
-def test_small_capacity_crossing_remains_near_fifty_percent_not_one_hundred():
-    boundary_demand = 1200 / 1.15
+def test_one_mw_boundary_crossing_does_not_jump_to_one_hundred_percent():
     result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=boundary_demand + 1.0,
-            forecast_uncertainty_mw=30,
-            current_demand_mw=800,
-            online_capacity_mw=1200,
-            available_capacity_mw=1300,
-            spinning_reserve_mw=400,
-        )
+        _risk_input(forecast_demand_mw=971.0, forecast_uncertainty_mw=30.0)
     )
 
-    assert 0.50 < result.probability_score < 0.53
+    assert 0.50 < result.probability_score < 0.52
     assert result.probability_score != 1.0
 
 
-def test_horizon_profile_exposes_uncertainty_headroom_and_peak_deadline():
+def test_probability_increases_with_demand_and_decreases_with_tra():
+    engine = RiskProbabilityEngine()
+    demand_scores = [
+        engine.evaluate(_risk_input(forecast_demand_mw=demand)).probability_score
+        for demand in (930.0, 950.0, 970.0, 990.0)
+    ]
+    tra_scores = [
+        engine.evaluate(_risk_input(forecast_tra_mw=tra)).probability_score
+        for tra in (980.0, 1000.0, 1020.0, 1040.0)
+    ]
+
+    assert demand_scores == sorted(demand_scores)
+    assert tra_scores == sorted(tra_scores, reverse=True)
+
+
+def test_corrected_system_spin_is_context_not_a_probability_term():
+    engine = RiskProbabilityEngine()
+    scores = [
+        engine.evaluate(_risk_input(spinning_reserve_mw=spin)).probability_score
+        for spin in (10.0, 50.0, 150.0)
+    ]
+
+    assert scores[0] == pytest.approx(scores[1])
+    assert scores[1] == pytest.approx(scores[2])
+
+
+def test_profile_selects_peak_and_headline_fields_from_same_horizon():
     reference = datetime(2026, 6, 15, 10)
+    profile = (
+        OperatingForecastPoint(
+            60,
+            950.0,
+            20.0,
+            forecast_timestamp=reference + timedelta(hours=1),
+            forecast_tra_mw=1000.0,
+            tra_projection_basis="SUPPLIED_TRA_SCHEDULE",
+        ),
+        OperatingForecastPoint(
+            120,
+            980.0,
+            20.0,
+            forecast_timestamp=reference + timedelta(hours=2),
+            forecast_tra_mw=1010.0,
+            tra_projection_basis="SUPPLIED_TRA_SCHEDULE",
+        ),
+        OperatingForecastPoint(
+            180,
+            990.0,
+            20.0,
+            forecast_timestamp=reference + timedelta(hours=3),
+            forecast_tra_mw=1015.0,
+            tra_projection_basis="SUPPLIED_TRA_SCHEDULE",
+        ),
+    )
     result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=980,
-            forecast_uncertainty_mw=30,
-            current_demand_mw=900,
-            online_capacity_mw=1200,
-            available_capacity_mw=1320,
-            spinning_reserve_mw=300,
+        _risk_input(forecast_profile=profile)
+    )
+    selected = max(result.risk_profile, key=lambda point: point.probability)
+
+    assert result.peak_risk_horizon_minutes == selected.horizon_minutes == 180
+    assert result.peak_risk_timestamp == selected.forecast_timestamp
+    assert result.probability_score == selected.probability
+    assert result.capacity_risk_percent == selected.capacity_risk_percent
+    assert result.forecast_demand_mw == selected.forecast_demand_mw
+    assert result.forecast_tra_mw == selected.forecast_tra_mw
+    assert result.projected_reserve_mw == selected.projected_reserve_mw
+    assert result.required_reserve_mw == selected.required_reserve_mw
+    assert result.reserve_surplus_mw == selected.reserve_surplus_mw
+    assert result.reserve_deficit_mw == selected.reserve_deficit_mw
+    assert result.capacity_status == selected.capacity_status
+    assert result.reserve_insufficient_horizon_minutes == 120
+    assert result.reserve_insufficient_at == reference + timedelta(hours=2)
+
+
+def test_current_tra_is_explicitly_held_when_future_schedule_is_unavailable():
+    result = RiskProbabilityEngine().evaluate(
+        _risk_input(
             forecast_profile=(
-                OperatingForecastPoint(
-                    60,
-                    940,
-                    30,
-                    confidence=0.9,
-                    forecast_timestamp=reference + timedelta(hours=1),
-                ),
-                OperatingForecastPoint(
-                    120,
-                    1000,
-                    30,
-                    confidence=0.85,
-                    forecast_timestamp=reference + timedelta(hours=2),
-                ),
-                OperatingForecastPoint(
-                    360,
-                    1060,
-                    35,
-                    confidence=0.8,
-                    forecast_timestamp=reference + timedelta(hours=6),
-                ),
-            ),
+                OperatingForecastPoint(60, 950.0, 20.0),
+                OperatingForecastPoint(120, 960.0, 20.0),
+            )
         )
     )
 
-    assert [point.horizon_minutes for point in result.risk_profile] == [60, 120, 360]
-    assert result.peak_risk_horizon_minutes == 360
-    assert result.peak_risk_timestamp == reference + timedelta(hours=6)
-    assert result.risk_profile[-1].forecast_lower_mw < 1060
-    assert result.risk_profile[-1].forecast_upper_mw > 1060
-    assert result.risk_profile[-1].online_headroom_mw == 140
-    assert result.risk_profile[-1].reserve_adjusted_headroom_mw < 0
-    assert result.risk_profile[-1].expected_shortfall_mw > 0
-    assert result.risk_profile[-1].conservative_shortfall_mw > 0
-    assert result.decision_deadline_at == reference + timedelta(hours=5)
-    assert result.decision_deadline_minutes == 300
-
-
-def test_risk_profile_is_monotonic_for_rising_forecast_at_fixed_uncertainty():
-    result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=900,
-            forecast_uncertainty_mw=35,
-            current_demand_mw=850,
-            online_capacity_mw=1200,
-            available_capacity_mw=1300,
-            spinning_reserve_mw=350,
-            forecast_profile=tuple(
-                OperatingForecastPoint(horizon, demand, 35)
-                for horizon, demand in ((60, 900), (120, 960), (360, 1020))
-            ),
-        )
+    assert all(point.forecast_tra_mw == 1000.0 for point in result.risk_profile)
+    assert all(
+        point.tra_projection_basis
+        == "CURRENT_TRA_HELD_SCENARIO_NO_DISPATCH_PLAN"
+        for point in result.risk_profile
     )
-
-    probabilities = [point.probability for point in result.risk_profile]
-    assert probabilities == sorted(probabilities)
+    assert any("No future TRA schedule" in warning for warning in result.quality_warnings)
 
 
-def test_explicit_prediction_interval_can_supply_missing_standard_deviation():
+def test_prediction_interval_can_supply_uncertainty():
     result = RiskProbabilityEngine().evaluate(
-        OperatingRiskInput(
-            forecast_demand_mw=1000,
+        _risk_input(
             forecast_uncertainty_mw=None,
-            current_demand_mw=850,
-            online_capacity_mw=1200,
-            available_capacity_mw=1300,
-            spinning_reserve_mw=350,
             forecast_profile=(
                 OperatingForecastPoint(
                     60,
-                    1000,
-                    0,
-                    confidence_lower_mw=950,
-                    confidence_upper_mw=1050,
+                    970.0,
+                    None,
+                    confidence_lower_mw=930.0,
+                    confidence_upper_mw=1010.0,
                     confidence_level=0.90,
                 ),
             ),
         )
     )
 
+    expected_sigma = 80.0 / (2 * NormalDist().inv_cdf(0.95))
     assert result.risk_level != "UNAVAILABLE"
+    assert result.forecast_uncertainty_mw == pytest.approx(expected_sigma)
+    assert result.uncertainty_source == "PREDICTION_INTERVAL_NORMAL_EQUIVALENT"
+
+
+def test_historical_rmse_is_used_as_documented_uncertainty_fallback():
+    result = RiskProbabilityEngine().evaluate(
+        _risk_input(
+            forecast_uncertainty_mw=None,
+            historical_validation_rmse_mw=24.0,
+        )
+    )
+
+    assert result.forecast_uncertainty_mw == 24.0
+    assert result.uncertainty_source == "HISTORICAL_VALIDATION_RMSE_AS_SIGMA"
+
+
+def test_historical_mae_is_converted_to_normal_equivalent_sigma():
+    result = RiskProbabilityEngine().evaluate(
+        _risk_input(
+            forecast_uncertainty_mw=None,
+            historical_validation_mae_mw=20.0,
+        )
+    )
+
     assert result.forecast_uncertainty_mw == pytest.approx(
-        100 / (2 * NormalDist().inv_cdf(0.95))
+        20.0 * math.sqrt(math.pi / 2.0)
+    )
+    assert (
+        result.uncertainty_source
+        == "HISTORICAL_VALIDATION_MAE_NORMAL_EQUIVALENT"
     )
 
 
-def test_invalid_prediction_interval_falls_back_to_residual_uncertainty():
+def test_probability_fails_safely_without_uncertainty_evidence():
+    result = RiskProbabilityEngine().evaluate(
+        _risk_input(forecast_uncertainty_mw=None)
+    )
+
+    assert result.risk_level == "UNAVAILABLE"
+    assert result.capacity_status == "Unavailable"
+    assert result.recommendation == "DATA UNAVAILABLE"
+    assert "forecast uncertainty" in result.reasons[0]
+
+
+def test_missing_core_inputs_fail_safely():
     result = RiskProbabilityEngine().evaluate(
         OperatingRiskInput(
-            forecast_demand_mw=1000,
-            forecast_uncertainty_mw=30,
-            current_demand_mw=850,
-            online_capacity_mw=1200,
-            available_capacity_mw=1300,
-            spinning_reserve_mw=350,
+            forecast_demand_mw=None,
+            forecast_uncertainty_mw=20.0,
+            current_demand_mw=900.0,
+            online_capacity_mw=None,
+            available_capacity_mw=1200.0,
+            spinning_reserve_mw=50.0,
+        )
+    )
+
+    assert result.risk_level == "UNAVAILABLE"
+    assert result.probability_score == 0.0
+    assert "forecast_demand_mw, online_capacity_mw" in result.reasons[0]
+
+
+def test_demand_above_tra_is_a_high_risk_state_not_invalid_data():
+    result = RiskProbabilityEngine().evaluate(
+        _risk_input(
+            current_demand_mw=1005.0,
+            forecast_demand_mw=1010.0,
+            forecast_tra_mw=1000.0,
+        )
+    )
+
+    assert result.risk_level == "HIGH"
+    assert result.capacity_status == "Add Generation"
+    assert result.projected_reserve_mw == -10.0
+    assert result.reserve_deficit_mw == 40.0
+
+
+def test_available_capacity_below_tra_is_rejected_as_inconsistent():
+    result = RiskProbabilityEngine().evaluate(
+        _risk_input(forecast_tra_mw=1000.0, available_capacity_mw=990.0)
+    )
+
+    assert result.risk_level == "UNAVAILABLE"
+    assert "available_capacity_mw not below online_capacity_mw" in result.reasons[0]
+
+
+def test_add_generation_dispatch_uses_small_set_inside_start_window():
+    result = RiskProbabilityEngine().evaluate(
+        _risk_input(
+            forecast_demand_mw=990.0,
+            forecast_uncertainty_mw=5.0,
             forecast_profile=(
-                OperatingForecastPoint(
-                    60,
-                    1000,
-                    30,
-                    confidence_lower_mw=1020,
-                    confidence_upper_mw=1030,
-                    confidence_level=0.90,
-                ),
+                OperatingForecastPoint(20, 990.0, 5.0),
             ),
         )
     )
 
-    expected_delta = NormalDist().inv_cdf(0.95) * 30
-    assert result.forecast_lower_mw == pytest.approx(1000 - expected_delta)
-    assert result.forecast_upper_mw == pytest.approx(1000 + expected_delta)
+    assert result.capacity_status == "Add Generation"
+    assert result.recommendation == "START BOTH 15 MW SMALL SETS"
+    assert result.generator_set == "2 x 15 MW FAST-START"
+    assert result.recommended_capacity_mw == 30.0
+    assert result.startup_time_minutes == 20
 
 
-def test_risk_backtest_is_chronological_and_reports_probability_calibration():
+def test_add_generation_does_not_claim_a_unit_without_verified_ta():
+    result = RiskProbabilityEngine().evaluate(
+        _risk_input(
+            forecast_demand_mw=990.0,
+            forecast_uncertainty_mw=5.0,
+            available_capacity_is_verified=False,
+            forecast_profile=(OperatingForecastPoint(20, 990.0, 5.0),),
+        )
+    )
+
+    assert result.capacity_status == "Add Generation"
+    assert result.recommendation == "PREPARE ADDITIONAL GENERATION"
+    assert result.decision_action == "VERIFY STARTABLE CAPACITY"
+    assert result.generator_set == "NONE"
+    assert result.recommended_capacity_mw == 0.0
+
+
+def test_risk_backtest_is_chronological_and_reports_calibration():
     base = datetime(2026, 6, 1, 0)
     samples = (
-        RiskBacktestSample(base + timedelta(hours=2), base + timedelta(hours=3), 0.8, 1100, 1000),
+        RiskBacktestSample(
+            base + timedelta(hours=2),
+            base + timedelta(hours=3),
+            0.8,
+            1100,
+            1000,
+        ),
         RiskBacktestSample(base, base + timedelta(hours=1), 0.2, 950, 1000),
-        RiskBacktestSample(base + timedelta(hours=1), base + timedelta(hours=2), 0.5, 1000, 1000),
+        RiskBacktestSample(
+            base + timedelta(hours=1),
+            base + timedelta(hours=2),
+            0.5,
+            1000,
+            1000,
+        ),
     )
 
     result = RiskProbabilityEngine.chronological_backtest(samples)
@@ -614,7 +436,7 @@ def test_risk_backtest_is_chronological_and_reports_probability_calibration():
     assert result.mean_calibration_error == pytest.approx(1 / 6)
 
 
-def test_risk_backtest_rejects_forecasts_issued_at_or_after_target_time():
+def test_risk_backtest_rejects_forecasts_at_or_after_target_time():
     timestamp = datetime(2026, 6, 1, 12)
 
     with pytest.raises(ValueError, match="issued before"):

@@ -28,14 +28,27 @@ The response contains:
   },
   "forecast": { "items": [] },
   "probability": {
-    "probability_score": 0.8123456789,
+    "probability_score": 0.567,
+    "capacity_risk_percent": 56.7,
     "risk_level": "HIGH",
+    "capacity_status": "Prepare Generation",
     "probability_method": "NORMAL_RESIDUAL_EXCEEDANCE",
     "aggregation_method": "MAX_HORIZON_PROBABILITY",
-    "capacity_basis": "MIN_TRA_AND_DEMAND_PLUS_CORRECTED_SPIN",
-    "formula_version": "wgdss-operating-risk-v3",
+    "capacity_basis": "FORECAST_TRA_MINUS_FORECAST_DEMAND",
+    "formula_version": "wgdss-capacity-risk-v5",
     "peak_risk_horizon_minutes": 20,
     "peak_risk_timestamp": "2026-06-16T12:20:00",
+    "forecast_demand_mw": 1215.3,
+    "forecast_uncertainty_mw": 31.4,
+    "forecast_tra_mw": 1240.0,
+    "projected_reserve_mw": 24.7,
+    "required_reserve_mw": 30.0,
+    "reserve_surplus_mw": -5.3,
+    "reserve_deficit_mw": 5.3,
+    "reserve_insufficient_horizon_minutes": 20,
+    "reserve_insufficient_at": "2026-06-16T12:20:00",
+    "uncertainty_source": "CALIBRATED_HISTORICAL_RESIDUALS",
+    "tra_projection_basis": "CURRENT_TRA_HELD_SCENARIO_NO_DISPATCH_PLAN",
     "expected_shortfall_mw": 26.3,
     "projected_shortfall_mw": 67.3,
     "decision_deadline_at": "2026-06-16T11:20:00",
@@ -44,20 +57,30 @@ The response contains:
     "risk_profile": [
       {
         "horizon_minutes": 20,
-        "probability": 0.8123456789,
+        "probability": 0.567,
+        "capacity_risk_percent": 56.7,
+        "capacity_status": "Prepare Generation",
         "forecast_demand_mw": 1215.3,
         "forecast_uncertainty_mw": 31.4,
         "forecast_lower_mw": 1163.7,
         "forecast_upper_mw": 1266.9,
-        "safe_online_capacity_mw": 1191.8,
-        "reserve_adjusted_headroom_mw": -23.5,
+        "forecast_tra_mw": 1240.0,
+        "projected_reserve_mw": 24.7,
+        "required_reserve_mw": 30.0,
+        "reserve_surplus_mw": -5.3,
+        "reserve_deficit_mw": 5.3,
+        "safe_online_capacity_mw": 1210.0,
+        "reserve_adjusted_headroom_mw": -5.3,
         "expected_shortfall_mw": 26.3,
-        "conservative_shortfall_mw": 75.1
+        "conservative_shortfall_mw": 56.9,
+        "reserve_expected_insufficient": true,
+        "uncertainty_source": "CALIBRATED_HISTORICAL_RESIDUALS",
+        "tra_projection_basis": "CURRENT_TRA_HELD_SCENARIO_NO_DISPATCH_PLAN"
       }
     ],
     "drivers": [
       {
-        "label": "Forecast mean exceeds reserve-adjusted safe capacity by 23.5 MW",
+        "label": "Projected reserve is 24.7 MW, 5.3 MW below the 30 MW target",
         "direction": "INCREASES_RISK",
         "category": "CAPACITY"
       }
@@ -207,15 +230,13 @@ back to the one-source, past-only weather baseline and exact-cursor persisted
 demand artifacts. Imported SCADA temperature remains the measured replay
 temperature. None of these replay rules replace live weather outside replay.
 
-Probability and recommendation objects retain their compatibility fields and
-also expose raw, unrounded operating-risk evidence. `risk_profile` contains each
-valid horizon through six hours with its probability, demand interval, safe
-capacity, headroom, expected/conservative shortfall, confidence, startup lead
-time, and deadline. The top-level object identifies the peak horizon and returns
-separate probability, severity, urgency, confidence, action, capacity basis,
-formula version, and structured drivers. `decision_action`, `generator_set`,
-`recommended_capacity_mw`, `expected_rise_minutes`, `startup_time_minutes`, and
-`weather_effect_mw` explain read-only generator-start guidance; they do not
+Probability and recommendation objects retain compatibility fields and expose
+raw, unrounded capacity-risk evidence. For every valid horizon through six
+hours, `risk_profile` reports forecast demand, forecast TRA, projected reserve,
+the 30 MW target, surplus or deficit, uncertainty, probability, status, and
+provenance. The top-level evidence comes from the same maximum-risk horizon.
+`reserve_insufficient_at` identifies the earliest horizon whose mean projected
+reserve is 30 MW or less. Generator guidance remains read-only and does not
 execute dispatch.
 
 `demand_forecast`, `model_status`, and `scada_status` remain optional for normal
@@ -232,14 +253,14 @@ only from targets already observable at forecast issuance time.
 
 When a coherent forecast generation cohort and latest SCADA grid snapshot are present,
 the probability/recommendation block may be produced by the operating-risk
-engine. That engine compares forecast demand and uncertainty against safe online
-capacity across every valid profile point through six hours. With corrected spin,
-immediate capability is the lower of TRA and current demand plus corrected spin;
-the configured reserve requirement is then subtracted once. TA is only used to
-bound verified startable capacity. The headline probability is the maximum
-horizon exceedance probability, avoiding a false independence assumption across
-correlated horizons. It is still a historical-export modeling foundation, not a
-live SCADA stream.
+engine. It calculates `projected reserve = forecast TRA - forecast demand` and
+then evaluates `P(forecast TRA - actual demand < 30 MW)` using calibrated demand
+forecast error. Corrected System Spin remains separate observed context. TA is
+only used to bound verified startable capacity. If no future TRA schedule is
+available, current TRA is held as an explicitly labelled scenario. The headline
+probability is the maximum horizon probability, avoiding a false independence
+assumption across correlated horizons. This remains a historical-export modeling
+foundation, not a live SCADA stream.
 
 ## Health
 

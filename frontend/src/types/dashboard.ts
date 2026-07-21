@@ -331,13 +331,32 @@ export interface RiskHorizon {
   expected_spinning_reserve_mw?: number | null;
   demand_ramp_mw_per_hour?: number;
   capacity_projection_basis?: string;
+  capacity_risk_percent: number;
+  forecast_tra_mw: number;
+  projected_reserve_mw: number;
+  reserve_surplus_mw: number;
+  reserve_deficit_mw: number;
+  capacity_status: CapacityStatus;
+  reserve_expected_insufficient: boolean;
+  uncertainty_source: string;
+  tra_projection_basis: string;
 }
+
+export type CapacityStatus =
+  | "Normal"
+  | "Watch"
+  | "Prepare Generation"
+  | "Add Generation"
+  | "Unavailable"
+  | string;
 
 export interface ProbabilityData {
   engine_version?: string;
   policy_status?: string;
   probability_score: number;
+  capacity_risk_percent: number;
   risk_level: "LOW" | "MEDIUM" | "HIGH" | "UNAVAILABLE";
+  capacity_status: CapacityStatus;
   forecast_demand_30m: number;
   forecast_demand_60m: number;
   factors: string[];
@@ -380,6 +399,16 @@ export interface ProbabilityData {
   expected_spinning_reserve_mw?: number | null;
   demand_ramp_mw_per_hour?: number;
   capacity_projection_basis?: string;
+  forecast_demand_mw: number;
+  forecast_uncertainty_mw: number;
+  forecast_tra_mw: number;
+  projected_reserve_mw: number;
+  reserve_surplus_mw: number;
+  reserve_deficit_mw: number;
+  reserve_insufficient_horizon_minutes?: number | null;
+  reserve_insufficient_at?: string | null;
+  uncertainty_source: string;
+  tra_projection_basis: string;
   risk_components?: Record<string, number | string | boolean | null>;
   formula_version?: string;
 }

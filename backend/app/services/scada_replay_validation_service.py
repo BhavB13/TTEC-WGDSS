@@ -250,6 +250,8 @@ class ScadaReplayValidationService:
                 online_capacity_mw=latest_snapshot.online_capacity_mw,
                 available_capacity_mw=latest_snapshot.available_capacity_mw,
                 spinning_reserve_mw=latest_snapshot.spinning_reserve_mw,
+                historical_validation_mae_mw=getattr(latest_forecast, "mae", None),
+                historical_validation_rmse_mw=getattr(latest_forecast, "rmse", None),
             )
         )
 
@@ -322,6 +324,7 @@ class ScadaReplayValidationService:
                 forecast_demand_mw=row.forecast_demand_mw,
                 forecast_uncertainty_mw=row.forecast_uncertainty_mw,
                 confidence=(0.75 if "DEGRADED" in row.quality_status else 0.9),
+                uncertainty_source="CALIBRATED_HISTORICAL_RESIDUALS",
             )
             for row in sorted(forecasts, key=lambda item: item.horizon_hours)
         )
@@ -333,6 +336,8 @@ class ScadaReplayValidationService:
                 online_capacity_mw=snapshot.online_capacity_mw,
                 available_capacity_mw=snapshot.available_capacity_mw,
                 spinning_reserve_mw=snapshot.spinning_reserve_mw,
+                historical_validation_mae_mw=getattr(one_hour, "mae", None),
+                historical_validation_rmse_mw=getattr(one_hour, "rmse", None),
                 forecast_profile=profile,
                 available_capacity_is_verified=True,
             )
