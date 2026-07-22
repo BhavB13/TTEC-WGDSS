@@ -3,6 +3,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from app.schemas.calibration import CalibrationSnapshotResponse
+from app.schemas.capacity_plan import CapacityPlanResponse
 from app.schemas.data_quality import DataQualityResponse
 from app.schemas.forecast import ForecastResponse
 from app.schemas.grid import GridStatusResponse
@@ -34,3 +35,4 @@ class DashboardSnapshotResponse(BaseModel):
     model_status: ModelStatusResponse | None = None
     scada_status: ScadaStatusResponse | None = None
     replay: ReplayDashboardResponse | None = None
+    capacity_plan: CapacityPlanResponse | None = None

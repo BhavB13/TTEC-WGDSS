@@ -421,15 +421,15 @@ async def test_dashboard_snapshot_exposes_model_scada_status_and_operating_risk(
     assert snapshot.probability.risk_profile
     assert snapshot.probability.probability_method == "NORMAL_RESIDUAL_EXCEEDANCE"
     assert snapshot.probability.policy_status == "PROTOTYPE_UNCONFIRMED"
-    assert snapshot.probability.risk_level == "LOW"
-    assert snapshot.probability.capacity_status == "Normal"
+    assert snapshot.probability.risk_level == "HIGH"
+    assert snapshot.probability.capacity_status == "Add Generation"
     assert snapshot.probability.forecast_demand_30m == 970
     assert snapshot.probability.forecast_demand_mw == 1040
-    assert snapshot.probability.forecast_tra_mw == 1120
-    assert snapshot.probability.projected_reserve_mw == 80
+    assert snapshot.probability.forecast_tra_mw == 960
+    assert snapshot.probability.projected_reserve_mw == -80
     assert snapshot.probability.required_reserve_mw == 30
-    assert snapshot.probability.reserve_surplus_mw == 50
-    assert snapshot.probability.reserve_deficit_mw == 0
+    assert snapshot.probability.reserve_surplus_mw == -110
+    assert snapshot.probability.reserve_deficit_mw == 110
     assert snapshot.probability.capacity_risk_percent == pytest.approx(
         snapshot.probability.probability_score * 100
     )
@@ -450,7 +450,18 @@ async def test_dashboard_snapshot_exposes_model_scada_status_and_operating_risk(
     assert snapshot.recommendation.reserve_surplus_mw == snapshot.probability.reserve_surplus_mw
     assert snapshot.recommendation.reserve_deficit_mw == snapshot.probability.reserve_deficit_mw
     assert snapshot.recommendation.capacity_status == snapshot.probability.capacity_status
-    assert snapshot.recommendation.recommendation == "NO ACTION REQUIRED"
+    assert snapshot.recommendation.recommendation == "PREPARE ADDITIONAL GENERATION"
+    assert snapshot.capacity_plan is not None
+    assert snapshot.capacity_plan.current_tra_mw == snapshot.grid.current_generation_mw
+    assert all(
+        point.baseline_tra_mw == snapshot.grid.current_generation_mw
+        for point in snapshot.capacity_plan.profile
+    )
+    assert snapshot.capacity_plan.recommended_actions[0].count == 3
+    assert (
+        snapshot.capacity_plan.post_plan_peak_risk_percent
+        < snapshot.capacity_plan.baseline_peak_risk_percent
+    )
     assert snapshot.data_quality.decision_status == "SIMULATION"
 
 

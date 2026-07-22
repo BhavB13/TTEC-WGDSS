@@ -59,8 +59,8 @@ def test_probability_thresholds_produce_low_medium_and_high_actions():
     assert medium["recommendation"] == "MONITOR CONDITIONS"
     assert high["risk_level"] == "HIGH"
     assert high["capacity_status"] == "Add Generation"
-    assert high["recommendation"] == "PREPARE ADDITIONAL GENERATION"
-    assert high["decision_action"] == "VERIFY STARTABLE CAPACITY"
+    assert high["recommendation"] == "ADDITIONAL GENERATION MAY BE REQUIRED"
+    assert high["decision_action"] == "REVIEW CAPACITY START PLAN"
 
 
 def test_historical_spin_profile_does_not_masquerade_as_live_grid_telemetry():

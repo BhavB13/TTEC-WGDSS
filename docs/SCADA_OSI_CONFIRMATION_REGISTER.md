@@ -30,7 +30,8 @@ item below is unresolved.
 | Trend bucket construction | Preserved as irregular interval summaries | Supply native scan rate, historian compression/deadband, and fixed export aggregation rules |
 | Operating reserve requirement | Version 1 uses a configurable 30 MW project target and explicitly labels it unconfirmed | Supply approved reserve requirement, largest credible contingency, and time-dependent rules |
 | Risk thresholds | Configurable Normal/Watch/Prepare Generation/Add Generation probability bands are demo policy | Approve operational bands and escalation workflow |
-| Generator blocks and lead times | Existing 15 MW/20 minute and 60-120 MW/60 minute demo settings are configurable | Confirm unit sizes, start/synchronization times, ramp limits, availability, and operator restrictions |
+| Aggregate start blocks and lead times | Operator-provided prototype constraints allow three small sets with a 20-minute lead; 15 MW per small set remains `UNCONFIRMED`. Heavy sets retain a 60-minute lead but no MW capacity is configured, so MW-specific heavy guidance is suppressed | Confirm the small-set MW rating, all heavy-set capacities, actual start/synchronization and ramp times, available set counts, outages, fuel constraints, and operator restrictions |
+| Shutdown planning | Deliberately excluded from capacity guidance | Supply approved shutdown lead times, ramp-down rates, minimum run/down times, reserve rules, and manual verification workflow |
 | Production data interface | No live connector is implemented; `scada` and `historian` provider selections fail closed | Approve historian replica/export/API/ICCP/OPC UA path, OT zone, certificates, identities, allowlists, and failover behavior |
 | Forecast target | Existing historical prototype predicts the generation-total demand proxy | Approve the operational target definition and model governance process |
 

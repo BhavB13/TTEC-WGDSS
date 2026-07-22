@@ -87,6 +87,22 @@ class Settings(BaseSettings):
     HEAVY_START_MAX_CAPACITY_MW: float = 120.0
     HEAVY_START_LEAD_TIME_MINUTES: int = 60
 
+    # Aggregate capacity-planning roster. WGDSS models these as advisory
+    # capacity blocks; it does not identify, start, or stop physical units.
+    CAPACITY_PLAN_SMALL_BLOCK_ID: str = "small-fast-start"
+    CAPACITY_PLAN_SMALL_BLOCK_LABEL: str = "Small fast-start set"
+    CAPACITY_PLAN_SMALL_BLOCK_CAPACITY_MW: float = 15.0
+    CAPACITY_PLAN_SMALL_STARTABLE_COUNT: int = 3
+    CAPACITY_PLAN_SMALL_STARTUP_LEAD_MINUTES: int = 20
+    CAPACITY_PLAN_SMALL_VERIFICATION_STATUS: str = "UNCONFIRMED"
+    # Comma-separated per-block capacities. Empty means heavy capacity has not
+    # been configured and no MW-specific heavy recommendation may be issued.
+    CAPACITY_PLAN_HEAVY_BLOCKS_MW: str = ""
+    CAPACITY_PLAN_HEAVY_STARTUP_LEAD_MINUTES: int = 60
+    CAPACITY_PLAN_HEAVY_VERIFICATION_STATUS: str = "UNCONFIGURED"
+    CAPACITY_PLAN_CONTEXT_TTL_SECONDS: int = 900
+    CAPACITY_PLAN_MAX_CONTEXTS: int = 128
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=True,

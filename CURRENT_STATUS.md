@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-07-20
+Last updated: 2026-07-21
 
 ## Snapshot
 
@@ -126,6 +126,20 @@ archive. Neither path is a live T&TEC feed.
   insufficiency. Corrected System Spin remains separate SCADA context. Reserve
   policy, status bands, unit blocks, and lead times are configurable and returned
   as `PROTOTYPE_UNCONFIRMED`; they are not approved utility settings.
+- Current-TRA anchored aggregate capacity planning. The no-action profile holds
+  the exact TRA displayed in the dashboard at every horizon. A separately
+  labelled hypothetical profile can add up to three configurable small blocks
+  only after the 20-minute lead time. The current 15 MW value remains
+  `UNCONFIRMED`; heavy-set MW guidance is disabled until approved capacities
+  are configured. Baseline risk never changes because of a proposed action.
+- The dashboard snapshot now includes current TRA evidence, before/after risk,
+  aggregate block definitions, proposed starts, deadlines, interim exposure,
+  warnings, and a machine-generated suggestion with an auditable mathematical
+  basis. The suggestion remains fixed while an operator compares a different
+  what-if plan. A bounded 15-minute endpoint recalculates a plan without
+  persisting instructions or communicating with SCADA. Guidance permanently
+  states that manual operator action is required, and shutdown advice remains
+  excluded.
 - Synthetic replay no longer defines corrected Spin as `TRA - demand`; it uses
   a separately generated, explicitly simulated series. Historical replay still
   reads the exported corrected-spin tag directly.
@@ -185,18 +199,25 @@ forecast feature.
   model was being compared with a synthetic day outside complete SCADA
   coverage. Source routing reduced chart MAE against revealed values from
   187.15 MW to 8.91 MW and maximum absolute error from 353.85 MW to 71.11 MW.
-- Backend suite: 147 tests pass, including ingestion, resampling, leakage,
+- Backend suite: 163 tests pass, including ingestion, resampling, leakage,
   forecasting, replay, dashboard, continuous operating risk, exact 20/50/80%
-  probabilities, and chronological Brier-score backtesting.
+  probabilities, chronological Brier-score backtesting, current-TRA anchoring,
+  20/60-minute lead-time behavior, unavailable telemetry, block limits, and the
+  capacity-plan API.
 - Frontend Vitest suite: 11 tests pass.
 - Frontend production build passes.
-- The Risk workspace was visually verified at 1366x768 with no document scroll,
-  horizontal overflow, or overlapping gauge/timeline/evidence panels.
+- The Risk and Guidance workspaces were visually verified at 1366x768 with no
+  document scroll, horizontal overflow, overlapping panels, or clipped risk
+  bands. Guidance uses internal scrolling only for longer operator-check lists.
 - Both the current database and a clean database upgraded from revision zero
   pass `alembic check`.
 - A real Uvicorn request to `/api/dashboard/snapshot` returns all direct
   1h-through-6h exact-cursor horizons, confidence bounds, alignment evidence,
   metrics, similar examples, and capacity-risk-v5.0 output.
+- A runtime snapshot invariant check confirmed that every no-action horizon
+  equals the displayed 1,285.16 MW current TRA. Its 22.13% peak no-action risk
+  produced a one-block recommendation; a one-block what-if reduced hypothetical
+  post-plan peak risk to 16.52% without changing the baseline.
 
 ## Next Operational Step
 

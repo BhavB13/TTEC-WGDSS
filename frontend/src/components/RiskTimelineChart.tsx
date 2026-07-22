@@ -12,7 +12,11 @@ import {
 } from "chart.js";
 import { Line } from "react-chartjs-2";
 
-import type { ProbabilityData, RiskHorizon } from "../types/dashboard";
+import type {
+  CapacityPlan,
+  ProbabilityData,
+  RiskHorizon,
+} from "../types/dashboard";
 
 ChartJS.register(
   CategoryScale,
@@ -26,12 +30,14 @@ ChartJS.register(
 
 interface RiskTimelineChartProps {
   probability: ProbabilityData;
+  capacityPlan?: CapacityPlan | null;
   theme?: "dark" | "light";
   className?: string;
 }
 
 export default function RiskTimelineChart({
   probability,
+  capacityPlan = null,
   theme = "dark",
   className = "",
 }: RiskTimelineChartProps) {
@@ -53,6 +59,21 @@ export default function RiskTimelineChart({
   const gridColor =
     theme === "light" ? "rgba(71,85,105,0.16)" : "rgba(148,163,184,0.13)";
   const labels = profile.map(formatHorizon);
+  const planByHorizon = useMemo(
+    () =>
+      new Map(
+        (capacityPlan?.profile ?? []).map((point) => [
+          point.horizon_minutes,
+          point,
+        ]),
+      ),
+    [capacityPlan?.profile],
+  );
+  const showPlanned = Boolean(
+    capacityPlan?.evaluated_actions.some(
+      (action) => action.applied_to_projection,
+    ),
+  );
   const chartData = useMemo(
     () => ({
       labels,
@@ -90,8 +111,12 @@ export default function RiskTimelineChart({
           yAxisID: "demand",
         },
         {
-          label: "Forecast TRA",
-          data: profile.map((point) => point.forecast_tra_mw),
+          label: "Current TRA held",
+          data: profile.map(
+            (point) =>
+              planByHorizon.get(point.horizon_minutes)?.baseline_tra_mw ??
+              point.forecast_tra_mw,
+          ),
           borderColor: "#fbbf24",
           backgroundColor: "#fbbf24",
           borderWidth: 2,
@@ -101,9 +126,32 @@ export default function RiskTimelineChart({
           tension: 0.15,
           yAxisID: "demand",
         },
+        ...(showPlanned
+          ? [
+              {
+                label: "TRA after proposed starts",
+                data: profile.map(
+                  (point) =>
+                    planByHorizon.get(point.horizon_minutes)?.planned_tra_mw ??
+                    point.forecast_tra_mw,
+                ),
+                borderColor: "#c084fc",
+                backgroundColor: "#c084fc",
+                borderWidth: 2.2,
+                stepped: "after" as const,
+                pointRadius: 2,
+                pointHoverRadius: 4,
+                yAxisID: "demand",
+              },
+            ]
+          : []),
         {
-          label: "Projected reserve",
-          data: profile.map((point) => point.projected_reserve_mw),
+          label: "No-action reserve",
+          data: profile.map(
+            (point) =>
+              planByHorizon.get(point.horizon_minutes)?.baseline_reserve_mw ??
+              point.projected_reserve_mw,
+          ),
           borderColor: "#34d399",
           backgroundColor: "#34d399",
           borderWidth: 2,
@@ -112,6 +160,25 @@ export default function RiskTimelineChart({
           tension: 0.2,
           yAxisID: "reserve",
         },
+        ...(showPlanned
+          ? [
+              {
+                label: "Post-plan reserve",
+                data: profile.map(
+                  (point) =>
+                    planByHorizon.get(point.horizon_minutes)?.planned_reserve_mw ??
+                    point.projected_reserve_mw,
+                ),
+                borderColor: "#a78bfa",
+                backgroundColor: "#a78bfa",
+                borderWidth: 2,
+                pointRadius: 2,
+                pointHoverRadius: 4,
+                tension: 0.2,
+                yAxisID: "reserve",
+              },
+            ]
+          : []),
         {
           label: "Required reserve",
           data: profile.map((point) => point.required_reserve_mw),
@@ -125,7 +192,7 @@ export default function RiskTimelineChart({
         },
       ],
     }),
-    [labels, profile],
+    [labels, planByHorizon, profile, showPlanned],
   );
   const options = useMemo<ChartOptions<"line">>(
     () => ({
@@ -136,16 +203,7 @@ export default function RiskTimelineChart({
       layout: { padding: { top: 2, right: 4, bottom: 0, left: 0 } },
       plugins: {
         legend: {
-          position: "bottom",
-          align: "start",
-          labels: {
-            color: textColor,
-            boxWidth: 11,
-            boxHeight: 3,
-            padding: 9,
-            font: { size: 10 },
-            filter: (item) => item.text !== "_lower",
-          },
+          display: false,
         },
         tooltip: {
           backgroundColor: "rgba(2,6,23,0.96)",
@@ -154,7 +212,7 @@ export default function RiskTimelineChart({
           titleColor: "#f8fafc",
           bodyColor: "#e2e8f0",
           padding: 10,
-          filter: (item) => item.datasetIndex !== 0,
+          filter: (item) => item.dataset.label !== "_lower",
           callbacks: {
             title: (items) => {
               const point = profile[items[0]?.dataIndex ?? 0];
@@ -163,27 +221,38 @@ export default function RiskTimelineChart({
             label: (context) => {
               const point = profile[context.dataIndex];
               if (!point) return "";
-              if (context.datasetIndex === 1) {
+              const datasetLabel = context.dataset.label;
+              const planPoint = planByHorizon.get(point.horizon_minutes);
+              if (datasetLabel === "Demand uncertainty") {
                 const confidenceLevel = Math.round(
                   (point.confidence_level ?? 0.9) * 100,
                 );
                 return `${confidenceLevel}% demand range: ${point.forecast_lower_mw.toFixed(1)}-${point.forecast_upper_mw.toFixed(1)} MW`;
               }
-              if (context.datasetIndex === 2) {
+              if (datasetLabel === "Forecast demand") {
                 return `Forecast demand: ${point.forecast_demand_mw.toFixed(1)} MW`;
               }
-              if (context.datasetIndex === 3) {
-                return `Forecast TRA: ${point.forecast_tra_mw.toFixed(1)} MW`;
+              if (datasetLabel === "Current TRA held") {
+                return `Current TRA held: ${(planPoint?.baseline_tra_mw ?? point.forecast_tra_mw).toFixed(1)} MW`;
               }
-              if (context.datasetIndex === 4) {
+              if (datasetLabel === "TRA after proposed starts") {
+                return `TRA after proposed starts: ${(planPoint?.planned_tra_mw ?? point.forecast_tra_mw).toFixed(1)} MW`;
+              }
+              if (datasetLabel === "No-action reserve") {
                 return [
-                  `Projected reserve: ${point.projected_reserve_mw.toFixed(1)} MW`,
-                  `Capacity risk: ${point.capacity_risk_percent.toFixed(1)}% (${point.capacity_status})`,
+                  `No-action reserve: ${(planPoint?.baseline_reserve_mw ?? point.projected_reserve_mw).toFixed(1)} MW`,
+                  `No-action risk: ${(planPoint?.baseline_capacity_risk_percent ?? point.capacity_risk_percent).toFixed(1)}%`,
                 ];
               }
-              const balance = point.reserve_surplus_mw >= 0
-                ? `Surplus: +${point.reserve_surplus_mw.toFixed(1)} MW`
-                : `Deficit: ${point.reserve_deficit_mw.toFixed(1)} MW`;
+              if (datasetLabel === "Post-plan reserve") {
+                return [
+                  `Post-plan reserve: ${(planPoint?.planned_reserve_mw ?? point.projected_reserve_mw).toFixed(1)} MW`,
+                  `Post-plan risk: ${(planPoint?.planned_capacity_risk_percent ?? point.capacity_risk_percent).toFixed(1)}%`,
+                ];
+              }
+              const balance = (planPoint?.planned_reserve_surplus_mw ?? point.reserve_surplus_mw) >= 0
+                ? `Surplus: +${(planPoint?.planned_reserve_surplus_mw ?? point.reserve_surplus_mw).toFixed(1)} MW`
+                : `Deficit: ${(planPoint?.planned_reserve_deficit_mw ?? point.reserve_deficit_mw).toFixed(1)} MW`;
               return [
                 `Required reserve: ${point.required_reserve_mw.toFixed(1)} MW`,
                 balance,
@@ -217,7 +286,7 @@ export default function RiskTimelineChart({
         },
       },
     }),
-    [gridColor, profile, textColor],
+    [gridColor, planByHorizon, profile, textColor],
   );
 
   return (
@@ -227,58 +296,58 @@ export default function RiskTimelineChart({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300">
-            Six-Hour Capacity Timeline
+            Six-Hour Capacity Outlook
           </p>
-          <h2 className="mt-0.5 truncate text-sm font-semibold text-white">
-            Demand, TRA, and projected reserve
+          <h2 className="mt-0.5 text-sm font-semibold leading-tight text-white">
+            Demand, TRA and reserve trajectory
           </h2>
         </div>
         <span className="shrink-0 rounded-full border border-cyan-400/25 bg-cyan-500/10 px-2 py-1 text-[9px] font-semibold text-cyan-100">
-          Peak {formatPeakHorizon(probability.peak_risk_horizon_minutes)}
+          {capacityPlan?.status === "AVAILABLE"
+            ? `Risk ${capacityPlan.baseline_peak_risk_percent.toFixed(1)}% -> ${capacityPlan.post_plan_peak_risk_percent.toFixed(1)}%`
+            : `Peak ${formatPeakHorizon(probability.peak_risk_horizon_minutes)}`}
         </span>
       </div>
 
+      <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-y border-slate-800/80 py-1 text-[9px] text-slate-400">
+        <TimelineLegend swatch="bg-cyan-400" label="Forecast demand" />
+        <TimelineLegend
+          swatch="border border-cyan-400/45 bg-cyan-400/10"
+          label="90% range"
+        />
+        <TimelineLegend
+          swatch="border-t-2 border-dashed border-amber-400"
+          label="Current TRA"
+        />
+        {showPlanned ? (
+          <TimelineLegend swatch="bg-violet-400" label="TRA with starts" />
+        ) : null}
+        <TimelineLegend swatch="bg-emerald-400" label="Reserve" />
+        <TimelineLegend
+          swatch="border-t-2 border-dashed border-rose-400"
+          label="Reserve target"
+        />
+      </div>
+
       {profile.length ? (
-        <>
-          <div className="mt-1 min-h-[4.25rem] flex-1">
-            <Line data={chartData} options={options} />
-          </div>
-          <div
-            className="mt-1 grid gap-1"
-            style={{
-              gridTemplateColumns: `repeat(${Math.min(profile.length, 6)}, minmax(0, 1fr))`,
-            }}
-          >
-            {profile.slice(0, 6).map((point) => (
-              <div
-                key={`${point.horizon_minutes}-${point.forecast_timestamp ?? "risk"}`}
-                className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/55 px-1 py-0.5 text-center"
-              >
-                <p className="truncate text-[9px] uppercase tracking-[0.1em] text-slate-400">
-                  {formatHorizon(point)}
-                </p>
-                <p className="mt-0.5 text-xs font-semibold text-white">
-                  {point.capacity_risk_percent.toFixed(1)}%
-                </p>
-                <p
-                  className={`truncate text-[9px] ${
-                    point.reserve_surplus_mw >= 0
-                      ? "text-emerald-300"
-                      : "text-rose-300"
-                  }`}
-                >
-                  Reserve {point.projected_reserve_mw.toFixed(0)} MW
-                </p>
-              </div>
-            ))}
-          </div>
-        </>
+        <div className="mt-1.5 min-h-[4.25rem] flex-1">
+          <Line data={chartData} options={options} />
+        </div>
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-slate-700 bg-slate-950/40 p-4 text-center text-sm text-slate-400">
           Per-horizon capacity-risk evidence is unavailable for this snapshot.
         </div>
       )}
     </section>
+  );
+}
+
+function TimelineLegend({ swatch, label }: { swatch: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+      <span className={`h-1.5 w-4 shrink-0 ${swatch}`} aria-hidden="true" />
+      <span>{label}</span>
+    </span>
   );
 }
 

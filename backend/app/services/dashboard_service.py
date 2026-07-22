@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import math
 from typing import Any
+from uuid import uuid4
 
 from app.core.config import settings
 from app.schemas.dashboard import DashboardSnapshotResponse, ForecastBundleResponse
@@ -12,10 +14,19 @@ from app.schemas.probability import ProbabilityResponse
 from app.schemas.recommendation import RecommendationResponse
 from app.schemas.weather import CurrentWeatherResponse
 from app.services.calibration_service import CalibrationService
+from app.services.capacity_planning_service import (
+    CapacityPlanningService,
+    capacity_planning_service,
+)
 from app.services.demo_replay_service import DemoReplayService
 from app.services.grid_service import GridService
 from app.services.model_status_service import ModelStatusService
 from app.services.recommendation_engine import RecommendationEngine
+from app.services.risk_probability_engine import (
+    OperatingForecastPoint,
+    OperatingRiskInput,
+    risk_result_details,
+)
 from app.services.snapshot_persistence_service import SnapshotPersistenceService
 from app.services.weather_service import WeatherService
 
@@ -30,6 +41,7 @@ class DashboardService:
         model_status_service: ModelStatusService | None = None,
         persistence_service: SnapshotPersistenceService | None = None,
         demo_replay_service: DemoReplayService | None = None,
+        capacity_plan_service: CapacityPlanningService | None = None,
     ) -> None:
         self.weather_service = weather_service or WeatherService()
         self.grid_service = grid_service or GridService()
@@ -37,6 +49,7 @@ class DashboardService:
         self.calibration_service = calibration_service or CalibrationService()
         self.model_status_service = model_status_service or ModelStatusService()
         self.persistence_service = persistence_service or SnapshotPersistenceService()
+        self.capacity_plan_service = capacity_plan_service or capacity_planning_service
         self.demo_replay_service = demo_replay_service
         if (
             self.demo_replay_service is None
@@ -191,6 +204,10 @@ class DashboardService:
                     ),
                 )
             )
+            probability_payload = self._anchor_capacity_risk_to_grid(
+                probability_payload,
+                grid_status,
+            )
         weather_response = CurrentWeatherResponse.model_validate(weather)
         grid_response = GridStatusResponse.model_validate(grid_status)
         probability = ProbabilityResponse(
@@ -220,6 +237,31 @@ class DashboardService:
             recommendation=probability_payload["recommendation"],
             **self._dispatch_evidence(probability_payload),
         )
+        snapshot_id = str(uuid4())
+        capacity_plan = self.capacity_plan_service.build_snapshot_plan(
+            snapshot_id=snapshot_id,
+            grid=grid_response,
+            probability=probability,
+        )
+        if capacity_plan.recommended_actions:
+            recommended_capacity = sum(
+                action.total_capacity_mw
+                for action in capacity_plan.recommended_actions
+            )
+            earliest_lead = min(
+                action.startup_lead_time_minutes
+                for action in capacity_plan.recommended_actions
+            )
+            recommendation = recommendation.model_copy(
+                update={
+                    "recommendation": "PREPARE ADDITIONAL GENERATION",
+                    "decision_action": "REVIEW CAPACITY START PLAN",
+                    "generator_set": "AGGREGATE START BLOCK PLAN",
+                    "recommended_capacity_mw": recommended_capacity,
+                    "startup_time_minutes": earliest_lead,
+                    "residual_shortfall_mw": capacity_plan.unresolved_capacity_mw,
+                }
+            )
         if replay_context is not None:
             # Replay artifacts must match the simulated source cursor exactly.
             # Never substitute a model trained through a later historical row.
@@ -232,6 +274,7 @@ class DashboardService:
             scada_status = self.model_status_service.get_scada_status()
 
         snapshot = DashboardSnapshotResponse(
+            snapshot_id=snapshot_id,
             weather=weather_response,
             grid=grid_response,
             forecast=ForecastBundleResponse(items=forecast),
@@ -252,6 +295,7 @@ class DashboardService:
             model_status=model_status,
             scada_status=scada_status,
             replay=(replay_context["replay"] if replay_context is not None else None),
+            capacity_plan=capacity_plan,
         )
         if settings.SNAPSHOT_PERSISTENCE_ENABLED:
             persisted = await asyncio.to_thread(self.persistence_service.persist, snapshot)
@@ -317,6 +361,116 @@ class DashboardService:
             "formula_version",
         )
         return {field: payload[field] for field in fields if field in payload}
+
+    def _anchor_capacity_risk_to_grid(
+        self,
+        payload: dict[str, Any],
+        grid_status: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Re-evaluate demand evidence against the TRA displayed in this snapshot."""
+
+        if payload.get("risk_level") == "UNAVAILABLE":
+            return payload
+        raw_profile = payload.get("risk_profile")
+        if not isinstance(raw_profile, (list, tuple)) or not raw_profile:
+            return payload
+        profile: list[OperatingForecastPoint] = []
+        for raw in raw_profile:
+            row = raw.model_dump() if hasattr(raw, "model_dump") else raw
+            if not isinstance(row, dict):
+                continue
+            try:
+                profile.append(
+                    OperatingForecastPoint(
+                        horizon_minutes=int(row["horizon_minutes"]),
+                        forecast_demand_mw=float(row["forecast_demand_mw"]),
+                        forecast_uncertainty_mw=float(
+                            row["forecast_uncertainty_mw"]
+                        ),
+                        weather_effect_mw=float(row.get("weather_effect_mw", 0)),
+                        confidence=float(row.get("forecast_confidence", 1)),
+                        forecast_timestamp=self._parse_datetime(
+                            row.get("forecast_timestamp")
+                        ),
+                        confidence_lower_mw=self._optional_float(
+                            row.get("forecast_lower_mw")
+                        ),
+                        confidence_upper_mw=self._optional_float(
+                            row.get("forecast_upper_mw")
+                        ),
+                        confidence_level=float(row.get("confidence_level", 0.9)),
+                        uncertainty_source=str(
+                            row.get("uncertainty_source")
+                            or payload.get("uncertainty_source")
+                            or "CALIBRATED_FORECAST_RESIDUALS"
+                        ),
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        if not profile:
+            return payload
+
+        current_demand = self._optional_float(grid_status.get("current_demand_mw"))
+        current_tra = self._optional_float(grid_status.get("current_generation_mw"))
+        if current_demand is None or current_tra is None:
+            return payload
+        available_capacity = self._optional_float(
+            grid_status.get("total_available_capacity_mw")
+        )
+        spinning_reserve = self._optional_float(
+            grid_status.get("spinning_reserve_mw")
+        )
+        spinning_source = str(grid_status.get("spinning_reserve_source") or "")
+        result = self.recommendation_engine.risk_engine.evaluate(
+            OperatingRiskInput(
+                forecast_demand_mw=profile[0].forecast_demand_mw,
+                forecast_uncertainty_mw=profile[0].forecast_uncertainty_mw,
+                current_demand_mw=current_demand,
+                online_capacity_mw=current_tra,
+                available_capacity_mw=available_capacity,
+                spinning_reserve_mw=(
+                    None if spinning_source.startswith("DERIVED_") else spinning_reserve
+                ),
+                forecast_profile=tuple(profile),
+                available_capacity_is_verified=(
+                    available_capacity is not None
+                    and available_capacity >= current_tra
+                    and not bool(grid_status.get("missing_fields"))
+                ),
+                data_quality_status=str(grid_status.get("quality_status", "UNKNOWN")),
+                data_quality_warnings=(
+                    "Capacity risk was anchored to the current TRA displayed in this snapshot",
+                ),
+            )
+        )
+        factors = list(
+            dict.fromkeys(
+                [
+                    *[str(item) for item in payload.get("factors", [])],
+                    *result.reasons,
+                ]
+            )
+        )
+        return {
+            **payload,
+            "engine_version": result.engine_version,
+            "policy_status": result.policy_status,
+            "probability_score": result.probability_score,
+            "risk_level": result.risk_level,
+            "recommendation": result.recommendation,
+            "factors": factors,
+            "reason": "; ".join(factors),
+            **risk_result_details(result),
+        }
+
+    @staticmethod
+    def _optional_float(value: Any) -> float | None:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if math.isfinite(parsed) else None
 
     async def get_probability_and_recommendation(
         self,

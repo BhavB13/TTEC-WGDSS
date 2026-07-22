@@ -130,10 +130,8 @@ def test_projected_reserve_below_target_is_add_generation():
     assert result.projected_reserve_mw == 10.0
     assert result.reserve_surplus_mw == -20.0
     assert result.reserve_deficit_mw == 20.0
-    assert result.recommendation in {
-        "START HEAVY GENERATOR SET",
-        "PREPARE ADDITIONAL GENERATION",
-    }
+    assert result.recommendation == "ADDITIONAL GENERATION MAY BE REQUIRED"
+    assert result.decision_action == "REVIEW CAPACITY START PLAN"
 
 
 def test_probability_is_continuous_at_status_thresholds():
@@ -370,7 +368,7 @@ def test_available_capacity_below_tra_is_rejected_as_inconsistent():
     assert "available_capacity_mw not below online_capacity_mw" in result.reasons[0]
 
 
-def test_add_generation_dispatch_uses_small_set_inside_start_window():
+def test_add_generation_dispatch_defers_block_selection_to_capacity_planner():
     result = RiskProbabilityEngine().evaluate(
         _risk_input(
             forecast_demand_mw=990.0,
@@ -382,10 +380,11 @@ def test_add_generation_dispatch_uses_small_set_inside_start_window():
     )
 
     assert result.capacity_status == "Add Generation"
-    assert result.recommendation == "START BOTH 15 MW SMALL SETS"
-    assert result.generator_set == "2 x 15 MW FAST-START"
-    assert result.recommended_capacity_mw == 30.0
-    assert result.startup_time_minutes == 20
+    assert result.recommendation == "ADDITIONAL GENERATION MAY BE REQUIRED"
+    assert result.decision_action == "REVIEW CAPACITY START PLAN"
+    assert result.generator_set == "NONE"
+    assert result.recommended_capacity_mw == 0.0
+    assert result.startup_time_minutes == 0
 
 
 def test_add_generation_does_not_claim_a_unit_without_verified_ta():
@@ -399,8 +398,8 @@ def test_add_generation_does_not_claim_a_unit_without_verified_ta():
     )
 
     assert result.capacity_status == "Add Generation"
-    assert result.recommendation == "PREPARE ADDITIONAL GENERATION"
-    assert result.decision_action == "VERIFY STARTABLE CAPACITY"
+    assert result.recommendation == "ADDITIONAL GENERATION MAY BE REQUIRED"
+    assert result.decision_action == "REVIEW CAPACITY START PLAN"
     assert result.generator_set == "NONE"
     assert result.recommended_capacity_mw == 0.0
 

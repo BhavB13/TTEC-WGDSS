@@ -1025,146 +1025,16 @@ class RiskProbabilityEngine:
                 available_start_capacity_mw=available_start_capacity,
                 projected_shortfall_mw=shortfall,
             )
-        if not risk_input.available_capacity_is_verified:
-            return self._dispatch_payload(
-                recommendation="PREPARE ADDITIONAL GENERATION",
-                decision_action="VERIFY STARTABLE CAPACITY",
-                available_start_capacity_mw=None,
-                projected_shortfall_mw=shortfall,
-            )
-        if shortfall <= self.policy.fast_start_max_capacity_mw:
-            requested_capacity = (
-                self.policy.fast_start_unit_capacity_mw
-                if shortfall <= self.policy.fast_start_unit_capacity_mw
-                else self.policy.fast_start_max_capacity_mw
-            )
-            startable_capacity = self._startable_capacity(
-                requested_capacity,
-                available_start_capacity,
-                self.policy.fast_start_unit_capacity_mw,
-            )
-            if startable_capacity < self.policy.fast_start_unit_capacity_mw:
-                return self._dispatch_payload(
-                    recommendation="PREPARE ADDITIONAL GENERATION",
-                    decision_action="ESCALATE CAPACITY AVAILABILITY",
-                    available_start_capacity_mw=available_start_capacity,
-                    projected_shortfall_mw=shortfall,
-                )
-            one_set = startable_capacity < self.policy.fast_start_max_capacity_mw
-            generator_set = (
-                f"1 x {self.policy.fast_start_unit_capacity_mw:g} MW FAST-START"
-                if one_set
-                else f"2 x {self.policy.fast_start_unit_capacity_mw:g} MW FAST-START"
-            )
-            start_now = point.horizon_minutes <= self.policy.fast_start_lead_time_minutes
-            return self._dispatch_payload(
-                recommendation=(
-                    f"START ONE {self.policy.fast_start_unit_capacity_mw:g} MW SMALL SET"
-                    if start_now and one_set
-                    else f"START BOTH {self.policy.fast_start_unit_capacity_mw:g} MW SMALL SETS"
-                    if start_now
-                    else "PREPARE ADDITIONAL GENERATION"
-                ),
-                decision_action=(
-                    "START ONE SMALL SET"
-                    if start_now and one_set
-                    else "START BOTH SMALL SETS"
-                    if start_now
-                    else "PREPARE SMALL-SET WINDOW"
-                ),
-                generator_set=generator_set,
-                recommended_capacity_mw=startable_capacity,
-                startup_time_minutes=self.policy.fast_start_lead_time_minutes,
-                available_start_capacity_mw=available_start_capacity,
-                projected_shortfall_mw=shortfall,
-            )
-
-        heavy_capacity = min(
-            self.policy.heavy_start_max_capacity_mw,
-            max(
-                self.policy.heavy_start_min_capacity_mw,
-                math.ceil(
-                    shortfall / self.policy.fast_start_max_capacity_mw
-                )
-                * self.policy.fast_start_max_capacity_mw,
-            ),
-        )
-        startable_heavy = self._startable_capacity(
-            heavy_capacity,
-            available_start_capacity,
-            self.policy.fast_start_max_capacity_mw,
-        )
-        if startable_heavy < self.policy.heavy_start_min_capacity_mw:
-            startable_small = self._startable_capacity(
-                self.policy.fast_start_max_capacity_mw,
-                available_start_capacity,
-                self.policy.fast_start_unit_capacity_mw,
-            )
-            if startable_small >= self.policy.fast_start_unit_capacity_mw:
-                start_now = point.horizon_minutes <= self.policy.fast_start_lead_time_minutes
-                return self._dispatch_payload(
-                    recommendation=(
-                        f"START ONE {self.policy.fast_start_unit_capacity_mw:g} MW SMALL SET"
-                        if start_now
-                        and startable_small < self.policy.fast_start_max_capacity_mw
-                        else f"START BOTH {self.policy.fast_start_unit_capacity_mw:g} MW SMALL SETS"
-                        if start_now
-                        else "PREPARE ADDITIONAL GENERATION"
-                    ),
-                    decision_action=(
-                        "START AVAILABLE SMALL SETS AND ESCALATE"
-                        if start_now
-                        else "ESCALATE CAPACITY AVAILABILITY"
-                    ),
-                    generator_set=(
-                        f"1 x {self.policy.fast_start_unit_capacity_mw:g} MW FAST-START"
-                        if startable_small < self.policy.fast_start_max_capacity_mw
-                        else f"2 x {self.policy.fast_start_unit_capacity_mw:g} MW FAST-START"
-                    ),
-                    recommended_capacity_mw=startable_small,
-                    startup_time_minutes=self.policy.fast_start_lead_time_minutes,
-                    available_start_capacity_mw=available_start_capacity,
-                    projected_shortfall_mw=shortfall,
-                )
-            return self._dispatch_payload(
-                recommendation="PREPARE ADDITIONAL GENERATION",
-                decision_action="ESCALATE CAPACITY AVAILABILITY",
-                available_start_capacity_mw=available_start_capacity,
-                projected_shortfall_mw=shortfall,
-            )
-        start_now = point.horizon_minutes <= self.policy.heavy_start_lead_time_minutes
         return self._dispatch_payload(
-            recommendation=(
-                "START HEAVY GENERATOR SET"
-                if start_now
-                else "PREPARE ADDITIONAL GENERATION"
+            recommendation="ADDITIONAL GENERATION MAY BE REQUIRED",
+            decision_action="REVIEW CAPACITY START PLAN",
+            available_start_capacity_mw=(
+                available_start_capacity
+                if risk_input.available_capacity_is_verified
+                else None
             ),
-            decision_action=(
-                "START HEAVY SET"
-                if start_now
-                else "PREPARE HEAVY-SET WINDOW"
-            ),
-            generator_set=(
-                "HEAVY "
-                f"{self.policy.heavy_start_min_capacity_mw:g}-"
-                f"{self.policy.heavy_start_max_capacity_mw:g} MW SET"
-            ),
-            recommended_capacity_mw=startable_heavy,
-            startup_time_minutes=self.policy.heavy_start_lead_time_minutes,
-            available_start_capacity_mw=available_start_capacity,
             projected_shortfall_mw=shortfall,
         )
-
-    @staticmethod
-    def _startable_capacity(
-        requested_capacity_mw: float,
-        available_start_capacity_mw: float | None,
-        unit_increment_mw: float,
-    ) -> float:
-        if available_start_capacity_mw is None:
-            return requested_capacity_mw
-        bounded = min(requested_capacity_mw, available_start_capacity_mw)
-        return max(0.0, math.floor(bounded / unit_increment_mw) * unit_increment_mw)
 
     @staticmethod
     def _dispatch_payload(

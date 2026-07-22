@@ -57,86 +57,92 @@ export default function ProbabilityGauge({
   const progress = CIRCUMFERENCE - (riskPercent / 100) * CIRCUMFERENCE;
   const palette = statusPalette(probability.capacity_status);
   const reserveTarget = probability.required_reserve_mw ?? 30;
+  const peakHorizon = formatRiskHorizon(probability.peak_risk_horizon_minutes);
 
   return (
     <div
-      className={`flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-3 shadow-[0_0_34px_rgba(8,145,178,0.08)] ${className}`}
+      className={`flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)] ${className}`}
     >
-      <div className="mb-1.5 flex items-start justify-between gap-3">
+      <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300">
             Capacity Risk
           </p>
-          <h2 className="mt-1 text-[0.98rem] font-semibold leading-tight text-white">
-            Projected reserve adequacy
+          <h2 className="mt-0.5 text-[0.82rem] font-semibold leading-tight text-white">
+            No-action exposure
           </h2>
         </div>
         <span
-          className={`max-w-[9rem] rounded-full border px-2.5 py-1 text-center text-[10px] font-semibold leading-tight ${palette.badge}`}
+          className={`max-w-[7rem] shrink-0 rounded-full border px-2 py-1 text-center text-[9px] font-semibold leading-tight ${palette.badge}`}
         >
           {probability.capacity_status}
         </span>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-between gap-1.5">
-        <div className="relative flex h-[clamp(5.25rem,9vw,6rem)] w-[clamp(5.25rem,9vw,6rem)] shrink-0 items-center justify-center">
-          <svg viewBox="0 0 140 140" className="h-full w-full -rotate-90">
-            <circle
-              cx="70"
-              cy="70"
-              r={RADIUS}
-              className="fill-none stroke-slate-800"
-              strokeWidth="14"
-            />
-            <circle
-              cx="70"
-              cy="70"
-              r={RADIUS}
-              className={`fill-none ${palette.ring}`}
-              strokeWidth="14"
-              strokeLinecap="round"
-              strokeDasharray={CIRCUMFERENCE}
-              strokeDashoffset={progress}
-            />
-          </svg>
-          <div className="absolute px-2 text-center">
-            <p className="text-xl font-semibold text-white">
-              {available ? `${riskPercent.toFixed(1)}%` : "--"}
-            </p>
-            <p className="max-w-[7rem] text-[9px] uppercase tracking-[0.1em] text-slate-400">
-              Reserve below {reserveTarget.toFixed(0)} MW
-            </p>
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(5rem,0.9fr)_minmax(0,1.1fr)] items-center gap-1.5 py-0.5">
+        <div className="flex min-w-0 items-center justify-center">
+          <div className="relative flex h-[clamp(4.5rem,5.5vw,5.5rem)] w-[clamp(4.5rem,5.5vw,5.5rem)] shrink-0 items-center justify-center 2xl:h-36 2xl:w-36">
+            <svg viewBox="0 0 140 140" className="h-full w-full -rotate-90">
+              <circle
+                cx="70"
+                cy="70"
+                r={RADIUS}
+                className="fill-none stroke-slate-800"
+                strokeWidth="13"
+              />
+              <circle
+                cx="70"
+                cy="70"
+                r={RADIUS}
+                className={`fill-none ${palette.ring}`}
+                strokeWidth="13"
+                strokeLinecap="round"
+                strokeDasharray={CIRCUMFERENCE}
+                strokeDashoffset={progress}
+              />
+            </svg>
+            <div className="absolute px-2 text-center">
+              <p className="text-lg font-semibold leading-none text-white 2xl:text-2xl">
+                {available ? `${riskPercent.toFixed(1)}%` : "--"}
+              </p>
+              <p className="mt-1 text-[8px] uppercase tracking-[0.12em] text-slate-400">
+                Peak risk
+              </p>
+            </div>
           </div>
         </div>
 
-        <div className="grid w-full grid-cols-2 gap-1.5 text-slate-300 sm:grid-cols-4">
-          {(["Normal", "Watch", "Prepare Generation", "Add Generation"] as const).map(
-            (status) => (
-              <RiskBand
-                key={status}
-                label={status}
-                active={probability.capacity_status === status}
-              />
-            ),
-          )}
+        <div className="grid min-w-0 gap-1">
+          <div className="grid grid-cols-1 gap-1">
+            <GaugeMetric label="Peak Horizon" value={peakHorizon} />
+            <GaugeMetric
+              label="Reserve Target"
+              value={`${reserveTarget.toFixed(0)} MW`}
+            />
+          </div>
         </div>
       </div>
+
     </div>
   );
 }
 
-function RiskBand({ label, active }: { label: string; active: boolean }) {
+function GaugeMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div
-      className={`flex min-h-[1.75rem] items-center justify-center rounded-lg border px-1 py-0.5 text-center ${
-        active
-          ? "border-cyan-400/55 bg-cyan-500/15 text-cyan-50"
-          : "border-slate-700/80 bg-slate-950/45 text-slate-400"
-      }`}
-    >
-      <p className="text-[9px] font-semibold uppercase leading-tight tracking-[0.08em]">
+    <div className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/55 px-2 py-1 text-center 2xl:py-3">
+      <p className="truncate text-[8px] uppercase tracking-[0.1em] text-slate-500">
         {label}
+      </p>
+      <p className="mt-0.5 truncate text-xs font-semibold text-slate-100 2xl:text-sm">
+        {value}
       </p>
     </div>
   );
+}
+
+function formatRiskHorizon(minutes?: number | null): string {
+  if (minutes == null || !Number.isFinite(minutes)) return "--";
+  if (minutes < 60) return `+${minutes}m`;
+  const hours = minutes / 60;
+  return Number.isInteger(hours) ? `+${hours}h` : `+${hours.toFixed(1)}h`;
 }

@@ -17,6 +17,7 @@ The response contains:
 
 ```json
 {
+  "snapshot_id": "7f104020-5ba7-4f94-b828-2332c1929a2e",
   "weather": {},
   "grid": {
     "current_demand_mw": 1229.5,
@@ -88,6 +89,32 @@ The response contains:
     "policy_status": "PROTOTYPE_UNCONFIRMED"
   },
   "recommendation": {},
+  "capacity_plan": {
+    "snapshot_id": "7f104020-5ba7-4f94-b828-2332c1929a2e",
+    "status": "AVAILABLE",
+    "action_source": "SYSTEM_RECOMMENDED",
+    "advisory_only": true,
+    "advisory_notice": "ADVISORY ONLY - MANUAL OPERATOR ACTION REQUIRED",
+    "system_suggestion": "REVIEW START OF 1 X SMALL FAST-START SET (15.0 MW TOTAL)",
+    "system_suggestion_basis": [
+      "No-action peak risk is 56.7% against the 20.0% Watch threshold",
+      "The selected configured plan adds 15.0 MW after its lead time"
+    ],
+    "current_tra_mw": 1240.0,
+    "current_tra_observed_at": "2026-06-16T12:00:00-04:00",
+    "current_tra_source": "GSYS SYSTEM_ONLN_TOTAL via HistoricalScadaReplay",
+    "current_tra_quality_status": "GOOD",
+    "required_reserve_mw": 30.0,
+    "target_risk_probability": 0.2,
+    "baseline_peak_risk_percent": 56.7,
+    "post_plan_peak_risk_percent": 18.4,
+    "risk_reduction_percentage_points": 38.3,
+    "block_definitions": [],
+    "recommended_actions": [],
+    "evaluated_actions": [],
+    "profile": [],
+    "warnings": []
+  },
   "demand_forecast": {
     "horizons": [
       {
@@ -232,12 +259,48 @@ temperature. None of these replay rules replace live weather outside replay.
 
 Probability and recommendation objects retain compatibility fields and expose
 raw, unrounded capacity-risk evidence. For every valid horizon through six
-hours, `risk_profile` reports forecast demand, forecast TRA, projected reserve,
+hours, `risk_profile` reports forecast demand, current TRA held, projected reserve,
 the 30 MW target, surplus or deficit, uncertainty, probability, status, and
 provenance. The top-level evidence comes from the same maximum-risk horizon.
 `reserve_insufficient_at` identifies the earliest horizon whose mean projected
 reserve is 30 MW or less. Generator guidance remains read-only and does not
-execute dispatch.
+execute dispatch. Compatibility probability and recommendation fields always
+describe the no-action baseline; hypothetical starts are confined to
+`capacity_plan`.
+
+## Capacity-plan what-if evaluation
+
+`POST /api/v1/capacity-plan/evaluate`
+
+Request:
+
+```json
+{
+  "snapshot_id": "7f104020-5ba7-4f94-b828-2332c1929a2e",
+  "actions": [
+    {
+      "block_id": "small-fast-start",
+      "count": 2
+    }
+  ]
+}
+```
+
+The endpoint recalculates a hypothetical post-plan TRA/reserve/risk profile
+against the immutable no-action context registered for that dashboard
+snapshot. An omitted `start_at` means an immediate hypothetical start at
+evaluation time (or at the replay cursor in replay mode). A supplied
+`start_at` must be an ISO-8601 timestamp.
+
+- `404`: unknown snapshot ID; refresh the dashboard.
+- `409`: snapshot context expired; refresh the dashboard.
+- `422`: unknown/disabled block, excessive block count, duplicate block, or
+  proposed capacity above current TA-minus-TRA headroom.
+
+The endpoint has no write path to SCADA, generation equipment, or the database.
+The app-local context cache is bounded and expires after 15 minutes by default;
+a production multi-worker deployment must replace it with a shared expiring
+context store.
 
 `demand_forecast`, `model_status`, and `scada_status` remain optional for normal
 provider mode. Replay returns cursor-consistent status and forecast values. If
@@ -253,14 +316,15 @@ only from targets already observable at forecast issuance time.
 
 When a coherent forecast generation cohort and latest SCADA grid snapshot are present,
 the probability/recommendation block may be produced by the operating-risk
-engine. It calculates `projected reserve = forecast TRA - forecast demand` and
-then evaluates `P(forecast TRA - actual demand < 30 MW)` using calibrated demand
+engine. It calculates `projected reserve = current TRA - forecast demand` and
+then evaluates `P(current TRA - actual demand < 30 MW)` using calibrated demand
 forecast error. Corrected System Spin remains separate observed context. TA is
-only used to bound verified startable capacity. If no future TRA schedule is
-available, current TRA is held as an explicitly labelled scenario. The headline
-probability is the maximum horizon probability, avoiding a false independence
-assumption across correlated horizons. This remains a historical-export modeling
-foundation, not a live SCADA stream.
+only used to bound verified startable capacity. Current TRA is held as the
+explicit no-action baseline. Proposed aggregate starts produce a separate
+post-plan profile only after their lead time. The headline probability remains
+the maximum no-action horizon probability, avoiding a false independence
+assumption across correlated horizons. This remains a historical-export
+modeling foundation, not a live SCADA stream.
 
 ## Health
 

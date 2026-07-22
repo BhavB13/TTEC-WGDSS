@@ -10,9 +10,15 @@ import ReplayLoadChart from "../components/ReplayLoadChart";
 import RiskTimelineChart from "../components/RiskTimelineChart";
 import ScenarioComparisonChart from "../components/ScenarioComparisonChart";
 import WeatherMap from "../components/WeatherMap";
-import { controlReplay, getDashboardSnapshot } from "../services/api";
+import {
+  controlReplay,
+  evaluateCapacityPlan,
+  getDashboardSnapshot,
+} from "../services/api";
 import type {
   CalibrationSnapshot,
+  CapacityPlan,
+  CapacityStartActionInput,
   DashboardSnapshot,
   DemandForecastBundle,
   ForecastData,
@@ -101,6 +107,9 @@ export default function Dashboard() {
   const [refreshError, setRefreshError] = useState<string>("");
   const [activeTab, setActiveTab] = useState<DashboardTab>("home");
   const [replayBusy, setReplayBusy] = useState(false);
+  const [capacityPlan, setCapacityPlan] = useState<CapacityPlan | null>(null);
+  const [capacityPlanBusy, setCapacityPlanBusy] = useState(false);
+  const [capacityPlanError, setCapacityPlanError] = useState("");
 
   const loadSnapshot = useCallback(
     async (
@@ -120,6 +129,8 @@ export default function Dashboard() {
       try {
         const data = await getDashboardSnapshot({ forceRefresh });
         setSnapshot(data);
+        setCapacityPlan(data.capacity_plan ?? null);
+        setCapacityPlanError("");
         setRefreshError("");
         setState("ready");
       } catch (cause) {
@@ -162,6 +173,39 @@ export default function Dashboard() {
     },
     [loadSnapshot],
   );
+
+  const handleCapacityPlanEvaluate = useCallback(
+    async (actions: CapacityStartActionInput[]) => {
+      const snapshotId = snapshot?.snapshot_id;
+      if (!snapshotId) {
+        setCapacityPlanError("Refresh the dashboard before evaluating a capacity plan.");
+        return;
+      }
+      setCapacityPlanBusy(true);
+      setCapacityPlanError("");
+      try {
+        const result = await evaluateCapacityPlan({
+          snapshot_id: snapshotId,
+          actions,
+        });
+        setCapacityPlan(result);
+      } catch (cause) {
+        setCapacityPlanError(
+          cause instanceof Error
+            ? cause.message
+            : "Capacity-plan evaluation failed",
+        );
+      } finally {
+        setCapacityPlanBusy(false);
+      }
+    },
+    [snapshot?.snapshot_id],
+  );
+
+  const handleCapacityPlanReset = useCallback(() => {
+    setCapacityPlan(snapshot?.capacity_plan ?? null);
+    setCapacityPlanError("");
+  }, [snapshot?.capacity_plan]);
 
   useEffect(() => {
     try {
@@ -312,7 +356,11 @@ export default function Dashboard() {
 
               {activeTab === "riskGauge" ? (
                 <WorkspacePage>
-                  <RiskGaugeTab probability={probability} theme={theme} />
+                  <RiskGaugeTab
+                    probability={probability}
+                    capacityPlan={capacityPlan}
+                    theme={theme}
+                  />
                 </WorkspacePage>
               ) : null}
 
@@ -320,6 +368,11 @@ export default function Dashboard() {
                 <WorkspacePage>
                   <OperationalGuidanceTab
                     recommendation={recommendation}
+                    capacityPlan={capacityPlan}
+                    busy={capacityPlanBusy}
+                    error={capacityPlanError}
+                    onEvaluate={handleCapacityPlanEvaluate}
+                    onReset={handleCapacityPlanReset}
                   />
                 </WorkspacePage>
               ) : null}
@@ -1085,9 +1138,11 @@ function DemandForecastTab({
 
 function RiskGaugeTab({
   probability,
+  capacityPlan,
   theme,
 }: {
   probability: DashboardSnapshot["probability"];
+  capacityPlan: CapacityPlan | null;
   theme: ThemeMode;
 }) {
   const [showAllDrivers, setShowAllDrivers] = useState(false);
@@ -1114,108 +1169,120 @@ function RiskGaugeTab({
   const contextCount = drivers.filter(
     (driver) => driver.direction === "CONTEXT",
   ).length;
-  const topDrivers = selectTopRiskDrivers(drivers, 5);
+  const topDrivers = selectTopRiskDrivers(drivers, 4);
   const visibleDrivers = showAllDrivers ? drivers : topDrivers;
   return (
-    <div className="grid h-full min-h-0 w-full min-w-0 grid-rows-[minmax(0,1.08fr)_minmax(0,0.92fr)] gap-2.5 overflow-hidden">
-      <div className="grid min-h-0 min-w-0 gap-2.5 xl:grid-cols-[minmax(17rem,0.36fr)_minmax(0,0.64fr)]">
+    <div className="grid h-full min-h-0 w-full min-w-0 grid-rows-2 gap-2.5 overflow-hidden">
+      <div className="grid min-h-0 min-w-0 gap-2.5 xl:grid-cols-[minmax(16rem,0.3fr)_minmax(0,0.7fr)]">
         <ProbabilityGauge
           probability={probability}
           className="h-full min-h-0 w-full min-w-0"
         />
         <RiskTimelineChart
           probability={probability}
+          capacityPlan={capacityPlan}
           theme={theme}
           className="h-full min-h-0 w-full min-w-0"
         />
       </div>
 
-      <div className="grid min-h-0 min-w-0 gap-2.5 overflow-hidden xl:grid-cols-[minmax(0,1.08fr)_minmax(20rem,0.92fr)]">
+      <div className="grid min-h-0 min-w-0 gap-2.5 overflow-hidden xl:grid-cols-[minmax(0,1.05fr)_minmax(21rem,0.95fr)]">
         <PanelCard
           title="Capacity Risk Evidence"
           className="h-full min-h-0 w-full min-w-0"
         >
           <div className="grid h-full min-h-0 grid-cols-2 auto-rows-fr gap-1.5 sm:grid-cols-4">
             <MiniMetric
-              label="Capacity Risk"
-              value={formatCapacityRisk(probability)}
+              label="No-Action Peak Risk"
+              value={formatPlanRisk(capacityPlan?.baseline_peak_risk_percent, probability)}
             />
             <MiniMetric
-              label="Forecast Demand"
+              label="Peak Forecast Demand"
               value={`${probability.forecast_demand_mw.toFixed(1)} MW`}
             />
             <MiniMetric
-              label="Forecast TRA"
-              value={`${probability.forecast_tra_mw.toFixed(1)} MW`}
+              label="Observed TRA"
+              value={formatOptionalMegawatts(capacityPlan?.current_tra_mw)}
             />
             <MiniMetric
-              label="Projected Reserve"
-              value={`${probability.projected_reserve_mw.toFixed(1)} MW`}
+              label="Peak Reserve"
+              value={formatOptionalMegawatts(getPeakPlanPoint(capacityPlan)?.baseline_reserve_mw)}
             />
             <MiniMetric
-              label="Required Reserve"
-              value={`${(probability.required_reserve_mw ?? 30).toFixed(1)} MW`}
+              label="Post-Plan Peak Risk"
+              value={formatOptionalPercent(capacityPlan?.post_plan_peak_risk_percent)}
             />
             <MiniMetric
-              label="Reserve Balance"
-              value={formatReserveBalance(probability)}
+              label="TRA With Starts"
+              value={formatOptionalMegawatts(getPeakPlanPoint(capacityPlan)?.planned_tra_mw)}
             />
             <MiniMetric
-              label="First Insufficiency"
-              value={formatReserveInsufficiency(probability)}
+              label="Risk Reduction"
+              value={formatPercentagePoints(capacityPlan?.risk_reduction_percentage_points)}
             />
             <MiniMetric
-              label="Forecast Error Sigma"
-              value={`${probability.forecast_uncertainty_mw.toFixed(1)} MW`}
+              label="TRA Freshness"
+              value={formatTraEvidence(capacityPlan)}
             />
           </div>
         </PanelCard>
 
         <PanelCard title="Risk Drivers" className="h-full min-h-0 w-full min-w-0">
-          <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-1.5">
-            <div className="grid grid-cols-4 gap-1 text-center text-[8px] uppercase tracking-[0.06em]">
+          <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-1.5">
+            <div
+              className={`grid gap-1 text-center text-[8px] uppercase tracking-[0.06em] ${
+                drivers.length > 2 ? "grid-cols-5" : "grid-cols-4"
+              }`}
+            >
               <span className="rounded-lg border border-rose-500/25 bg-rose-500/10 px-1.5 py-1 text-rose-200">
-                {increasingCount} raising
+                Raising {increasingCount}
               </span>
               <span className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-1 text-emerald-200">
-                {reducingCount} reducing
+                Reducing {reducingCount}
               </span>
               <span className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-1.5 py-1 text-amber-200">
-                {warningCount} warnings
+                Warnings {warningCount}
               </span>
               <span className="rounded-lg border border-slate-600/60 bg-slate-800/55 px-1.5 py-1 text-slate-300">
-                {contextCount} context
+                Context {contextCount}
               </span>
+              {drivers.length > 2 ? (
+                <button
+                  type="button"
+                  onClick={() => setShowAllDrivers((current) => !current)}
+                  title={showAllDrivers ? "Show priority drivers" : `View all ${drivers.length} drivers`}
+                  className="rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-1 py-1 font-semibold text-cyan-100 hover:border-cyan-400/45 hover:bg-cyan-500/15"
+                >
+                  {showAllDrivers ? "Priority" : `All ${drivers.length}`}
+                </button>
+              ) : null}
             </div>
-            <ol className="min-h-0 space-y-1 overflow-auto pr-0.5">
+            <ol
+              className={`grid min-h-0 gap-1.5 overflow-auto pr-0.5 ${
+                showAllDrivers
+                  ? "auto-rows-min grid-cols-1"
+                  : "grid-cols-1 grid-rows-2 2xl:grid-cols-2 2xl:grid-rows-2"
+              }`}
+            >
               {visibleDrivers.map((driver, index) => (
                 <li
                   key={`${driver.category}-${driver.label}-${index}`}
-                  className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/55 px-2 py-1.5 text-[0.68rem] leading-snug text-slate-200"
+                  className={`min-h-0 items-start gap-2 rounded-lg border border-slate-800 bg-slate-950/55 px-2 py-1.5 text-[0.68rem] leading-snug text-slate-200 ${
+                    !showAllDrivers && index >= 2 ? "hidden 2xl:flex" : "flex"
+                  }`}
                 >
                   <span
-                    className={`h-2 w-2 shrink-0 rounded-full ${riskDriverDot(driver.direction)}`}
+                    className={`mt-1 h-2 w-2 shrink-0 rounded-full ${riskDriverDot(driver.direction)}`}
                   />
-                  <span className="min-w-0 flex-1 break-words">{driver.label}</span>
-                  <span className="shrink-0 text-[8px] uppercase tracking-[0.08em] text-slate-500">
-                    {driver.category.replace(/_/g, " ")}
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="hidden text-[8px] uppercase tracking-[0.08em] text-slate-500 2xl:block">
+                      {driver.category.replace(/_/g, " ")}
+                    </span>
+                    <span className="break-words">{driver.label}</span>
                   </span>
                 </li>
               ))}
             </ol>
-            {drivers.length > 5 ? (
-              <button
-                type="button"
-                onClick={() => setShowAllDrivers((current) => !current)}
-                className="justify-self-end rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-semibold text-cyan-100 hover:border-cyan-400/45 hover:bg-cyan-500/15"
-              >
-                {showAllDrivers ? "Show top 5" : `View all ${drivers.length}`}
-              </button>
-            ) : (
-              <span className="text-right text-[9px] text-slate-500">
-                {probability.formula_version ?? "Operating risk evidence"}
-              </span>
-            )}
           </div>
         </PanelCard>
       </div>
@@ -1313,88 +1380,386 @@ function formatEnumLabel(value: string): string {
 
 function OperationalGuidanceTab({
   recommendation,
+  capacityPlan,
+  busy,
+  error,
+  onEvaluate,
+  onReset,
 }: {
   recommendation: DashboardSnapshot["recommendation"];
+  capacityPlan: CapacityPlan | null;
+  busy: boolean;
+  error: string;
+  onEvaluate: (actions: CapacityStartActionInput[]) => Promise<void>;
+  onReset: () => void;
 }) {
-  const factors = recommendation.factors.slice(0, 6);
-  const decisionAvailable = recommendation.risk_level !== "UNAVAILABLE";
-  const dispatchAction = recommendation.decision_action ?? recommendation.recommendation;
-  const reserveTarget = recommendation.required_reserve_mw ?? 30;
-  const reserveHealthy = recommendation.reserve_surplus_mw >= 0;
+  const [selectedCounts, setSelectedCounts] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    setSelectedCounts(
+      Object.fromEntries(
+        (capacityPlan?.evaluated_actions ?? []).map((action) => [
+          action.block_id,
+          action.count,
+        ]),
+      ),
+    );
+  }, [capacityPlan]);
+
+  const definitions = capacityPlan?.block_definitions ?? [];
+  const evaluatedActions = capacityPlan?.evaluated_actions ?? [];
+  const peakPoint = getPeakPlanPoint(capacityPlan);
+  const planAvailable = capacityPlan?.status === "AVAILABLE";
+  const systemSuggestion =
+    capacityPlan?.system_suggestion ??
+    recommendation.decision_action ??
+    recommendation.recommendation;
+  const suggestionBasis =
+    capacityPlan?.system_suggestion_basis?.length
+      ? capacityPlan.system_suggestion_basis
+      : recommendation.factors;
+  const firstSuggestedAction = capacityPlan?.recommended_actions[0] ?? null;
+
+  const changeCount = (blockId: string, maximum: number, delta: number) => {
+    setSelectedCounts((current) => ({
+      ...current,
+      [blockId]: Math.max(
+        0,
+        Math.min(maximum, (current[blockId] ?? 0) + delta),
+      ),
+    }));
+  };
+
+  const evaluateSelection = () => {
+    const actions = definitions
+      .filter(
+        (definition) =>
+          definition.enabled &&
+          (selectedCounts[definition.block_id] ?? 0) > 0,
+      )
+      .map((definition) => ({
+        block_id: definition.block_id,
+        count: selectedCounts[definition.block_id],
+      }));
+    void onEvaluate(actions);
+  };
 
   return (
-    <div className="grid h-full min-h-0 w-full min-w-0 gap-2.5 overflow-hidden xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-      <div className="flex min-h-0 flex-col gap-2 overflow-hidden rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
-        <div className={`rounded-xl border px-4 py-3 text-center ${decisionAvailable ? "border-cyan-400/30 bg-cyan-500/10" : "border-slate-700 bg-slate-950/60"}`}>
-          <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-400">Dispatch Decision</p>
-          <p className="mt-1 break-words text-lg font-semibold text-white">{dispatchAction}</p>
-          <p className="mt-1 text-[10px] text-cyan-100">{recommendation.generator_set ?? "No generator set selected"}</p>
+    <div className="grid h-full min-h-0 w-full min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-2 overflow-hidden">
+      <div className="grid min-w-0 gap-2 rounded-xl border border-cyan-400/30 bg-cyan-500/10 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-[9px] font-bold uppercase tracking-[0.16em] text-cyan-200">
+              Machine-Generated Suggestion
+            </p>
+            <span className="rounded-full border border-cyan-400/25 bg-slate-950/45 px-2 py-0.5 text-[8px] font-semibold uppercase text-cyan-100">
+              Forecast + risk optimizer
+            </span>
+          </div>
+          <p className="mt-0.5 break-words text-[0.8rem] font-semibold leading-snug text-white">
+            {systemSuggestion}
+          </p>
+          <p className="mt-0.5 text-[9px] leading-snug text-slate-300">
+            {suggestionBasis.slice(0, 2).join(" · ")}
+          </p>
         </div>
-        <ol className="grid min-h-0 flex-1 auto-rows-fr gap-1.5 overflow-auto sm:grid-cols-2">
-          {factors.map((factor, index) => (
-            <li key={`${factor}-${index}`} className="flex min-h-[3.5rem] items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/60 px-2.5 py-2 text-[0.72rem] leading-snug text-slate-200">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-cyan-500/30 bg-cyan-500/10 text-[9px] font-semibold text-cyan-200">{index + 1}</span>
-              <span className="min-w-0 break-words">{factor}</span>
-            </li>
-          ))}
-        </ol>
+        <div className="flex shrink-0 items-center justify-end gap-1.5 text-center">
+          {firstSuggestedAction ? (
+            <div className="rounded-lg border border-cyan-400/20 bg-slate-950/50 px-2 py-1">
+              <p className="text-[8px] uppercase tracking-[0.1em] text-slate-500">
+                Start By
+              </p>
+              <p className="text-[10px] font-semibold text-cyan-100">
+                {formatCompactTime(firstSuggestedAction.start_by)}
+              </p>
+            </div>
+          ) : null}
+          <div className="rounded-lg border border-amber-400/25 bg-amber-500/10 px-2 py-1">
+            <p className="max-w-[10rem] text-[8px] font-bold uppercase leading-snug tracking-[0.08em] text-amber-100">
+              {capacityPlan?.advisory_notice ??
+                "ADVISORY ONLY - MANUAL OPERATOR ACTION REQUIRED"}
+            </p>
+          </div>
+        </div>
       </div>
 
-      <div className="grid min-h-0 grid-cols-2 auto-rows-fr gap-2 rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
-            <GuidanceThreshold
-              label="Projected Reserve"
-              value={`${recommendation.projected_reserve_mw.toFixed(1)} MW`}
-              context={`Forecast TRA ${recommendation.forecast_tra_mw.toFixed(1)} minus demand ${recommendation.forecast_demand_mw.toFixed(1)} MW`}
-              healthy={decisionAvailable && reserveHealthy}
-            />
-            <GuidanceThreshold
-              label="Required Reserve"
-              value={`${reserveTarget.toFixed(1)} MW`}
-              context="Configured operating reserve target"
-              healthy={decisionAvailable}
-            />
-            <GuidanceThreshold
-              label="Reserve Balance"
-              value={formatReserveBalance(recommendation)}
-              context={reserveHealthy ? "Surplus above target" : "Deficit below target"}
-              healthy={decisionAvailable && reserveHealthy}
-            />
-            <GuidanceThreshold
-              label="Capacity Risk"
-              value={formatCapacityRisk(recommendation)}
-              context={`${recommendation.capacity_status} - ${formatReserveInsufficiency(recommendation)}`}
-              healthy={recommendation.capacity_status === "Normal"}
-            />
+      <div className="grid min-h-0 gap-2.5 overflow-hidden xl:grid-cols-[minmax(19rem,0.88fr)_minmax(0,1.12fr)]">
+        <PanelCard title="Aggregate Start Blocks" className="min-h-0">
+          <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-2">
+            <div className="grid grid-cols-3 gap-1.5">
+              <MiniMetric
+                label="Current TRA"
+                value={formatOptionalMegawatts(capacityPlan?.current_tra_mw)}
+              />
+              <MiniMetric
+                label="Observed"
+                value={formatCompactTime(capacityPlan?.current_tra_observed_at)}
+              />
+              <MiniMetric
+                label="TRA Quality"
+                value={capacityPlan?.current_tra_quality_status ?? "Unavailable"}
+              />
+            </div>
+
+            <div className="min-h-0 space-y-1.5 overflow-auto pr-0.5">
+              {definitions.map((definition) => {
+                const count = selectedCounts[definition.block_id] ?? 0;
+                return (
+                  <div
+                    key={definition.block_id}
+                    className={
+                      "grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-xl border px-2.5 py-2 " +
+                      (definition.enabled
+                        ? "border-cyan-500/20 bg-slate-950/60"
+                        : "border-slate-800 bg-slate-950/35 opacity-75")
+                    }
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <p className="text-[0.72rem] font-semibold text-white">
+                          {definition.label}
+                        </p>
+                        <span className="rounded-full border border-slate-700 px-1.5 py-0.5 text-[8px] font-semibold text-slate-400">
+                          {definition.verification_status}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-[9px] leading-snug text-slate-400">
+                        {definition.unit_capacity_mw != null ? (
+                          <>
+                            {definition.unit_capacity_mw.toFixed(0)} MW each ·{" "}
+                            {definition.startup_lead_time_minutes} min lead ·{" "}
+                            {definition.startable_count} startable
+                          </>
+                        ) : (
+                          <>
+                            {definition.startup_lead_time_minutes} min lead ·
+                            capacity awaiting approved configuration
+                          </>
+                        )}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        aria-label={"Remove one " + definition.label}
+                        disabled={!definition.enabled || count <= 0 || busy}
+                        onClick={() =>
+                          changeCount(
+                            definition.block_id,
+                            definition.startable_count,
+                            -1,
+                          )
+                        }
+                        className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 text-sm text-slate-200 disabled:cursor-not-allowed disabled:opacity-35"
+                      >
+                        -
+                      </button>
+                      <span className="w-6 text-center text-sm font-semibold tabular-nums text-white">
+                        {count}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label={"Add one " + definition.label}
+                        disabled={
+                          !definition.enabled ||
+                          count >= definition.startable_count ||
+                          busy
+                        }
+                        onClick={() =>
+                          changeCount(
+                            definition.block_id,
+                            definition.startable_count,
+                            1,
+                          )
+                        }
+                        className="flex h-7 w-7 items-center justify-center rounded-lg border border-cyan-500/30 bg-cyan-500/10 text-sm text-cyan-100 disabled:cursor-not-allowed disabled:opacity-35"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div>
+              {error ? (
+                <p className="mb-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[9px] text-rose-100">
+                  {error}
+                </p>
+              ) : null}
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={evaluateSelection}
+                  disabled={!planAvailable || busy}
+                  className="rounded-lg border border-cyan-400/35 bg-cyan-500/15 px-2 py-2 text-[10px] font-semibold text-cyan-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {busy ? "Evaluating..." : "Evaluate Selection"}
+                </button>
+                <button
+                  type="button"
+                  onClick={onReset}
+                  disabled={busy}
+                  className="rounded-lg border border-slate-700 bg-slate-950/55 px-2 py-2 text-[10px] font-semibold text-slate-300 disabled:opacity-40"
+                >
+                  Use System Suggestion
+                </button>
+              </div>
+            </div>
+          </div>
+        </PanelCard>
+
+        <PanelCard title="Capacity Plan Evaluation" className="min-h-0">
+          <div className="grid h-full min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] gap-2">
+            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+              <MiniMetric
+                label="No-Action Risk"
+                value={formatPlanRisk(
+                  capacityPlan?.baseline_peak_risk_percent,
+                  recommendation,
+                )}
+              />
+              <MiniMetric
+                label="Post-Plan Risk"
+                value={formatOptionalPercent(
+                  capacityPlan?.post_plan_peak_risk_percent,
+                )}
+              />
+              <MiniMetric
+                label="Proposed TRA"
+                value={formatOptionalMegawatts(peakPoint?.planned_tra_mw)}
+              />
+              <MiniMetric
+                label="Unresolved Need"
+                value={formatOptionalMegawatts(
+                  capacityPlan?.unresolved_capacity_mw,
+                )}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+              <PlanDatum
+                label="Plan Source"
+                value={formatEnumLabel(capacityPlan?.action_source ?? "NONE")}
+              />
+              <PlanDatum
+                label="Reserve Target"
+                value={formatOptionalMegawatts(capacityPlan?.required_reserve_mw)}
+              />
+              <PlanDatum
+                label="First Unprotected"
+                value={formatPlanExposure(capacityPlan)}
+              />
+              <PlanDatum
+                label="Interim Exposure"
+                value={
+                  capacityPlan?.interim_unmitigated_risk
+                    ? "YES - BEFORE START"
+                    : "NONE IDENTIFIED"
+                }
+                warning={Boolean(capacityPlan?.interim_unmitigated_risk)}
+              />
+            </div>
+
+            <div className="grid min-h-0 gap-2 overflow-hidden lg:grid-cols-[minmax(0,1.1fr)_minmax(15rem,0.9fr)]">
+              <div className="min-h-0 overflow-auto rounded-xl border border-slate-800 bg-slate-950/55 p-2">
+                <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                  Proposed Starts
+                </p>
+                <div className="mt-1.5 space-y-1.5">
+                  {evaluatedActions.length ? (
+                    evaluatedActions.map((action) => (
+                      <div
+                        key={action.block_id}
+                        className="rounded-lg border border-slate-800 bg-slate-900/65 px-2 py-1.5"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[0.7rem] font-semibold text-white">
+                            {action.count} x {action.block_label}
+                          </p>
+                          <span
+                            className={
+                              "text-[8px] font-semibold " +
+                              (action.applied_to_projection
+                                ? "text-emerald-300"
+                                : "text-amber-300")
+                            }
+                          >
+                            {action.action_status.replace(/_/g, " ")}
+                          </span>
+                        </div>
+                        <div className="mt-1 grid grid-cols-3 gap-1 text-center text-[9px] text-slate-400">
+                          <span>{action.total_capacity_mw.toFixed(0)} MW</span>
+                          <span>
+                            Start by {formatCompactTime(action.start_by)}
+                          </span>
+                          <span>
+                            Online {formatCompactTime(action.expected_online_at)}
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="rounded-lg border border-dashed border-slate-700 px-2 py-3 text-center text-[10px] text-slate-400">
+                      No aggregate starts are included in this scenario.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="min-h-0 overflow-auto rounded-xl border border-slate-800 bg-slate-950/55 p-2">
+                <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                  Operator Checks
+                </p>
+                <ul className="mt-1.5 space-y-1 text-[9px] leading-snug text-slate-300">
+                  {(capacityPlan?.warnings ?? []).map((warning) => (
+                    <li
+                      key={warning}
+                      className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-2 py-1.5"
+                    >
+                      {warning}
+                    </li>
+                  ))}
+                  <li className="rounded-lg border border-slate-800 px-2 py-1.5">
+                    Starts are hypothetical until the operator acts and SCADA
+                    reports the added TRA.
+                  </li>
+                  <li className="rounded-lg border border-slate-800 px-2 py-1.5">
+                    Shutdown planning is intentionally excluded pending approved
+                    operating constraints.
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </PanelCard>
       </div>
     </div>
   );
 }
 
-function GuidanceThreshold({
+function PlanDatum({
   label,
   value,
-  context,
-  healthy,
+  warning = false,
 }: {
   label: string;
   value: string;
-  context: string;
-  healthy: boolean;
+  warning?: boolean;
 }) {
   return (
-    <div
-      className={`flex min-w-0 flex-col items-center justify-center rounded-xl border px-2 py-2 text-center ${
-        healthy
-          ? "border-emerald-500/20 bg-emerald-500/10"
-          : "border-rose-500/25 bg-rose-500/10"
-      }`}
-    >
-      <p className="text-[9px] uppercase tracking-[0.1em] text-slate-400">{label}</p>
-      <p className={`mt-1 text-sm font-semibold ${healthy ? "text-emerald-100" : "text-rose-100"}`}>
-        {value}
+    <div className="min-w-0 rounded-xl border border-slate-800 bg-slate-950/55 px-2 py-1.5 text-center">
+      <p className="text-[8px] uppercase tracking-[0.1em] text-slate-500">
+        {label}
       </p>
-      <p className="mt-1 break-words text-[9px] leading-tight text-slate-500">
-        {context}
+      <p
+        className={
+          "mt-0.5 break-words text-[10px] font-semibold leading-tight " +
+          (warning ? "text-amber-200" : "text-slate-100")
+        }
+      >
+        {value}
       </p>
     </div>
   );
@@ -1805,6 +2170,85 @@ function formatProbability(
     probability.capacity_status === "Unavailable"
     ? "--"
     : `${probability.capacity_risk_percent.toFixed(1)}%`;
+}
+
+function getPeakPlanPoint(
+  capacityPlan: CapacityPlan | null,
+): CapacityPlan["profile"][number] | null {
+  if (!capacityPlan?.profile.length) {
+    return null;
+  }
+  return capacityPlan.profile.reduce((peak, point) =>
+    point.baseline_capacity_risk_percent > peak.baseline_capacity_risk_percent
+      ? point
+      : peak,
+  );
+}
+
+function formatPlanRisk(
+  value: number | null | undefined,
+  fallback: DashboardSnapshot["probability"],
+): string {
+  return value == null || !Number.isFinite(value)
+    ? formatCapacityRisk(fallback)
+    : `${value.toFixed(1)}%`;
+}
+
+function formatOptionalMegawatts(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value)
+    ? "Unavailable"
+    : `${value.toFixed(1)} MW`;
+}
+
+function formatOptionalPercent(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value)
+    ? "Unavailable"
+    : `${value.toFixed(1)}%`;
+}
+
+function formatPercentagePoints(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value)
+    ? "Unavailable"
+    : `${value.toFixed(1)} points`;
+}
+
+function formatTraEvidence(capacityPlan: CapacityPlan | null): string {
+  if (!capacityPlan) {
+    return "Unavailable";
+  }
+  const age =
+    capacityPlan.current_tra_age_seconds == null
+      ? ""
+      : ` · ${Math.round(capacityPlan.current_tra_age_seconds)}s old`;
+  return `${capacityPlan.current_tra_quality_status}${age}`;
+}
+
+function formatCompactTime(value?: string | null): string {
+  if (!value) {
+    return "--";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("en-TT", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "America/Port_of_Spain",
+  }).format(date);
+}
+
+function formatPlanExposure(capacityPlan: CapacityPlan | null): string {
+  if (!capacityPlan) {
+    return "Unavailable";
+  }
+  if (capacityPlan.first_unprotected_horizon_minutes == null) {
+    return "None in horizon";
+  }
+  return `+${capacityPlan.first_unprotected_horizon_minutes} min · ${formatCompactTime(
+    capacityPlan.first_unprotected_at,
+  )}`;
 }
 
 function formatGuidanceForecastTimestamp(value: string): string {

@@ -6,10 +6,12 @@ import { dashboardFixture, replayDashboardFixture } from "../test/dashboardFixtu
 
 const getDashboardSnapshot = vi.fn();
 const controlReplay = vi.fn();
+const evaluateCapacityPlan = vi.fn();
 
 vi.mock("../services/api", () => ({
   getDashboardSnapshot: (...args: unknown[]) => getDashboardSnapshot(...args),
   controlReplay: (...args: unknown[]) => controlReplay(...args),
+  evaluateCapacityPlan: (...args: unknown[]) => evaluateCapacityPlan(...args),
 }));
 vi.mock("../components/WeatherMap", () => ({
   default: () => <div data-testid="weather-map">Weather map</div>,
@@ -39,6 +41,8 @@ describe("Dashboard", () => {
   beforeEach(() => {
     getDashboardSnapshot.mockReset();
     controlReplay.mockReset();
+    evaluateCapacityPlan.mockReset();
+    evaluateCapacityPlan.mockResolvedValue(dashboardFixture.capacity_plan);
     window.localStorage.clear();
   });
 
@@ -107,19 +111,39 @@ describe("Dashboard", () => {
     expect(screen.getByTestId("probability-gauge")).toBeInTheDocument();
     expect(screen.getByTestId("risk-timeline")).toBeInTheDocument();
     expect(screen.getByText("Capacity Risk Evidence")).toBeInTheDocument();
-    expect(screen.getByText("Forecast Demand")).toBeInTheDocument();
-    expect(screen.getByText("Forecast TRA")).toBeInTheDocument();
-    expect(screen.getByText("Projected Reserve")).toBeInTheDocument();
-    expect(screen.getByText("Required Reserve")).toBeInTheDocument();
-    expect(screen.getByText("Reserve Balance")).toBeInTheDocument();
-    expect(screen.getByText("First Insufficiency")).toBeInTheDocument();
+    expect(screen.getByText("Peak Forecast Demand")).toBeInTheDocument();
+    expect(screen.getByText("Observed TRA")).toBeInTheDocument();
+    expect(screen.getByText("Peak Reserve")).toBeInTheDocument();
+    expect(screen.getByText("Post-Plan Peak Risk")).toBeInTheDocument();
+    expect(screen.getByText("TRA With Starts")).toBeInTheDocument();
+    expect(screen.getByText("Risk Reduction")).toBeInTheDocument();
     expect(screen.getByText("Risk Drivers")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Operational Guidance" }));
-    expect(screen.getByText("Projected Reserve")).toBeInTheDocument();
-    expect(screen.getByText("Required Reserve")).toBeInTheDocument();
-    expect(screen.getByText("Reserve Balance")).toBeInTheDocument();
-    expect(screen.getByText("Capacity Risk")).toBeInTheDocument();
+    expect(
+      screen.getByText("ADVISORY ONLY - MANUAL OPERATOR ACTION REQUIRED"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Machine-Generated Suggestion")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "REVIEW START OF 2 X SMALL FAST-START SET (30.0 MW TOTAL)",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Aggregate Start Blocks")).toBeInTheDocument();
+    expect(screen.getByText("Capacity Plan Evaluation")).toBeInTheDocument();
+    expect(screen.getByText("Proposed Starts")).toBeInTheDocument();
+    expect(screen.getByText("Operator Checks")).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Remove one Small fast-start set" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Evaluate Selection" }));
+    await waitFor(() =>
+      expect(evaluateCapacityPlan).toHaveBeenCalledWith({
+        snapshot_id: "snapshot-capacity-plan-1",
+        actions: [{ block_id: "small-fast-start", count: 1 }],
+      }),
+    );
 
     await user.click(screen.getByRole("button", { name: "Analytics" }));
     expect(screen.getByText("Calibration Summary")).toBeInTheDocument();

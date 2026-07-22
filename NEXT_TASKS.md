@@ -20,13 +20,21 @@
    adequate and the active model has been reviewed by engineering.
 7. Add a real grid provider only through a controlled historian/API/OPC-UA/CSV
    export integration. Keep `MockGridProvider` available for demo and testing.
-8. Add operational observability before production: structured logs, import and
+8. Obtain an approved aggregate generation roster: small/heavy block MW,
+   startable counts, startup/synchronization and ramp times, outages, fuel
+   constraints, and operator restrictions. Until then keep the 15 MW small
+   value unconfirmed and heavy MW guidance disabled.
+9. Obtain shutdown lead time, ramp-down, minimum run/down-time, reserve, and
+   verification rules before adding any shutdown guidance.
+10. Replace the app-local capacity-plan context cache with a shared expiring
+    store before running multiple API workers.
+11. Add operational observability before production: structured logs, import and
    refresh job monitoring, alert routing, backup/restore checks, and access
    control.
-9. Complete `docs/SCADA_OSI_CONFIRMATION_REGISTER.md` with T&TEC control
+12. Complete `docs/SCADA_OSI_CONFIRMATION_REGISTER.md` with T&TEC control
    engineering and the OSI system owner before changing tag semantics, units,
    quality gates, reserve policy, start recommendations, or provider settings.
-10. Select a production read-only integration pattern and complete the controls
+13. Select a production read-only integration pattern and complete the controls
     in `docs/SCADA_OSI_READ_ONLY_SECURITY.md`; do not implement a connector
     until its interface and OT boundary are approved.
 

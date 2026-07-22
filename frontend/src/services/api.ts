@@ -1,5 +1,7 @@
 import type {
   DashboardSnapshot,
+  CapacityPlan,
+  CapacityStartActionInput,
   ForecastData,
   GridStatus,
   ProbabilityData,
@@ -19,6 +21,7 @@ const API_BASE_URL = (
 const DASHBOARD_SNAPSHOT_PATH = "/api/v1/dashboard/snapshot";
 const STORM_TRACKING_PATH = "/api/v1/storm/tracking";
 const REPLAY_CONTROL_PATH = "/api/v1/replay/control";
+const CAPACITY_PLAN_EVALUATE_PATH = "/api/v1/capacity-plan/evaluate";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
@@ -111,6 +114,17 @@ export async function controlReplay(input: {
   speed_multiplier?: number;
 }): Promise<ReplayStatus> {
   return requestJson<ReplayStatus>(REPLAY_CONTROL_PATH, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function evaluateCapacityPlan(input: {
+  snapshot_id: string;
+  actions: CapacityStartActionInput[];
+}): Promise<CapacityPlan> {
+  return requestJson<CapacityPlan>(CAPACITY_PLAN_EVALUATE_PATH, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),

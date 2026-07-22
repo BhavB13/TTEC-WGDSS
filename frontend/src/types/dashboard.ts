@@ -417,6 +417,91 @@ export interface RecommendationData extends ProbabilityData {
   recommendation: "NO ACTION REQUIRED" | "MONITOR CONDITIONS" | "START ADDITIONAL TURBINE" | string;
 }
 
+export interface GenerationBlockDefinition {
+  block_id: string;
+  label: string;
+  block_class: "SMALL" | "HEAVY" | string;
+  unit_capacity_mw?: number | null;
+  startable_count: number;
+  startup_lead_time_minutes: number;
+  enabled: boolean;
+  provenance: string;
+  verification_status: string;
+}
+
+export interface CapacityStartActionInput {
+  block_id: string;
+  count: number;
+  start_at?: string | null;
+}
+
+export interface CapacityStartAction {
+  block_id: string;
+  block_label: string;
+  block_class: string;
+  count: number;
+  unit_capacity_mw: number;
+  total_capacity_mw: number;
+  startup_lead_time_minutes: number;
+  start_at: string;
+  start_by?: string | null;
+  expected_online_at: string;
+  verification_status: string;
+  action_status: "PROPOSED" | "VERIFICATION_REQUIRED" | string;
+  applied_to_projection: boolean;
+}
+
+export interface CapacityPlanHorizon {
+  horizon_minutes: number;
+  forecast_timestamp?: string | null;
+  forecast_demand_mw: number;
+  forecast_uncertainty_mw: number;
+  baseline_tra_mw: number;
+  baseline_reserve_mw: number;
+  baseline_capacity_risk_percent: number;
+  baseline_capacity_status: CapacityStatus;
+  planned_tra_mw: number;
+  applied_start_capacity_mw: number;
+  planned_reserve_mw: number;
+  planned_reserve_surplus_mw: number;
+  planned_reserve_deficit_mw: number;
+  planned_capacity_risk_percent: number;
+  planned_capacity_status: CapacityStatus;
+  required_reserve_mw: number;
+}
+
+export interface CapacityPlan {
+  snapshot_id: string;
+  status: "AVAILABLE" | "UNAVAILABLE" | "STALE_SNAPSHOT" | string;
+  action_source: "NONE" | "SYSTEM_RECOMMENDED" | "OPERATOR_WHAT_IF" | string;
+  advisory_only: boolean;
+  advisory_notice: string;
+  system_suggestion?: string;
+  system_suggestion_basis?: string[];
+  issue_time?: string | null;
+  current_tra_mw?: number | null;
+  current_tra_observed_at?: string | null;
+  current_tra_age_seconds?: number | null;
+  current_tra_source: string;
+  current_tra_quality_status: string;
+  current_tra_projection_basis: string;
+  required_reserve_mw: number;
+  target_risk_probability: number;
+  baseline_peak_risk_percent: number;
+  post_plan_peak_risk_percent: number;
+  risk_reduction_percentage_points: number;
+  first_unprotected_horizon_minutes?: number | null;
+  first_unprotected_at?: string | null;
+  interim_unmitigated_risk: boolean;
+  unresolved_capacity_mw: number;
+  block_definitions: GenerationBlockDefinition[];
+  recommended_actions: CapacityStartAction[];
+  evaluated_actions: CapacityStartAction[];
+  profile: CapacityPlanHorizon[];
+  configuration_status: string;
+  warnings: string[];
+}
+
 export interface DashboardSnapshot {
   snapshot_id?: string;
   weather: WeatherData;
@@ -430,6 +515,7 @@ export interface DashboardSnapshot {
   model_status?: ModelStatus | null;
   scada_status?: ScadaStatus | null;
   replay?: ReplayDashboard | null;
+  capacity_plan?: CapacityPlan | null;
 }
 
 // Backwards-compatible aliases for existing component imports.

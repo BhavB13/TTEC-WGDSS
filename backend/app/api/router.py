@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.api.capacity_plan import router as capacity_plan_router
 from app.api.dashboard import router as dashboard_router
 from app.api.generation import router as generation_router
 from app.api.health import router as health_router
@@ -9,6 +10,11 @@ from app.api.storm import router as storm_router
 from app.api.weather import router as weather_router
 
 api_router = APIRouter()
+
+api_router.include_router(
+    capacity_plan_router,
+    tags=["capacity-plan"],
+)
 
 api_router.include_router(
     health_router,
