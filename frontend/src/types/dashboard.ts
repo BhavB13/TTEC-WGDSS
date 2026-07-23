@@ -8,6 +8,53 @@ export interface GenerationUnit {
   is_dispatchable: boolean;
 }
 
+export interface TemperatureSample {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  location_type: string;
+  notes: string;
+  demand_weight: number;
+  effective_weight_percent: number;
+  temperature_c: number;
+  humidity_percent?: number | null;
+  rainfall_mm_hr?: number | null;
+  cloud_cover_percent?: number | null;
+  wind_speed_kmh?: number | null;
+  wind_direction_deg?: number | null;
+  pressure_hpa?: number | null;
+  precipitation_probability_percent?: number | null;
+  timestamp: string | null;
+  provider_name: string;
+  status: string;
+}
+
+export interface TemperatureAggregation {
+  label: string;
+  method: string;
+  policy_version: string;
+  policy_status: string;
+  status: string;
+  source_name: string;
+  weighted_average_c: number;
+  weighted_humidity_percent?: number | null;
+  weighted_rainfall_mm_hr?: number | null;
+  weighted_cloud_cover_percent?: number | null;
+  weighted_wind_speed_kmh?: number | null;
+  weighted_wind_direction_deg?: number | null;
+  weighted_pressure_hpa?: number | null;
+  weighted_precipitation_probability_percent?: number | null;
+  minimum_c: number;
+  maximum_c: number;
+  spread_c: number;
+  sample_count: number;
+  expected_sample_count: number;
+  weight_coverage_percent: number;
+  field_weight_coverage_percent?: Record<string, number>;
+  samples: TemperatureSample[];
+}
+
 export interface WeatherData {
   timestamp: string | null;
   temperature_c: number;
@@ -15,12 +62,14 @@ export interface WeatherData {
   rainfall_mm_hr: number;
   cloud_cover_percent: number;
   wind_speed_kmh: number;
+  wind_direction_deg?: number | null;
+  pressure_hpa?: number | null;
   weather_condition: string;
   heat_index_c: number;
   rain_severity: string;
-  wind_direction_deg?: number | null;
-  pressure_hpa?: number | null;
   provider_name: string;
+  temperature_aggregation?: TemperatureAggregation | null;
+  weather_aggregation?: TemperatureAggregation | null;
 }
 
 export interface ForecastData {
@@ -30,6 +79,8 @@ export interface ForecastData {
   rainfall_mm_hr: number;
   cloud_cover_percent: number;
   wind_speed_kmh: number;
+  wind_direction_deg?: number | null;
+  pressure_hpa?: number | null;
   weather_condition: string;
   heat_index_c: number;
   precipitation_probability_percent: number;
@@ -42,6 +93,8 @@ export interface ForecastData {
   cloud_cover_spread_percent?: number;
   source_sync_status?: "COMPLETE" | "DEGRADED";
   field_source_counts?: Record<string, number>;
+  temperature_aggregation?: TemperatureAggregation | null;
+  weather_aggregation?: TemperatureAggregation | null;
 }
 
 export interface ForecastBundle {
@@ -247,6 +300,8 @@ export interface LoadForecastPoint {
   forecast_demand_mw: number;
   historical_average_mw: number;
   actual_demand_mw?: number | null;
+  actual_temperature_c?: number | null;
+  forecast_temperature_c?: number | null;
   uncertainty_mw: number;
   weather_impact_mw: number;
   weather_confidence: number;

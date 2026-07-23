@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from threading import Lock
-from typing import Any
+from typing import Any, Sequence
 from zoneinfo import ZoneInfo
 
 import requests
@@ -25,7 +25,7 @@ class OpenMeteoDailyLimitError(RuntimeError):
 
 @dataclass
 class _CachedResponse:
-    payload: dict[str, Any]
+    payload: dict[str, Any] | list[dict[str, Any]]
     expires_at: float
 
 
@@ -78,6 +78,174 @@ class OpenMeteoProvider(WeatherProvider):
             days,
         )
 
+    async def get_current_temperature_samples(
+        self,
+        coordinates: Sequence[tuple[float, float]],
+    ) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(
+            self._get_current_temperature_samples_sync,
+            coordinates,
+        )
+
+    async def get_temperature_forecast_samples(
+        self,
+        coordinates: Sequence[tuple[float, float]],
+        forecast_hours: int,
+    ) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(
+            self._get_temperature_forecast_samples_sync,
+            coordinates,
+            forecast_hours,
+        )
+
+    def _get_current_temperature_samples_sync(
+        self,
+        coordinates: Sequence[tuple[float, float]],
+    ) -> list[dict[str, Any]]:
+        weather_fields = [
+            "temperature_2m",
+            "relative_humidity_2m",
+            "precipitation",
+            "cloud_cover",
+            "wind_speed_10m",
+            "wind_direction_10m",
+            "surface_pressure",
+        ]
+        payloads = self._request_location_payloads(
+            coordinates,
+            {
+                "current": ",".join(weather_fields),
+                "hourly": ",".join(weather_fields),
+                "forecast_hours": 1,
+                "timezone": "America/Port_of_Spain",
+                "temperature_unit": "celsius",
+                "wind_speed_unit": "kmh",
+                "precipitation_unit": "mm",
+                **({"models": self.model} if self.model else {}),
+            },
+        )
+        samples: list[dict[str, Any]] = []
+        for payload in payloads:
+            current = payload.get("current") or {}
+            if current.get("temperature_2m") is None:
+                hourly = payload.get("hourly") or {}
+                index = self._nearest_hour_index(hourly.get("time", []))
+                current = {
+                    field: self._safe_list_value(hourly.get(field, []), index)
+                    for field in weather_fields
+                }
+                current["time"] = self._safe_list_value(
+                    hourly.get("time", []), index
+                )
+            samples.append(
+                {
+                    "timestamp": current.get("time"),
+                    "temperature_c": current.get("temperature_2m"),
+                    "humidity_percent": current.get("relative_humidity_2m"),
+                    "rainfall_mm_hr": current.get("precipitation"),
+                    "cloud_cover_percent": current.get("cloud_cover"),
+                    "wind_speed_kmh": current.get("wind_speed_10m"),
+                    "wind_direction_deg": current.get("wind_direction_10m"),
+                    "pressure_hpa": current.get("surface_pressure"),
+                    "latitude": payload.get("latitude"),
+                    "longitude": payload.get("longitude"),
+                }
+            )
+        return samples
+
+    def _get_temperature_forecast_samples_sync(
+        self,
+        coordinates: Sequence[tuple[float, float]],
+        forecast_hours: int,
+    ) -> list[dict[str, Any]]:
+        weather_fields = [
+            "temperature_2m",
+            "relative_humidity_2m",
+            "precipitation",
+            "precipitation_probability",
+            "cloud_cover",
+            "wind_speed_10m",
+            "wind_direction_10m",
+            "surface_pressure",
+        ]
+        payloads = self._request_location_payloads(
+            coordinates,
+            {
+                "hourly": ",".join(weather_fields),
+                "forecast_hours": max(1, min(forecast_hours, 16 * 24)),
+                "timezone": "America/Port_of_Spain",
+                "temperature_unit": "celsius",
+                "wind_speed_unit": "kmh",
+                "precipitation_unit": "mm",
+                **({"models": self.model} if self.model else {}),
+            },
+        )
+        locations: list[dict[str, Any]] = []
+        for payload in payloads:
+            hourly = payload.get("hourly") or {}
+            periods = [
+                {
+                    "forecast_timestamp": timestamp,
+                    "temperature_c": self._safe_list_value(
+                        hourly.get("temperature_2m", []),
+                        index,
+                    ),
+                    "humidity_percent": self._safe_list_value(
+                        hourly.get("relative_humidity_2m", []), index
+                    ),
+                    "rainfall_mm_hr": self._safe_list_value(
+                        hourly.get("precipitation", []), index
+                    ),
+                    "cloud_cover_percent": self._safe_list_value(
+                        hourly.get("cloud_cover", []), index
+                    ),
+                    "wind_speed_kmh": self._safe_list_value(
+                        hourly.get("wind_speed_10m", []), index
+                    ),
+                    "wind_direction_deg": self._safe_list_value(
+                        hourly.get("wind_direction_10m", []), index
+                    ),
+                    "pressure_hpa": self._safe_list_value(
+                        hourly.get("surface_pressure", []), index
+                    ),
+                    "precipitation_probability_percent": self._safe_list_value(
+                        hourly.get("precipitation_probability", []), index
+                    ),
+                }
+                for index, timestamp in enumerate(hourly.get("time", []))
+            ]
+            locations.append(
+                {
+                    "latitude": payload.get("latitude"),
+                    "longitude": payload.get("longitude"),
+                    "periods": periods,
+                }
+            )
+        return locations
+
+    def _request_location_payloads(
+        self,
+        coordinates: Sequence[tuple[float, float]],
+        params: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        if not coordinates:
+            return []
+        payload = self._request_json(
+            params={
+                "latitude": ",".join(str(latitude) for latitude, _ in coordinates),
+                "longitude": ",".join(str(longitude) for _, longitude in coordinates),
+                "cell_selection": "land",
+                **params,
+            }
+        )
+        if isinstance(payload, list):
+            return [
+                location for location in payload if isinstance(location, dict)
+            ]
+        if isinstance(payload, dict):
+            return [payload]
+        raise RuntimeError("Open-Meteo returned an invalid multi-location payload")
+
     def _get_current_weather_sync(
         self,
         latitude: float,
@@ -112,6 +280,8 @@ class OpenMeteoProvider(WeatherProvider):
                 **({"models": self.model} if self.model else {}),
             }
         )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Open-Meteo returned an invalid current payload")
         current = payload.get("current") or {}
         hourly = payload.get("hourly") or {}
         if not current:
@@ -185,7 +355,8 @@ class OpenMeteoProvider(WeatherProvider):
                 **({"models": self.model} if self.model else {}),
             }
         )
-
+        if not isinstance(payload, dict):
+            raise RuntimeError("Open-Meteo returned an invalid forecast payload")
         hourly = payload.get("hourly") or {}
         times = hourly.get("time", [])
         temperatures = hourly.get("temperature_2m", [])
@@ -244,7 +415,10 @@ class OpenMeteoProvider(WeatherProvider):
             return f"Open-Meteo {self.model}"
         return "Open-Meteo Best Match"
 
-    def _request_json(self, params: dict[str, Any]) -> dict[str, Any]:
+    def _request_json(
+        self,
+        params: dict[str, Any],
+    ) -> dict[str, Any] | list[dict[str, Any]]:
         url = self.base_url
         last_error: Exception | None = None
         cache_key = tuple(sorted((key, str(value)) for key, value in params.items()))

@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.weather import TemperatureAggregationResponse
+
 
 class ForecastResponse(BaseModel):
     forecast_timestamp: datetime
@@ -11,6 +13,8 @@ class ForecastResponse(BaseModel):
     rainfall_mm_hr: float
     cloud_cover_percent: float
     wind_speed_kmh: float
+    wind_direction_deg: float | None = None
+    pressure_hpa: float | None = None
     weather_condition: str
     heat_index_c: float
     precipitation_probability_percent: float
@@ -23,3 +27,5 @@ class ForecastResponse(BaseModel):
     field_source_counts: dict[str, int] = Field(default_factory=dict)
     temperature_spread_c: float = 0.0
     cloud_cover_spread_percent: float = 0.0
+    temperature_aggregation: TemperatureAggregationResponse | None = None
+    weather_aggregation: TemperatureAggregationResponse | None = None

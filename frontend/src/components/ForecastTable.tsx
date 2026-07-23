@@ -1,4 +1,5 @@
 import type { ForecastData } from "../types/dashboard";
+import { getTemperatureMetricLabel } from "../utils/weatherTemperature";
 
 interface ForecastTableProps {
   forecast: ForecastData[];
@@ -9,6 +10,10 @@ export default function ForecastTable({
   forecast,
   className = "",
 }: ForecastTableProps) {
+  const temperatureHeader = forecast[0]
+    ? getTemperatureMetricLabel(forecast[0], true)
+    : "Temp";
+
   return (
     <div className={`rounded-lg border border-slate-800 bg-slate-900/80 p-4 ${className}`}>
       <div className="mb-4 flex items-start justify-between gap-3">
@@ -27,7 +32,7 @@ export default function ForecastTable({
           <thead className="bg-slate-950/70 text-slate-300">
             <tr>
               <th className="px-3 py-2 font-medium">Time</th>
-              <th className="px-3 py-2 font-medium">Temp</th>
+              <th className="px-3 py-2 font-medium">{temperatureHeader}</th>
               <th className="px-3 py-2 font-medium">Humidity</th>
               <th className="px-3 py-2 font-medium">Rain</th>
               <th className="px-3 py-2 font-medium">Wind</th>

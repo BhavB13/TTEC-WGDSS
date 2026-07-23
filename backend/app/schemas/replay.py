@@ -39,6 +39,8 @@ class LoadForecastPointResponse(BaseModel):
     forecast_demand_mw: float
     historical_average_mw: float
     actual_demand_mw: float | None = None
+    actual_temperature_c: float | None = None
+    forecast_temperature_c: float | None = None
     uncertainty_mw: float
     weather_impact_mw: float = 0.0
     weather_confidence: float = 1.0

@@ -402,6 +402,12 @@ export const replayDashboardFixture: DashboardSnapshot = {
     timestamp: "2025-06-01T08:00:00-04:00",
     source_provider: "SyntheticReplayProvider",
   },
+  forecast: {
+    items: dashboardFixture.forecast.items.map((period, index) => ({
+      ...period,
+      forecast_timestamp: `2025-06-01T${String(9 + index).padStart(2, "0")}:00:00-04:00`,
+    })),
+  },
   replay: {
     status: {
       mode: "simulation",
@@ -426,6 +432,8 @@ export const replayDashboardFixture: DashboardSnapshot = {
       forecast_demand_mw: 800 + hour * 10,
       historical_average_mw: 790 + hour * 9,
       actual_demand_mw: hour <= 8 ? 795 + hour * 10 : null,
+      actual_temperature_c: hour <= 8 ? 25 + hour * 0.4 : null,
+      forecast_temperature_c: hour > 8 ? 28.6 + (hour - 9) * 0.15 : null,
       uncertainty_mw: 20,
       weather_impact_mw: 8,
       weather_confidence: 0.9,

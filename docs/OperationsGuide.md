@@ -43,12 +43,46 @@ FORECAST_EXTRA_HOLIDAY_DATES=2026-03-20,2026-11-09
 Dates must use `YYYY-MM-DD`. This setting changes calendar features and
 similar-period classification; it does not retrieve a calendar API.
 
-The default weather site is Piarco (`10.5953, -61.3372`, 12 m elevation), which
-avoids applying a mountainous grid-cell elevation to the main Trinidad load
-corridor. Open-Meteo Best Match supplies current conditions and the primary
-hourly forecast. MET Norway Locationforecast and an explicit NOAA GFS model
-stream cross-check each hour. Set `MET_NORWAY_USER_AGENT` to an application
-identifier with an operations contact or project URL before deployment.
+Current conditions and forecasts use one batch Open-Meteo request covering
+eleven Trinidad and Tobago points. Temperature, humidity, rainfall, cloud cover, wind speed,
+pressure, and precipitation probability are calculated with the same
+demand-exposure weights. Wind direction uses the same weights with a circular
+mean so directions around north are combined correctly. Heat index,
+weather condition, and rain severity are then derived from those weighted
+inputs. Dense residential and commercial centers carry more weight than the
+Point Lisas industrial reference. This is a configurable
+`PROTOTYPE_DEMAND_EXPOSURE_V1` index, not an approved population, customer-count,
+or T&TEC feeder-load allocation.
+
+| Sampling point | Prototype weight | Role |
+| --- | ---: | --- |
+| Port of Spain | 1.60 | Dense commercial/residential |
+| Chaguanas | 1.50 | Dense residential/commercial |
+| San Fernando | 1.40 | Dense residential/commercial |
+| Arima | 1.25 | Residential/commercial |
+| Diego Martin | 1.20 | Dense residential |
+| Piarco / East-West Corridor | 1.10 | Mixed residential/commercial |
+| Penal / Debe | 0.90 | Residential/mixed |
+| Sangre Grande | 0.80 | Regional residential |
+| Mayaro | 0.30 | Lower-density residential |
+| Scarborough | 0.50 | Tobago commercial/residential |
+| Point Lisas | 0.50 | Industrial reference |
+
+The aggregate is used only when at least 70% of configured sampling weight is
+available. Below that threshold, the service retains the provider's
+representative-site/consensus weather and does not mislabel it as an aggregate.
+The existing temperature-named settings are retained for configuration
+compatibility: `TEMPERATURE_AGGREGATION_ENABLED`,
+`TEMPERATURE_AGGREGATION_MIN_WEIGHT_COVERAGE_PERCENT`, and
+`TEMPERATURE_AGGREGATION_POLICY_STATUS`. T&TEC should replace prototype weights
+with approved customer/load-zone exposure factors when those become available.
+
+Open-Meteo Best Match supplies current conditions and the primary hourly
+forecast. MET Norway Locationforecast and an explicit NOAA GFS model stream
+cross-check each hour. The spatial temperature pass replaces only temperature
+and the derived heat index; the other fields retain the existing provider
+consensus. Set `MET_NORWAY_USER_AGENT` to an application identifier with an
+operations contact or project URL before deployment.
 
 Open-Meteo responses are cached for five minutes and protected by a process-wide
 9,000-request daily safety ceiling. `GET /api/v1/health` reports current usage.
@@ -129,6 +163,9 @@ Forecast periods are a rolling horizon beginning at the current hour. The UI
 shows the next six periods strictly after the current Trinidad time and refreshes
 the snapshot every five minutes. Imported SCADA temperature is historical
 calibration evidence and is never substituted for a live weather observation.
+Historical replay identifies `MHO132 AVERAGE AMBIENT TEMPERATURE` as a source
+aggregate, but does not claim that the SCADA tag uses the prototype spatial
+weights; its exact sensor composition requires T&TEC/OSI confirmation.
 
 Dashboard requests persist weather, grid, and probability observations when
 `SNAPSHOT_PERSISTENCE_ENABLED=true`. Persistence failures degrade the quality

@@ -20,7 +20,10 @@ function Invoke-CheckedCommand {
     )
 
     & $Command
-    if ($LASTEXITCODE -ne 0) {
+    $commandSucceeded = $?
+    $exitCodeVariable = Get-Variable -Name LASTEXITCODE -ErrorAction SilentlyContinue
+    $exitCode = if ($null -eq $exitCodeVariable) { 0 } else { $exitCodeVariable.Value }
+    if (-not $commandSucceeded -or $exitCode -ne 0) {
         throw $FailureMessage
     }
 }
@@ -79,8 +82,19 @@ if (-not (Test-Path $backendPython)) {
     } "Backend dependency installation failed."
 }
 else {
-    & $backendPython -c "import fastapi, sqlalchemy, uvicorn" 2>$null
-    if ($LASTEXITCODE -ne 0) {
+    $dependencyCheckSucceeded = $true
+    try {
+        & $backendPython -c "import fastapi, sqlalchemy, uvicorn" 2>$null
+        $dependencyCheckSucceeded = $?
+        $exitCodeVariable = Get-Variable -Name LASTEXITCODE -ErrorAction SilentlyContinue
+        if ($null -ne $exitCodeVariable -and $exitCodeVariable.Value -ne 0) {
+            $dependencyCheckSucceeded = $false
+        }
+    }
+    catch {
+        $dependencyCheckSucceeded = $false
+    }
+    if (-not $dependencyCheckSucceeded) {
         Invoke-CheckedCommand {
             & $backendPython -m pip install -r $requirementsFile
         } "Backend dependency repair failed."

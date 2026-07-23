@@ -1,4 +1,8 @@
 import type { WeatherData } from "../types/dashboard";
+import {
+  getTemperatureAggregationSummary,
+  getTemperatureMetricLabel,
+} from "../utils/weatherTemperature";
 
 interface WeatherCardProps {
   weather: WeatherData;
@@ -9,6 +13,10 @@ export default function WeatherCard({
   weather,
   className = "",
 }: WeatherCardProps) {
+  const temperatureSummary = getTemperatureAggregationSummary(
+    weather.weather_aggregation ?? weather.temperature_aggregation,
+  );
+
   return (
     <div className={`rounded-lg border border-slate-800 bg-slate-900/80 p-4 ${className}`}>
       <div className="mb-4 flex items-start justify-between gap-3">
@@ -26,13 +34,21 @@ export default function WeatherCard({
       </div>
 
       <div className="grid grid-cols-2 gap-3 text-sm">
-        <Metric label="Temperature" value={`${weather.temperature_c.toFixed(1)}°C`} />
+        <Metric
+          label={getTemperatureMetricLabel(weather)}
+          value={`${weather.temperature_c.toFixed(1)}°C`}
+        />
         <Metric label="Humidity" value={`${weather.humidity_percent.toFixed(0)}%`} />
         <Metric label="Rainfall" value={`${weather.rainfall_mm_hr.toFixed(1)} mm/hr`} />
         <Metric label="Cloud Cover" value={`${weather.cloud_cover_percent.toFixed(0)}%`} />
         <Metric label="Wind Speed" value={`${weather.wind_speed_kmh.toFixed(1)} km/h`} />
         <Metric label="Heat Index" value={`${weather.heat_index_c.toFixed(1)}°C`} />
       </div>
+      {temperatureSummary ? (
+        <p className="mt-3 text-center text-xs text-slate-400">
+          {temperatureSummary}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -14,6 +14,7 @@ import {
   controlReplay,
   evaluateCapacityPlan,
   getDashboardSnapshot,
+  getLiveWeatherDisplay,
 } from "../services/api";
 import type {
   CalibrationSnapshot,
@@ -21,14 +22,19 @@ import type {
   CapacityStartActionInput,
   DashboardSnapshot,
   DemandForecastBundle,
+  DemandForecastHorizon,
   ForecastData,
+  LoadForecastPoint,
   ModelStatus,
   ScadaStatus,
   ReplayDashboard,
 } from "../types/dashboard";
+import { getTemperatureMetricLabel } from "../utils/weatherTemperature";
 
 type LoadState = "loading" | "ready" | "error";
 type ThemeMode = "dark" | "light";
+type WeatherDisplayMode = "replay" | "live";
+type LiveWeatherState = "idle" | "loading" | "ready" | "error";
 type DashboardTab =
   | "home"
   | "operations"
@@ -110,6 +116,16 @@ export default function Dashboard() {
   const [capacityPlan, setCapacityPlan] = useState<CapacityPlan | null>(null);
   const [capacityPlanBusy, setCapacityPlanBusy] = useState(false);
   const [capacityPlanError, setCapacityPlanError] = useState("");
+  const [weatherDisplayMode, setWeatherDisplayMode] =
+    useState<WeatherDisplayMode>("replay");
+  const [liveWeatherState, setLiveWeatherState] =
+    useState<LiveWeatherState>("idle");
+  const [liveWeather, setLiveWeather] = useState<{
+    weather: DashboardSnapshot["weather"];
+    forecast: ForecastData[];
+    fetchedAt: string;
+  } | null>(null);
+  const [liveWeatherError, setLiveWeatherError] = useState("");
 
   const loadSnapshot = useCallback(
     async (
@@ -207,6 +223,32 @@ export default function Dashboard() {
     setCapacityPlanError("");
   }, [snapshot?.capacity_plan]);
 
+  const loadLiveWeather = useCallback(async () => {
+    setLiveWeatherState("loading");
+    setLiveWeatherError("");
+    try {
+      const data = await getLiveWeatherDisplay();
+      setLiveWeather(data);
+      setLiveWeatherState("ready");
+    } catch (cause) {
+      setLiveWeatherState("error");
+      setLiveWeatherError(
+        cause instanceof Error ? cause.message : "Live weather is unavailable",
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== "weather" || weatherDisplayMode !== "live") {
+      return undefined;
+    }
+    void loadLiveWeather();
+    const interval = window.setInterval(() => {
+      void loadLiveWeather();
+    }, 5 * 60 * 1000);
+    return () => window.clearInterval(interval);
+  }, [activeTab, loadLiveWeather, weatherDisplayMode]);
+
   useEffect(() => {
     try {
       window.localStorage.setItem("wgdss-theme", theme);
@@ -274,6 +316,15 @@ export default function Dashboard() {
     ? new Date(snapshot.replay.status.cursor_at)
     : new Date();
   const upcomingForecastItems = getUpcomingForecastItems(forecastItems, forecastReference, 6);
+  const liveUpcomingForecastItems = getUpcomingForecastItems(
+    liveWeather?.forecast ?? [],
+    new Date(),
+    6,
+  );
+  const hourlyDemandForecast = buildHourlyDemandForecast(
+    snapshot.replay?.full_day_load_forecast ?? [],
+    demandForecast?.horizons ?? [],
+  );
 
   return (
     <Shell
@@ -302,6 +353,7 @@ export default function Dashboard() {
             {snapshot.replay ? (
               <ReplayControlBar
                 status={snapshot.replay.status}
+                sourceTimestamp={scadaStatus?.latest_snapshot}
                 busy={replayBusy}
                 onControl={handleReplayControl}
               />
@@ -334,9 +386,30 @@ export default function Dashboard() {
               {activeTab === "weather" ? (
                 <WorkspacePage>
                   <WeatherTab
-                    weather={weather}
-                    forecastItems={upcomingForecastItems}
-                    qualityStatus={dataQuality.weather_status}
+                    weather={
+                      weatherDisplayMode === "live" && liveWeather
+                        ? liveWeather.weather
+                        : weather
+                    }
+                    forecastItems={
+                      weatherDisplayMode === "live" && liveWeather
+                        ? liveUpcomingForecastItems
+                        : upcomingForecastItems
+                    }
+                    qualityStatus={
+                      weatherDisplayMode === "live"
+                        ? liveWeatherState === "ready"
+                          ? "LIVE TEST DATA"
+                          : liveWeatherState.toUpperCase()
+                        : dataQuality.weather_status
+                    }
+                    mode={weatherDisplayMode}
+                    liveState={liveWeatherState}
+                    liveError={liveWeatherError}
+                    fetchedAt={liveWeather?.fetchedAt ?? null}
+                    onModeChange={setWeatherDisplayMode}
+                    onRefresh={loadLiveWeather}
+                    hourlyDemandForecast={hourlyDemandForecast}
                   />
                 </WorkspacePage>
               ) : null}
@@ -578,7 +651,10 @@ function ReplayWeatherPanel({
     <PanelCard title="Weather · Current + 6 Hours" className="h-full min-h-0">
       <div className="flex h-full min-h-0 flex-col gap-2">
         <div className="grid grid-cols-3 gap-1.5">
-          <MiniMetric label="Temperature" value={`${weather.temperature_c.toFixed(1)}°C`} />
+          <MiniMetric
+            label={getTemperatureMetricLabel(weather, true)}
+            value={`${weather.temperature_c.toFixed(1)}°C`}
+          />
           <MiniMetric label="Humidity" value={`${weather.humidity_percent.toFixed(0)}%`} />
           <MiniMetric label="Rain" value={`${weather.rainfall_mm_hr.toFixed(1)} mm/h`} />
           <MiniMetric label="Wind" value={`${weather.wind_speed_kmh.toFixed(0)} km/h`} />
@@ -590,7 +666,11 @@ function ReplayWeatherPanel({
             <thead className="sticky top-0 bg-slate-950 text-slate-400">
               <tr>
                 <th className="px-2 py-1.5 font-medium">Time</th>
-                <th className="px-2 py-1.5 font-medium">Temp</th>
+                <th className="px-2 py-1.5 font-medium">
+                  {forecastItems[0]
+                    ? getTemperatureMetricLabel(forecastItems[0], true)
+                    : "Temp"}
+                </th>
                 <th className="px-2 py-1.5 font-medium">Rain</th>
                 <th className="px-2 py-1.5 font-medium">Cloud</th>
               </tr>
@@ -783,7 +863,10 @@ function WeatherOverviewCard({
       </div>
 
       <div className="mt-2 grid min-h-0 flex-1 auto-rows-fr grid-cols-2 gap-1.5">
-        <MiniMetric label="Temperature" value={`${weather.temperature_c.toFixed(1)}°C`} />
+        <MiniMetric
+          label={getTemperatureMetricLabel(weather, true)}
+          value={`${weather.temperature_c.toFixed(1)}°C`}
+        />
         <MiniMetric label="Humidity" value={`${weather.humidity_percent.toFixed(0)}%`} />
         <MiniMetric label="Rainfall" value={`${weather.rainfall_mm_hr.toFixed(1)} mm/hr`} />
         <MiniMetric label="Wind Speed" value={`${weather.wind_speed_kmh.toFixed(1)} km/h`} />
@@ -1020,41 +1103,133 @@ function WeatherTab({
   weather,
   forecastItems,
   qualityStatus,
+  mode,
+  liveState,
+  liveError,
+  fetchedAt,
+  onModeChange,
+  onRefresh,
+  hourlyDemandForecast,
 }: {
   weather: DashboardSnapshot["weather"];
   forecastItems: ForecastData[];
   qualityStatus: string;
+  mode: WeatherDisplayMode;
+  liveState: LiveWeatherState;
+  liveError: string;
+  fetchedAt: string | null;
+  onModeChange: (mode: WeatherDisplayMode) => void;
+  onRefresh: () => void;
+  hourlyDemandForecast: ReadonlyMap<number, number>;
 }) {
   return (
-    <div className="grid min-h-0 w-full min-w-0 flex-1 gap-2.5 xl:grid-cols-[minmax(0,0.35fr)_minmax(0,0.65fr)]">
-      <CurrentConditions
-        weather={weather}
-        qualityStatus={qualityStatus}
-        className="h-full min-h-0 w-full min-w-0"
-      />
-      <PanelCard title="Next 6 Hours" className="h-full min-h-0 w-full min-w-0">
-        <div className="flex h-full min-h-0 flex-col gap-2">
-          {forecastItems.length > 0 ? (
-            <div className="grid min-h-0 flex-1 auto-rows-fr gap-1.5 overflow-auto">
-              {forecastItems.map((period) => (
-                <GuidanceForecastRow
-                  key={period.forecast_timestamp}
-                  period={period}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-slate-700 bg-slate-950/40 px-4 text-center text-sm text-slate-400">
-              Six-hour weather guidance is temporarily unavailable.
-            </div>
-          )}
-
-          <ForecastAttribution
-            forecastItems={forecastItems}
-            updatedAt={weather.timestamp}
-          />
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-cyan-500/15 bg-slate-950/55 px-2.5 py-2">
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-lg border border-slate-700 bg-slate-950/80 p-0.5" role="group" aria-label="Weather display mode">
+            <button
+              type="button"
+              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                mode === "replay"
+                  ? "bg-cyan-500/20 text-cyan-200"
+                  : "text-slate-400 hover:bg-slate-800 hover:text-white"
+              }`}
+              aria-pressed={mode === "replay"}
+              onClick={() => onModeChange("replay")}
+            >
+              Replay Weather
+            </button>
+            <button
+              type="button"
+              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                mode === "live"
+                  ? "bg-emerald-500/20 text-emerald-200"
+                  : "text-slate-400 hover:bg-slate-800 hover:text-white"
+              }`}
+              aria-pressed={mode === "live"}
+              onClick={() => onModeChange("live")}
+            >
+              Live Weather Test
+            </button>
+          </div>
+          <span className="text-[10px] uppercase tracking-[0.14em] text-slate-400">
+            {mode === "live"
+              ? "Display only · Trinidad weighted network"
+              : "Historical replay source"}
+          </span>
         </div>
-      </PanelCard>
+
+        {mode === "live" ? (
+          <div className="flex items-center gap-2 text-[10px] text-slate-400">
+            <span>
+              {liveState === "loading"
+                ? "Updating live providers..."
+                : fetchedAt
+                  ? `Fetched ${formatTimestamp(fetchedAt)}`
+                  : "Not yet fetched"}
+            </span>
+            <button
+              type="button"
+              className="rounded-md border border-cyan-500/30 px-2 py-1 font-semibold text-cyan-200 hover:bg-cyan-500/10 disabled:cursor-wait disabled:opacity-50"
+              disabled={liveState === "loading"}
+              onClick={onRefresh}
+            >
+              Refresh
+            </button>
+          </div>
+        ) : null}
+      </div>
+
+      {mode === "live" && liveState === "error" && !forecastItems.length ? (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center rounded-2xl border border-rose-500/25 bg-rose-950/15 px-6 text-center">
+          <p className="font-semibold text-rose-200">Live weather is temporarily unavailable.</p>
+          <p className="mt-1 text-sm text-slate-400">{liveError}</p>
+          <button
+            type="button"
+            className="mt-3 rounded-lg border border-cyan-500/30 px-3 py-1.5 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/10"
+            onClick={onRefresh}
+          >
+            Retry live weather
+          </button>
+        </div>
+      ) : (
+        <div className="grid min-h-0 w-full min-w-0 flex-1 gap-2.5 xl:grid-cols-[minmax(0,0.35fr)_minmax(0,0.65fr)]">
+          <CurrentConditions
+            weather={weather}
+            qualityStatus={qualityStatus}
+            className="h-full min-h-0 w-full min-w-0"
+          />
+          <PanelCard title="Next 6 Hours · Weather + Demand" className="h-full min-h-0 w-full min-w-0">
+            <div className="flex h-full min-h-0 flex-col gap-2">
+              {forecastItems.length > 0 ? (
+                <div className="grid min-h-0 flex-1 auto-rows-fr gap-1.5 overflow-auto">
+                  {forecastItems.map((period) => (
+                    <GuidanceForecastRow
+                      key={period.forecast_timestamp}
+                      period={period}
+                      demandForecastMw={findHourlyDemandForecast(
+                        hourlyDemandForecast,
+                        period.forecast_timestamp,
+                      )}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-slate-700 bg-slate-950/40 px-4 text-center text-sm text-slate-400">
+                  {liveState === "loading"
+                    ? "Loading live weather consensus..."
+                    : "Six-hour weather guidance is temporarily unavailable."}
+                </div>
+              )}
+
+              <ForecastAttribution
+                forecastItems={forecastItems}
+                updatedAt={weather.timestamp}
+              />
+            </div>
+          </PanelCard>
+        </div>
+      )}
     </div>
   );
 }
@@ -1765,11 +1940,17 @@ function PlanDatum({
   );
 }
 
-function GuidanceForecastRow({ period }: { period: ForecastData }) {
+function GuidanceForecastRow({
+  period,
+  demandForecastMw,
+}: {
+  period: ForecastData;
+  demandForecastMw: number | null;
+}) {
   const verified = (period.source_count ?? 1) > 1;
 
   return (
-    <div className="grid min-h-[3.75rem] min-w-0 grid-cols-[minmax(7.5rem,1.35fr)_repeat(6,minmax(0,1fr))] items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-950/60 px-2.5 py-1.5 shadow-inner shadow-black/20">
+    <div className="grid min-h-[3.75rem] min-w-0 grid-cols-[minmax(6.75rem,1.25fr)_repeat(7,minmax(0,1fr))] items-center gap-1 rounded-xl border border-slate-800 bg-slate-950/60 px-2 py-1.5 shadow-inner shadow-black/20">
       <div className="min-w-0">
         <p className="truncate text-[0.8rem] font-semibold text-white">
           {formatGuidanceForecastTimestamp(period.forecast_timestamp)}
@@ -1783,7 +1964,24 @@ function GuidanceForecastRow({ period }: { period: ForecastData }) {
           {verified ? `${period.source_count} sources` : "single source"}
         </p>
       </div>
-      <GuidanceDatum label="Temp" value={`${period.temperature_c.toFixed(0)}°C`} />
+      <GuidanceDatum
+        label="Demand"
+        value={
+          demandForecastMw == null
+            ? "--"
+            : `${Math.round(demandForecastMw).toLocaleString()} MW`
+        }
+        ariaLabel={
+          demandForecastMw == null
+            ? "Forecast demand unavailable"
+            : `Forecast demand ${Math.round(demandForecastMw)} MW`
+        }
+        emphasis
+      />
+      <GuidanceDatum
+        label={getTemperatureMetricLabel(period, true)}
+        value={`${period.temperature_c.toFixed(0)}°C`}
+      />
       <GuidanceDatum label="Humidity" value={`${period.humidity_percent.toFixed(0)}%`} />
       <GuidanceDatum label="Rain" value={`${period.rainfall_mm_hr.toFixed(1)} mm/h`} />
       <GuidanceDatum label="Cloud" value={`${period.cloud_cover_percent.toFixed(0)}%`} />
@@ -1796,11 +1994,30 @@ function GuidanceForecastRow({ period }: { period: ForecastData }) {
   );
 }
 
-function GuidanceDatum({ label, value }: { label: string; value: string }) {
+function GuidanceDatum({
+  label,
+  value,
+  ariaLabel,
+  emphasis = false,
+}: {
+  label: string;
+  value: string;
+  ariaLabel?: string;
+  emphasis?: boolean;
+}) {
   return (
-    <div className="min-w-0 border-l border-slate-800 px-1 text-center">
+    <div
+      className={`min-w-0 border-l px-1 text-center ${
+        emphasis
+          ? "border-cyan-500/35 bg-cyan-500/[0.04]"
+          : "border-slate-800"
+      }`}
+      aria-label={ariaLabel}
+    >
       <p className="text-[8px] uppercase tracking-[0.1em] text-slate-500">{label}</p>
-      <p className="mt-0.5 break-words text-[0.72rem] font-semibold leading-tight text-slate-100">
+      <p className={`mt-0.5 break-words text-[0.72rem] font-semibold leading-tight ${
+        emphasis ? "text-cyan-100" : "text-slate-100"
+      }`}>
         {value}
       </p>
     </div>
@@ -1852,19 +2069,27 @@ function AnalyticsTab({
   theme: ThemeMode;
   replay: ReplayDashboard | null;
 }) {
+  const sourceWindow = formatSourceWindow(
+    scadaStatus?.archive_data_start_at,
+    scadaStatus?.archive_data_end_at,
+  );
+
   return (
     <div className="grid h-full min-h-0 w-full min-w-0 gap-2.5 xl:grid-cols-[minmax(260px,0.36fr)_minmax(0,0.64fr)]">
       <div className="grid h-full min-h-0 gap-2.5">
-        <PanelCard title={replay ? "Historical Dataset" : "Calibration Summary"} className="min-h-0">
+        <PanelCard title={replay ? "Replay Data Provenance" : "Calibration Summary"} className="min-h-0">
           <div className="grid h-full min-h-0 auto-rows-fr grid-cols-2 gap-2">
             {replay ? (
               <>
-                <MiniMetric label="Historical Months" value={`${replay.summary.historical_months}`} />
-                <MiniMetric label="Historical Records" value={replay.summary.historical_record_count.toLocaleString()} />
-                <MiniMetric label="Average Demand" value={`${replay.summary.historical_average_demand_mw.toFixed(0)} MW`} />
-                <MiniMetric label="Historical Peak" value={`${replay.summary.historical_peak_demand_mw.toFixed(0)} MW`} />
-                <MiniMetric label="Replay Window" value={replay.summary.replay_month_label} />
-                <MiniMetric label="Revealed Records" value={`${replay.status.revealed_records}/${replay.status.total_replay_records}`} />
+                <MiniMetric label="Synthetic Context Months" value={`${replay.summary.historical_months}`} />
+                <MiniMetric label="Synthetic Context Records" value={replay.summary.historical_record_count.toLocaleString()} />
+                <MiniMetric label="Context Average Demand" value={`${replay.summary.historical_average_demand_mw.toFixed(0)} MW`} />
+                <MiniMetric label="Context Peak Demand" value={`${replay.summary.historical_peak_demand_mw.toFixed(0)} MW`} />
+                <MiniMetric label="SCADA Source Window" value={sourceWindow} />
+                <MiniMetric label="Revealed SCADA Hours" value={`${replay.status.revealed_records}/${replay.status.total_replay_records}`} />
+                <div className="col-span-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-2 py-1.5 text-center text-[9px] leading-snug text-cyan-100">
+                  Display calendar: {replay.summary.replay_month_label}. June values use {scadaStatus?.source_system ?? "historical SCADA exports"} from {sourceWindow}, remapped onto the display calendar. The other months are synthetic context.
+                </div>
               </>
             ) : (
               <>
@@ -1923,6 +2148,7 @@ function AnalyticsTab({
           demandForecast={demandForecast}
           modelStatus={modelStatus}
           scadaStatus={scadaStatus}
+          replay={replay}
         />
       </div>
 
@@ -1944,10 +2170,12 @@ function ModelStatusPanel({
   demandForecast,
   modelStatus,
   scadaStatus,
+  replay,
 }: {
   demandForecast: DemandForecastBundle | null;
   modelStatus: ModelStatus | null;
   scadaStatus: ScadaStatus | null;
+  replay: ReplayDashboard | null;
 }) {
   const primaryHorizon = demandForecast?.horizons?.[0] ?? null;
   const accuracyRows = [...(demandForecast?.horizons ?? [])].sort(
@@ -1957,35 +2185,53 @@ function ModelStatusPanel({
   const topFeatures = Object.entries(modelStatus?.feature_importance ?? {})
     .sort((left, right) => right[1] - left[1])
     .slice(0, 3);
+  const hasHorizonMetrics = accuracyRows.some(
+    (row) => row.mae != null || row.rmse != null || row.mape != null,
+  );
 
   return (
     <PanelCard title="Forecast Assurance" className="min-h-0">
-      <div className="grid h-full min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] gap-1.5">
-        <div className="grid grid-cols-2 gap-1.5">
+      <div className="grid h-full min-h-0 grid-rows-[auto_auto_auto_minmax(0,1fr)_auto] gap-1.5">
+        <div className="grid grid-cols-2 gap-1.5 lg:grid-cols-3">
           <MiniMetric
-            label="Model / Version"
-            value={modelStatus?.model_version ?? modelStatus?.active_model ?? "Unavailable"}
+            label="Active Model"
+            value={modelStatus?.active_model ?? primaryHorizon?.model_name ?? "Unavailable"}
           />
           <MiniMetric
-            label="Data Mode"
-            value={scadaStatus?.mode ? formatStatusLabel(scadaStatus.mode) : "Unavailable"}
+            label="Model Version"
+            value={modelStatus?.model_version ?? primaryHorizon?.model_version ?? "Unavailable"}
           />
           <MiniMetric
-            label="1h P50 / P10-P90"
+            label="Validation Status"
+            value={modelStatus?.validation_status ?? primaryHorizon?.validation_status ?? "Unavailable"}
+          />
+          <MiniMetric
+            label="1h Point Forecast"
             value={
               primaryHorizon
-                ? `${(primaryHorizon.p50_demand_mw ?? primaryHorizon.forecast_demand_mw).toFixed(0)} MW · ${(primaryHorizon.p10_demand_mw ?? primaryHorizon.confidence_lower_mw ?? 0).toFixed(0)}-${(primaryHorizon.p90_demand_mw ?? primaryHorizon.confidence_upper_mw ?? 0).toFixed(0)}`
+                ? `${(primaryHorizon.p50_demand_mw ?? primaryHorizon.forecast_demand_mw).toFixed(0)} MW`
                 : "Unavailable"
             }
           />
           <MiniMetric
-            label="Source / Hour Alignment"
+            label="1h Forecast Uncertainty"
             value={
-              scadaStatus?.alignment_validation_status
-                ? `${scadaStatus.alignment_validation_status} · ${scadaStatus.alignment_mismatch_count ?? 0} mismatch${(scadaStatus.alignment_mismatch_count ?? 0) === 1 ? "" : "es"}`
-                : scadaStatus?.archive_validation_status ?? scadaStatus?.quality_status ?? "Unavailable"
+              primaryHorizon
+                ? `±${primaryHorizon.forecast_uncertainty_mw.toFixed(0)} MW`
+                : "Unavailable"
             }
           />
+          <MiniMetric
+            label="Replay Data Mode"
+            value={scadaStatus?.mode ? formatStatusLabel(scadaStatus.mode) : "Unavailable"}
+          />
+        </div>
+
+        <div className="rounded-lg border border-slate-800 bg-slate-950/45 px-2 py-1 text-center text-[9px] leading-snug text-slate-400">
+          <span className="font-semibold text-slate-200">Source / hour alignment: </span>
+          {scadaStatus?.alignment_validation_status
+            ? `${scadaStatus.alignment_validation_status} · ${scadaStatus.alignment_mismatch_count ?? 0} mismatch${(scadaStatus.alignment_mismatch_count ?? 0) === 1 ? "" : "es"}`
+            : scadaStatus?.archive_validation_status ?? scadaStatus?.quality_status ?? "Unavailable"}
         </div>
 
         {knownGaps.length ? (
@@ -1995,18 +2241,36 @@ function ModelStatusPanel({
         ) : null}
 
         <div className="min-h-0 overflow-auto rounded-lg border border-slate-800 bg-slate-950/45">
-          <div className="grid grid-cols-[0.55fr_1.25fr_repeat(3,0.8fr)] gap-1 border-b border-slate-800 px-2 py-1 text-center text-[8px] uppercase tracking-[0.08em] text-slate-500">
-            <span>Horizon</span><span>Active</span><span>MAE</span><span>RMSE</span><span>MAPE</span>
-          </div>
-          {accuracyRows.length ? accuracyRows.map((row) => (
-            <div key={row.horizon_hours} className="grid grid-cols-[0.55fr_1.25fr_repeat(3,0.8fr)] gap-1 border-b border-slate-900 px-2 py-1 text-center text-[9px] text-slate-200 last:border-0">
-              <span>+{row.horizon_hours}h</span>
-              <span className="truncate" title={row.model_name}>{row.model_name}</span>
-              <span>{row.mae?.toFixed(1) ?? "--"}</span>
-              <span>{row.rmse?.toFixed(1) ?? "--"}</span>
-              <span>{row.mape?.toFixed(1) ?? "--"}%</span>
-            </div>
-          )) : (
+          {hasHorizonMetrics ? (
+            <>
+              <div className="grid grid-cols-[0.55fr_1.25fr_repeat(3,0.8fr)] gap-1 border-b border-slate-800 px-2 py-1 text-center text-[8px] uppercase tracking-[0.08em] text-slate-500">
+                <span>Horizon</span><span>Active model</span><span>MAE</span><span>RMSE</span><span>MAPE</span>
+              </div>
+              {accuracyRows.map((row) => (
+                <div key={row.horizon_hours} className="grid grid-cols-[0.55fr_1.25fr_repeat(3,0.8fr)] items-center gap-1 border-b border-slate-900 px-2 py-1 text-center text-[9px] text-slate-200 last:border-0">
+                  <span>+{row.horizon_hours}h</span>
+                  <span className="break-words leading-tight" title={row.model_name}>{row.model_name}</span>
+                  <span>{row.mae?.toFixed(1) ?? "N/A"}</span>
+                  <span>{row.rmse?.toFixed(1) ?? "N/A"}</span>
+                  <span>{row.mape != null ? `${row.mape.toFixed(1)}%` : "N/A"}</span>
+                </div>
+              ))}
+            </>
+          ) : accuracyRows.length ? (
+            <>
+              <div className="grid grid-cols-[0.55fr_minmax(7rem,1.5fr)_0.9fr_0.9fr] gap-1 border-b border-slate-800 px-2 py-1 text-center text-[8px] uppercase tracking-[0.08em] text-slate-500">
+                <span>Horizon</span><span>Model</span><span>Forecast</span><span>Uncertainty</span>
+              </div>
+              {accuracyRows.map((row) => (
+                <div key={row.horizon_hours} className="grid grid-cols-[0.55fr_minmax(7rem,1.5fr)_0.9fr_0.9fr] items-center gap-1 border-b border-slate-900 px-2 py-1 text-center text-[9px] text-slate-200 last:border-0">
+                  <span>+{row.horizon_hours}h</span>
+                  <span className="break-words leading-tight" title={row.model_name}>{row.model_name}</span>
+                  <span>{row.forecast_demand_mw.toFixed(0)} MW</span>
+                  <span>±{row.forecast_uncertainty_mw.toFixed(0)} MW</span>
+                </div>
+              ))}
+            </>
+          ) : (
             <p className="p-2 text-center text-[10px] text-slate-500">Horizon metrics unavailable.</p>
           )}
         </div>
@@ -2014,9 +2278,10 @@ function ModelStatusPanel({
         <div className="text-[9px] leading-snug text-slate-500">
           {topFeatures.length
             ? `Top model evidence: ${topFeatures.map(([name, value]) => `${name.replace(/_/g, " ")} ${(value * 100).toFixed(0)}%`).join(" · ")}`
-            : modelStatus?.fallback_reason ?? "Feature evidence unavailable."}
-          {scadaStatus?.latest_snapshot ? ` · Snapshot ${formatShortDateTime(scadaStatus.latest_snapshot)}` : ""}
-          {scadaStatus?.available_at ? ` · Finalized ${formatShortDateTime(scadaStatus.available_at)}` : ""}
+            : modelStatus?.fallback_reason ?? `${replay?.summary.weather_features.length ?? 0} replay features configured; per-feature importance unavailable.`}
+          {modelStatus?.trained_through ? ` · Display-clock training cutoff ${formatShortDateTime(modelStatus.trained_through)}` : ""}
+          {scadaStatus?.latest_snapshot ? ` · Source snapshot ${formatShortDateTime(scadaStatus.latest_snapshot)}` : ""}
+          {scadaStatus?.available_at ? ` · Source finalized ${formatShortDateTime(scadaStatus.available_at)}` : ""}
         </div>
       </div>
     </PanelCard>
@@ -2118,9 +2383,29 @@ function formatShortDateTime(value?: string | null): string {
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
+    year: "numeric",
     hour: "numeric",
     minute: "2-digit",
   }).format(date);
+}
+
+function formatSourceWindow(
+  startValue?: string | null,
+  endValue?: string | null,
+): string {
+  if (!startValue || !endValue) {
+    return "Unavailable";
+  }
+  const start = new Date(startValue);
+  const end = new Date(endValue);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return "Unavailable";
+  }
+  const dateFormatter = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+  return `${dateFormatter.format(start)}-${dateFormatter.format(end)}, ${end.getFullYear()}`;
 }
 
 function formatStatusLabel(value: string): string {
@@ -2288,6 +2573,46 @@ function getUpcomingForecastItems(
   }
 
   return sortedItems.slice(0, count);
+}
+
+function buildHourlyDemandForecast(
+  fullDayForecast: LoadForecastPoint[],
+  horizonForecasts: DemandForecastHorizon[],
+): ReadonlyMap<number, number> {
+  const byHour = new Map<number, number>();
+
+  for (const point of fullDayForecast) {
+    const hour = timestampHour(point.timestamp);
+    if (hour != null && Number.isFinite(point.forecast_demand_mw)) {
+      byHour.set(hour, point.forecast_demand_mw);
+    }
+  }
+
+  // Specific horizon results are generated directly for their target time and
+  // take precedence over the broader full-day curve when both are available.
+  for (const horizon of horizonForecasts) {
+    const hour = timestampHour(horizon.forecast_timestamp);
+    if (hour != null && Number.isFinite(horizon.forecast_demand_mw)) {
+      byHour.set(hour, horizon.forecast_demand_mw);
+    }
+  }
+
+  return byHour;
+}
+
+function findHourlyDemandForecast(
+  forecasts: ReadonlyMap<number, number>,
+  timestamp: string,
+): number | null {
+  const hour = timestampHour(timestamp);
+  return hour == null ? null : forecasts.get(hour) ?? null;
+}
+
+function timestampHour(timestamp: string): number | null {
+  const milliseconds = new Date(timestamp).getTime();
+  return Number.isNaN(milliseconds)
+    ? null
+    : Math.floor(milliseconds / (60 * 60 * 1000));
 }
 
 function LoadingState() {

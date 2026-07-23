@@ -2,6 +2,7 @@ import type { ReplayStatus } from "../types/dashboard";
 
 interface ReplayControlBarProps {
   status: ReplayStatus;
+  sourceTimestamp?: string | null;
   busy?: boolean;
   onControl: (input: {
     action: "play" | "pause" | "reset" | "step" | "configure";
@@ -12,6 +13,7 @@ interface ReplayControlBarProps {
 
 export default function ReplayControlBar({
   status,
+  sourceTimestamp,
   busy = false,
   onControl,
 }: ReplayControlBarProps) {
@@ -29,8 +31,16 @@ export default function ReplayControlBar({
         </div>
         <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
           <p className="text-sm font-semibold tabular-nums text-white">
+            <span className="text-[9px] uppercase tracking-[0.12em] text-slate-500">
+              Display clock
+            </span>{" "}
             {formatReplayTimestamp(status.cursor_at)}
           </p>
+          {status.mode === "historical_replay" && sourceTimestamp ? (
+            <p className="text-[10px] font-medium tabular-nums text-cyan-200">
+              Source observation {formatReplayTimestamp(sourceTimestamp)}
+            </p>
+          ) : null}
           <p className="text-[10px] text-slate-400">
             {status.dataset_label} · {status.revealed_records}/{status.total_replay_records} records · {status.progress_percent.toFixed(1)}%
           </p>
@@ -98,7 +108,7 @@ export default function ReplayControlBar({
 
 function replayModeLabel(mode: ReplayStatus["mode"]): string {
   if (mode === "historical_replay") {
-    return "Historical replay — June 2026";
+    return "Historical SCADA replay";
   }
   if (mode === "live_read_only") {
     return "Live read-only telemetry";

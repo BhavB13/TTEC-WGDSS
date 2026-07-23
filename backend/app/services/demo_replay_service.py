@@ -1012,6 +1012,13 @@ class DemoReplayService:
                     ),
                     "provider_name": "Replay Historical Weather Baseline",
                     "confidence_score": round(confidence, 2),
+                    "temperature_aggregation": _source_temperature_aggregation(
+                        round(temperature, 2),
+                        label="Historical Trinidad average temperature",
+                        method="past_only_scada_average_baseline",
+                        source_name="Replay Historical Weather Baseline",
+                        policy_status="HISTORICAL_SOURCE_AVERAGE",
+                    ),
                 }
             )
         return WeatherService.reconcile_forecast_sources([payloads])
@@ -1061,6 +1068,8 @@ class DemoReplayService:
                 ),
                 historical_average_mw=point.historical_average_mw,
                 actual_demand_mw=point.actual_demand_mw,
+                actual_temperature_c=point.actual_temperature_c,
+                forecast_temperature_c=point.forecast_temperature_c,
                 uncertainty_mw=(
                     direct_by_display_timestamp[point.timestamp].forecast_uncertainty_mw
                     if point.timestamp in direct_by_display_timestamp
@@ -1475,6 +1484,7 @@ def _generate_demo_year(year: int) -> list[DemoObservation]:
 
 def _weather_payload(row: _WeatherGridObservation) -> dict[str, object]:
     condition = _condition(row.rainfall_mm_hr, row.cloud_cover_percent)
+    is_scada_replay = row.source.startswith(SCADA_REPLAY_SOURCE)
     return {
         "timestamp": row.timestamp,
         "temperature_c": row.temperature_c,
@@ -1489,9 +1499,58 @@ def _weather_payload(row: _WeatherGridObservation) -> dict[str, object]:
         "pressure_hpa": row.pressure_hpa,
         "provider_name": (
             "Historical replay · June SCADA + archived weather"
-            if row.source.startswith(SCADA_REPLAY_SOURCE)
+            if is_scada_replay
             else "Simulation replay · historical weather"
         ),
+        "temperature_aggregation": _source_temperature_aggregation(
+            row.temperature_c,
+            label=(
+                "SCADA Trinidad average temperature"
+                if is_scada_replay
+                else "Simulated Trinidad average temperature"
+            ),
+            method=(
+                "scada_exported_trinidad_average"
+                if is_scada_replay
+                else "simulation_average_temperature"
+            ),
+            source_name=(
+                "MHO132 AVERAGE AMBIENT TEMPERATURE"
+                if is_scada_replay
+                else "WGDSS simulation profile"
+            ),
+            policy_status=(
+                "SOURCE_DEFINITION_REQUIRES_TTEC_CONFIRMATION"
+                if is_scada_replay
+                else "SIMULATED"
+            ),
+        ),
+    }
+
+
+def _source_temperature_aggregation(
+    temperature_c: float,
+    *,
+    label: str,
+    method: str,
+    source_name: str,
+    policy_status: str,
+) -> dict[str, object]:
+    return {
+        "label": label,
+        "method": method,
+        "policy_version": "SOURCE_AGGREGATE_V1",
+        "policy_status": policy_status,
+        "status": "SOURCE_AGGREGATE",
+        "source_name": source_name,
+        "weighted_average_c": round(temperature_c, 2),
+        "minimum_c": round(temperature_c, 2),
+        "maximum_c": round(temperature_c, 2),
+        "spread_c": 0.0,
+        "sample_count": 0,
+        "expected_sample_count": 0,
+        "weight_coverage_percent": 100.0,
+        "samples": [],
     }
 
 

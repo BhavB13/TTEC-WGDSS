@@ -19,6 +19,8 @@ const API_BASE_URL = (
   ).env?.VITE_API_BASE_URL ?? ""
 ).replace(/\/$/, "");
 const DASHBOARD_SNAPSHOT_PATH = "/api/v1/dashboard/snapshot";
+const LIVE_WEATHER_CURRENT_PATH = "/api/v1/weather/current";
+const LIVE_WEATHER_FORECAST_PATH = "/api/v1/weather/forecast?days=2";
 const STORM_TRACKING_PATH = "/api/v1/storm/tracking";
 const REPLAY_CONTROL_PATH = "/api/v1/replay/control";
 const CAPACITY_PLAN_EVALUATE_PATH = "/api/v1/capacity-plan/evaluate";
@@ -71,6 +73,26 @@ export async function getDashboardSnapshot(options?: {
     ? `${DASHBOARD_SNAPSHOT_PATH}?force_refresh=true`
     : DASHBOARD_SNAPSHOT_PATH;
   return requestJson<DashboardSnapshot>(path);
+}
+
+export async function getLiveWeatherDisplay(): Promise<{
+  weather: WeatherData;
+  forecast: ForecastData[];
+  fetchedAt: string;
+}> {
+  const [weather, forecast] = await Promise.all([
+    requestJson<WeatherData>(LIVE_WEATHER_CURRENT_PATH),
+    requestJson<ForecastData[]>(LIVE_WEATHER_FORECAST_PATH),
+  ]);
+  return {
+    weather,
+    forecast,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+export async function getLiveCurrentWeather(): Promise<WeatherData> {
+  return requestJson<WeatherData>(LIVE_WEATHER_CURRENT_PATH);
 }
 
 export async function getCurrentWeather(): Promise<WeatherData> {

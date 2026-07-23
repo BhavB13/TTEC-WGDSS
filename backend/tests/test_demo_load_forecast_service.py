@@ -23,6 +23,13 @@ def test_demo_forecast_tracks_load_state_and_never_reveals_future_actuals():
     result = service.forecast_day(history, day_rows, [], cursor)
 
     assert all(point.actual_demand_mw is None for point in result.points[11:])
+    assert all(
+        point.actual_temperature_c is None for point in result.points[11:]
+    )
+    assert all(
+        point.forecast_temperature_c is not None
+        for point in result.points[11:]
+    )
     assert result.mae_mw <= result.baseline_mae_mw
     assert result.mae_mw < 10.0
     assert result.training_rows == len(history)
@@ -130,6 +137,8 @@ def test_validated_weather_model_responds_to_forecast_temperature():
     assert hot.points[-2].forecast_demand_mw > cool.points[-2].forecast_demand_mw
     assert hot.points[-2].weather_impact_mw > cool.points[-2].weather_impact_mw
     assert hot.points[-2].weather_source_count == 3
+    assert hot.points[-2].forecast_temperature_c == 34.0
+    assert cool.points[-2].forecast_temperature_c == 24.0
 
 
 def test_future_source_demand_cannot_leak_into_forecast():

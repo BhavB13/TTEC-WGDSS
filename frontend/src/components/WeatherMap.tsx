@@ -23,8 +23,12 @@ import {
   transmissionLines,
 } from "../data/infrastructureLayers";
 import { trinidadAndTobagoBoundary } from "../data/trinidadAndTobagoBoundary";
-import { getStormTracking } from "../services/api";
-import type { DashboardSnapshot } from "../types/dashboard";
+import { getLiveCurrentWeather, getStormTracking } from "../services/api";
+import type {
+  DashboardSnapshot,
+  TemperatureSample,
+  WeatherData,
+} from "../types/dashboard";
 import type { StormSystem, StormTrackingSnapshot } from "../types/storm";
 import WindFlowLayer from "./WindFlowLayer";
 interface WeatherMapProps {
@@ -46,6 +50,7 @@ const CLOUD_SYSTEMS_LAYER_NAME = "Cloud Systems";
 const CLOUDS_LATEST = "default";
 const RAIN_LATEST = "default";
 const CLOUD_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const TEMPERATURE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const BASE_TILE_LAYER_OPTIONS = {
   keepBuffer: 6,
   updateInterval: 100,
@@ -162,6 +167,26 @@ function getCompassDirection(directionDegrees: number): string {
   ];
   const normalizedDirection = ((directionDegrees % 360) + 360) % 360;
   return directions[Math.round(normalizedDirection / 22.5) % directions.length];
+}
+
+function temperaturePointColor(temperatureC: number): string {
+  if (temperatureC >= 32) {
+    return "#fb7185";
+  }
+  if (temperatureC >= 30) {
+    return "#fbbf24";
+  }
+  if (temperatureC >= 28) {
+    return "#34d399";
+  }
+  return "#38bdf8";
+}
+
+function temperaturePointRadius(sample: TemperatureSample): number {
+  return Math.max(
+    5,
+    Math.min(10, 5 + sample.effective_weight_percent / 3.5),
+  );
 }
 
 function windDirectionIcon(
@@ -302,6 +327,13 @@ export default function WeatherMap({
   >("loading");
   const [stormTracking, setStormTracking] = useState<StormTrackingSnapshot | null>(null);
   const [stormTrackingFailed, setStormTrackingFailed] = useState(false);
+  const [liveTemperatureWeather, setLiveTemperatureWeather] =
+    useState<WeatherData | null>(
+      (weather.weather_aggregation ?? weather.temperature_aggregation)?.samples
+        .length
+        ? weather
+        : null,
+    );
 
   const cloudSystemsTileUrl = useMemo(
     () => buildCloudSystemsUrl(CLOUDS_LATEST),
@@ -317,6 +349,52 @@ export default function WeatherMap({
     Number.isFinite(weather.wind_direction_deg)
       ? weather.wind_direction_deg
       : null;
+  const temperatureAggregation =
+    liveTemperatureWeather?.weather_aggregation ??
+    liveTemperatureWeather?.temperature_aggregation ??
+    weather.weather_aggregation ??
+    weather.temperature_aggregation ??
+    null;
+  const temperatureSamples = temperatureAggregation?.samples ?? [];
+
+  useEffect(() => {
+    if (
+      (weather.weather_aggregation ?? weather.temperature_aggregation)?.samples
+        .length
+    ) {
+      setLiveTemperatureWeather(weather);
+    }
+  }, [weather]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadTemperatureNetwork = async () => {
+      try {
+        const payload = await getLiveCurrentWeather();
+        if (
+          !cancelled &&
+          (payload.weather_aggregation ?? payload.temperature_aggregation)
+            ?.samples.length
+        ) {
+          setLiveTemperatureWeather(payload);
+        }
+      } catch {
+        // The operational map remains usable with its current/replay weather.
+      }
+    };
+
+    void loadTemperatureNetwork();
+    const refreshInterval = window.setInterval(
+      () => void loadTemperatureNetwork(),
+      TEMPERATURE_REFRESH_INTERVAL_MS,
+    );
+    return () => {
+      cancelled = true;
+      window.clearInterval(refreshInterval);
+    };
+  }, []);
+
   useEffect(() => {
     const refreshInterval = window.setInterval(() => {
       setCloudImageryStatus("checking");
@@ -374,17 +452,24 @@ export default function WeatherMap({
             Trinidad and Tobago Operations Map
           </h2>
         </div>
-        <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-semibold ${
-          cloudImageryStatus === "degraded"
-            ? "border-amber-400/35 bg-amber-500/10 text-amber-100"
-            : "border-cyan-400/25 bg-cyan-500/10 text-cyan-100"
-        }`}>
-          {cloudImageryStatus === "degraded"
-            ? "Cloud imagery degraded"
-            : cloudImageryStatus === "checking"
-              ? "Checking cloud imagery"
-              : "Cloud imagery live"}
-        </span>
+        <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+          {temperatureAggregation ? (
+            <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-[10px] font-semibold text-amber-100">
+              T&amp;T avg {temperatureAggregation.weighted_average_c.toFixed(1)}°C
+            </span>
+          ) : null}
+          <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${
+            cloudImageryStatus === "degraded"
+              ? "border-amber-400/35 bg-amber-500/10 text-amber-100"
+              : "border-cyan-400/25 bg-cyan-500/10 text-cyan-100"
+          }`}>
+            {cloudImageryStatus === "degraded"
+              ? "Cloud imagery degraded"
+              : cloudImageryStatus === "checking"
+                ? "Checking cloud imagery"
+                : "Cloud imagery live"}
+          </span>
+        </div>
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
@@ -492,6 +577,61 @@ export default function WeatherMap({
 
             <LayersControl.Overlay name="Wind Flow (Live)">
               <LayerGroup />
+            </LayersControl.Overlay>
+
+            <LayersControl.Overlay checked name="Weather Sampling Network (Live)">
+              <LayerGroup>
+                {temperatureSamples.map((sample) => (
+                  <CircleMarker
+                    key={sample.id}
+                    center={[sample.latitude, sample.longitude]}
+                    radius={temperaturePointRadius(sample)}
+                    pathOptions={{
+                      color: "#ecfeff",
+                      fillColor: temperaturePointColor(sample.temperature_c),
+                      fillOpacity: 0.9,
+                      opacity: 0.95,
+                      weight: 1.5,
+                    }}
+                  >
+                    <Tooltip sticky>
+                      {sample.name}: {sample.temperature_c.toFixed(1)}°C ·{" "}
+                      Weight {sample.effective_weight_percent.toFixed(1)}%
+                    </Tooltip>
+                    <Popup>
+                      <div className="space-y-1 text-sm">
+                        <p className="font-semibold">{sample.name}</p>
+                        <p>
+                          Temperature: {sample.temperature_c.toFixed(1)}°C
+                        </p>
+                        <p>
+                          Humidity:{" "}
+                          {sample.humidity_percent?.toFixed(0) ?? "--"}%
+                        </p>
+                        <p>
+                          Rainfall:{" "}
+                          {sample.rainfall_mm_hr?.toFixed(1) ?? "--"} mm/hr
+                        </p>
+                        <p>
+                          Cloud cover:{" "}
+                          {sample.cloud_cover_percent?.toFixed(0) ?? "--"}%
+                        </p>
+                        <p>
+                          Wind: {sample.wind_speed_kmh?.toFixed(1) ?? "--"} km/h
+                        </p>
+                        <p>
+                          Demand-exposure weight:{" "}
+                          {sample.effective_weight_percent.toFixed(1)}%
+                        </p>
+                        <p className="text-slate-500">{sample.notes}</p>
+                        <p className="text-slate-500">
+                          Live display source: {sample.provider_name}
+                        </p>
+                      </div>
+                    </Popup>
+                  </CircleMarker>
+                ))}
+              </LayerGroup>
             </LayersControl.Overlay>
 
             <LayersControl.Overlay name="Generation Stations">
@@ -724,6 +864,7 @@ export default function WeatherMap({
           <div className="grid gap-1 border-t border-slate-800 px-2.5 py-2 leading-snug">
             <p><span className="font-semibold text-cyan-200">Cloud systems</span> Latest provider satellite imagery for situational awareness; observation age can vary.</p>
             <p><span className="font-semibold text-sky-200">Rainfall</span> Latest provider GPM precipitation-rate imagery; observation age can vary.</p>
+            <p><span className="font-semibold text-amber-200">Temperature points</span> Live Trinidad demand-exposure samples; larger points carry more weight.</p>
             <p><span className="font-semibold text-emerald-200">G</span> Generation station <span className="font-semibold text-amber-200">S</span> Substation <span className="font-semibold text-cyan-200">L</span> Load center.</p>
             <p className="text-slate-400">Select layers from the control at top right. Visual layers support, but do not replace, dispatch telemetry.</p>
           </div>

@@ -6,6 +6,11 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.core.config import settings
+from app.data.temperature_sampling import (
+    TRINIDAD_TEMPERATURE_SAMPLING_POINTS,
+    TemperatureObservation,
+    build_weather_aggregation,
+)
 from app.providers.open_meteo_provider import OpenMeteoProvider
 
 
@@ -53,12 +58,24 @@ class OpenMeteoReplayProvider(OpenMeteoProvider):
     ) -> ArchivedForecastResult:
         source_local = _as_trinidad_time(source_cursor)
         run_initialized_at, assumed_available_at = self._available_run(source_local)
+        aggregate_temperature = settings.TEMPERATURE_AGGREGATION_ENABLED
+        coordinates = (
+            [
+                (point.latitude, point.longitude)
+                for point in TRINIDAD_TEMPERATURE_SAMPLING_POINTS
+            ]
+            if aggregate_temperature
+            else [(latitude, longitude)]
+        )
         payload = self._request_json(
             params={
-                "latitude": latitude,
-                "longitude": longitude,
-                "cell_selection": "nearest",
-                "elevation": settings.WEATHER_SITE_ALTITUDE_METERS,
+                "latitude": ",".join(
+                    str(point_latitude) for point_latitude, _ in coordinates
+                ),
+                "longitude": ",".join(
+                    str(point_longitude) for _, point_longitude in coordinates
+                ),
+                "cell_selection": "land",
                 "run": run_initialized_at.strftime("%Y-%m-%dT%H:%M"),
                 "models": ",".join(self.models),
                 "hourly": ",".join(
@@ -68,6 +85,7 @@ class OpenMeteoReplayProvider(OpenMeteoProvider):
                         "precipitation",
                         "cloud_cover",
                         "wind_speed_10m",
+                        "wind_direction_10m",
                         "surface_pressure",
                         "weather_code",
                     )
@@ -116,17 +134,39 @@ class OpenMeteoReplayProvider(OpenMeteoProvider):
 
     def _source_payloads(
         self,
-        payload: dict[str, Any],
+        payload: dict[str, Any] | list[dict[str, Any]],
         source_local: datetime,
         hours: int,
         run_initialized_at: datetime,
         assumed_available_at: datetime,
     ) -> list[list[dict[str, Any]]]:
-        hourly = payload.get("hourly") or {}
+        location_payloads = (
+            [item for item in payload if isinstance(item, dict)]
+            if isinstance(payload, list)
+            else [payload]
+        )
+        if not location_payloads:
+            return []
+        base_payload = location_payloads[0]
+        hourly = base_payload.get("hourly") or {}
         timestamps = hourly.get("time") or []
+        location_hourly = [
+            location.get("hourly") or {} for location in location_payloads
+        ]
+        location_time_indices = [
+            {
+                str(timestamp): index
+                for index, timestamp in enumerate(location.get("time") or [])
+            }
+            for location in location_hourly
+        ]
         horizon_end = source_local + timedelta(hours=hours)
         sources: list[list[dict[str, Any]]] = []
         for model in self.models:
+            provider_name = self.MODEL_NAMES.get(
+                model,
+                f"Open-Meteo {model}",
+            )
             periods: list[dict[str, Any]] = []
             for index, timestamp_value in enumerate(timestamps):
                 timestamp = _parse_local_timestamp(timestamp_value)
@@ -140,6 +180,86 @@ class OpenMeteoReplayProvider(OpenMeteoProvider):
                 )
                 if temperature is None or humidity is None:
                     continue
+                weather_aggregation = None
+                if len(location_payloads) > 1:
+                    observations: list[TemperatureObservation] = []
+                    for point, location, indices, location_payload in zip(
+                        TRINIDAD_TEMPERATURE_SAMPLING_POINTS,
+                        location_hourly,
+                        location_time_indices,
+                        location_payloads,
+                        strict=False,
+                    ):
+                        location_index = indices.get(str(timestamp_value))
+                        if location_index is None:
+                            continue
+                        location_temperature = self._safe_list_value(
+                            location.get(f"temperature_2m_{model}", []),
+                            location_index,
+                        )
+                        if location_temperature is None:
+                            continue
+                        observations.append(
+                            TemperatureObservation(
+                                point_id=point.id,
+                                temperature_c=location_temperature,
+                                humidity_percent=self._safe_list_value(
+                                    location.get(
+                                        f"relative_humidity_2m_{model}",
+                                        [],
+                                    ),
+                                    location_index,
+                                ),
+                                rainfall_mm_hr=self._safe_list_value(
+                                    location.get(
+                                        f"precipitation_{model}",
+                                        [],
+                                    ),
+                                    location_index,
+                                ),
+                                cloud_cover_percent=self._safe_list_value(
+                                    location.get(
+                                        f"cloud_cover_{model}",
+                                        [],
+                                    ),
+                                    location_index,
+                                ),
+                                wind_speed_kmh=self._safe_list_value(
+                                    location.get(
+                                        f"wind_speed_10m_{model}",
+                                        [],
+                                    ),
+                                    location_index,
+                                ),
+                                wind_direction_deg=self._safe_list_value(
+                                    location.get(
+                                        f"wind_direction_10m_{model}",
+                                        [],
+                                    ),
+                                    location_index,
+                                ),
+                                pressure_hpa=self._safe_list_value(
+                                    location.get(
+                                        f"surface_pressure_{model}",
+                                        [],
+                                    ),
+                                    location_index,
+                                ),
+                                timestamp=timestamp,
+                                latitude=location_payload.get("latitude"),
+                                longitude=location_payload.get("longitude"),
+                            )
+                        )
+                    weather_aggregation = build_weather_aggregation(
+                        observations,
+                        source_name=provider_name,
+                        minimum_weight_coverage_percent=(
+                            settings.TEMPERATURE_AGGREGATION_MIN_WEIGHT_COVERAGE_PERCENT
+                        ),
+                        policy_status=settings.TEMPERATURE_AGGREGATION_POLICY_STATUS,
+                    )
+                    if weather_aggregation is not None:
+                        temperature = weather_aggregation["weighted_average_c"]
                 rainfall = _number(
                     self._safe_list_value(
                         hourly.get(f"precipitation_{model}", []), index, 0.0
@@ -152,6 +272,44 @@ class OpenMeteoReplayProvider(OpenMeteoProvider):
                     ),
                     0.0,
                 )
+                wind_speed = self._safe_list_value(
+                    hourly.get(f"wind_speed_10m_{model}", []), index, 0.0
+                )
+                wind_direction = self._safe_list_value(
+                    hourly.get(f"wind_direction_10m_{model}", []), index
+                )
+                pressure = self._safe_list_value(
+                    hourly.get(f"surface_pressure_{model}", []), index
+                )
+                if weather_aggregation is not None:
+                    humidity = _value_or_fallback(
+                        weather_aggregation.get("weighted_humidity_percent"),
+                        humidity,
+                    )
+                    rainfall = _value_or_fallback(
+                        weather_aggregation.get("weighted_rainfall_mm_hr"),
+                        rainfall,
+                    )
+                    cloud = _value_or_fallback(
+                        weather_aggregation.get(
+                            "weighted_cloud_cover_percent"
+                        ),
+                        cloud,
+                    )
+                    wind_speed = _value_or_fallback(
+                        weather_aggregation.get("weighted_wind_speed_kmh"),
+                        wind_speed,
+                    )
+                    wind_direction = _value_or_fallback(
+                        weather_aggregation.get(
+                            "weighted_wind_direction_deg"
+                        ),
+                        wind_direction,
+                    )
+                    pressure = _value_or_fallback(
+                        weather_aggregation.get("weighted_pressure_hpa"),
+                        pressure,
+                    )
                 weather_code = self._safe_list_value(
                     hourly.get(f"weather_code_{model}", []), index
                 )
@@ -162,24 +320,26 @@ class OpenMeteoReplayProvider(OpenMeteoProvider):
                         "humidity_percent": humidity,
                         "rainfall_mm_hr": rainfall,
                         "cloud_cover_percent": cloud,
-                        "wind_speed_kmh": self._safe_list_value(
-                            hourly.get(f"wind_speed_10m_{model}", []), index, 0.0
-                        ),
-                        "pressure_hpa": self._safe_list_value(
-                            hourly.get(f"surface_pressure_{model}", []), index
-                        ),
+                        "wind_speed_kmh": wind_speed,
+                        "wind_direction_deg": wind_direction,
+                        "pressure_hpa": pressure,
                         "weather_condition": self._describe_weather_code(weather_code),
                         "precipitation_probability_percent": min(
                             100.0,
                             round(10.0 + cloud * 0.65 + rainfall * 7.0, 1),
                         ),
                         "weather_code": weather_code,
-                        "provider_name": self.MODEL_NAMES.get(
-                            model,
-                            f"Open-Meteo {model}",
-                        ),
+                        "provider_name": provider_name,
                         "source_run_at": run_initialized_at.isoformat(),
                         "forecast_issued_at": assumed_available_at.isoformat(),
+                        **(
+                            {
+                                "temperature_aggregation": weather_aggregation,
+                                "weather_aggregation": weather_aggregation,
+                            }
+                            if weather_aggregation is not None
+                            else {}
+                        ),
                     }
                 )
             if periods:
@@ -191,6 +351,10 @@ def _as_trinidad_time(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=TRINIDAD_TZ)
     return value.astimezone(TRINIDAD_TZ)
+
+
+def _value_or_fallback(value: Any, fallback: Any) -> Any:
+    return fallback if value is None else value
 
 
 def _parse_local_timestamp(value: Any) -> datetime | None:

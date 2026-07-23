@@ -18,6 +18,7 @@ const DEFAULT_SCALE_MIN_MW = 700;
 const DEFAULT_SCALE_MAX_MW = 1500;
 const SCALE_STEP_MW = 100;
 const SCALE_PADDING_RATIO = 0.06;
+const TEMPERATURE_LINE_COLOR = "#fb7185";
 
 export default function ReplayLoadChart({
   replay,
@@ -35,13 +36,36 @@ export default function ReplayLoadChart({
   const generationSeriesLabel = usesTraGeneration
     ? "Generation (TRA)"
     : "Revealed generation";
-  const { revealedGeneration, revealedSystemSpin } = useMemo(() => {
+  const {
+    revealedGeneration,
+    revealedSystemSpin,
+    observedTemperature,
+    forecastTemperature,
+  } = useMemo(() => {
     const operationsByTimestamp = new Map(
       replay.operational_history.map((point) => [
         new Date(point.timestamp).getTime(),
         point,
       ]),
     );
+    const observed = points.map(
+      (point) =>
+        point.actual_temperature_c ??
+        operationsByTimestamp.get(new Date(point.timestamp).getTime())
+          ?.temperature_c ??
+        null,
+    );
+    const predicted = points.map(
+      (point) => point.forecast_temperature_c ?? null,
+    );
+    const firstForecastIndex = predicted.findIndex((value) => value !== null);
+    if (
+      firstForecastIndex > 0 &&
+      observed[firstForecastIndex - 1] !== null
+    ) {
+      predicted[firstForecastIndex - 1] = observed[firstForecastIndex - 1];
+    }
+
     return {
       revealedGeneration: points.map(
         (point) =>
@@ -53,11 +77,16 @@ export default function ReplayLoadChart({
           operationsByTimestamp.get(new Date(point.timestamp).getTime())
             ?.spinning_reserve_mw ?? null,
       ),
+      observedTemperature: observed,
+      forecastTemperature: predicted,
     };
   }, [points, replay.operational_history]);
   const hasRevealedGeneration = revealedGeneration.some(
     (value) => value !== null,
   );
+  const hasTemperatureSeries =
+    observedTemperature.some((value) => value !== null) ||
+    forecastTemperature.some((value) => value !== null);
   const yAxisBounds = useMemo(
     () =>
       getChartBounds([
@@ -70,6 +99,14 @@ export default function ReplayLoadChart({
         ...revealedGeneration,
       ]),
     [points, revealedGeneration],
+  );
+  const temperatureAxisBounds = useMemo(
+    () =>
+      getTemperatureBounds([
+        ...observedTemperature,
+        ...forecastTemperature,
+      ]),
+    [forecastTemperature, observedTemperature],
   );
 
   const data = useMemo(() => {
@@ -84,6 +121,7 @@ export default function ReplayLoadChart({
           borderWidth: 0.8,
           pointRadius: 0,
           tension: 0.3,
+          yAxisID: "y",
         },
         {
           label: "Forecast uncertainty",
@@ -94,6 +132,7 @@ export default function ReplayLoadChart({
           borderWidth: 0.8,
           pointRadius: 0,
           tension: 0.3,
+          yAxisID: "y",
         },
         {
           label: "Forecast demand",
@@ -106,6 +145,7 @@ export default function ReplayLoadChart({
           pointHoverRadius: 5,
           pointHitRadius: 14,
           tension: 0.3,
+          yAxisID: "y",
         },
         {
           label: "Historical hourly average",
@@ -117,6 +157,7 @@ export default function ReplayLoadChart({
           pointHoverRadius: 4,
           pointHitRadius: 14,
           tension: 0.3,
+          yAxisID: "y",
         },
         {
           label: "Revealed actual",
@@ -129,6 +170,7 @@ export default function ReplayLoadChart({
           pointHitRadius: 14,
           spanGaps: false,
           tension: 0.2,
+          yAxisID: "y",
         },
         ...(hasRevealedGeneration
           ? [
@@ -144,12 +186,53 @@ export default function ReplayLoadChart({
                 pointHitRadius: 14,
                 spanGaps: false,
                 tension: 0.2,
+                yAxisID: "y",
+              },
+            ]
+          : []),
+        ...(hasTemperatureSeries
+          ? [
+              {
+                label: "Observed temperature",
+                data: observedTemperature,
+                borderColor: TEMPERATURE_LINE_COLOR,
+                backgroundColor: TEMPERATURE_LINE_COLOR,
+                borderWidth: 1.8,
+                pointRadius: compact ? 0 : 1.6,
+                pointHoverRadius: 4,
+                pointHitRadius: 12,
+                spanGaps: false,
+                tension: 0.28,
+                yAxisID: "temperature",
+              },
+              {
+                label: "Forecast temperature",
+                data: forecastTemperature,
+                borderColor: TEMPERATURE_LINE_COLOR,
+                backgroundColor: TEMPERATURE_LINE_COLOR,
+                borderWidth: 1.8,
+                borderDash: [6, 4],
+                pointRadius: compact ? 0 : 1.6,
+                pointHoverRadius: 4,
+                pointHitRadius: 12,
+                spanGaps: false,
+                tension: 0.28,
+                yAxisID: "temperature",
               },
             ]
           : []),
       ],
     };
-  }, [compact, generationSeriesLabel, hasRevealedGeneration, points, revealedGeneration]);
+  }, [
+    compact,
+    forecastTemperature,
+    generationSeriesLabel,
+    hasRevealedGeneration,
+    hasTemperatureSeries,
+    observedTemperature,
+    points,
+    revealedGeneration,
+  ]);
 
   return (
     <section className="grid h-full min-h-0 w-full min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)]">
@@ -175,6 +258,7 @@ export default function ReplayLoadChart({
       <ChartKey
         generationLabel={usesTraGeneration ? "Generation (TRA)" : "Generation output"}
         showGeneration={hasRevealedGeneration}
+        showTemperature={hasTemperatureSeries}
       />
       <div
         className={`relative mt-1.5 h-full min-w-0 cursor-crosshair overflow-hidden ${
@@ -235,8 +319,16 @@ export default function ReplayLoadChart({
                       "Revealed actual": "Actual demand",
                       "Revealed generation": "Generation output",
                       "Generation (TRA)": "Generation (TRA)",
+                      "Observed temperature": "Observed temperature",
+                      "Forecast temperature": "Forecast temperature",
                     };
                     const label = labels[context.dataset.label ?? ""] ?? context.dataset.label;
+                    if (
+                      context.dataset.label === "Observed temperature" ||
+                      context.dataset.label === "Forecast temperature"
+                    ) {
+                      return `${label}: ${Number(context.raw).toFixed(1)}°C`;
+                    }
                     return `${label}: ${formatMegawatts(Number(context.raw))}`;
                   },
                   afterLabel: (context) => {
@@ -312,6 +404,26 @@ export default function ReplayLoadChart({
                 },
                 grid: { color: grid },
               },
+              temperature: {
+                position: "right",
+                min: temperatureAxisBounds.min,
+                max: temperatureAxisBounds.max,
+                ticks: {
+                  autoSkip: true,
+                  color: TEMPERATURE_LINE_COLOR,
+                  maxTicksLimit: compact ? 5 : 7,
+                  padding: 5,
+                  callback: (value) => `${value}°C`,
+                  font: { size: compact ? 8 : 9 },
+                },
+                grid: { drawOnChartArea: false },
+                title: {
+                  display: !compact,
+                  text: "Temperature",
+                  color: TEMPERATURE_LINE_COLOR,
+                  font: { size: 9, weight: "normal" },
+                },
+              },
             },
           }}
         />
@@ -323,16 +435,23 @@ export default function ReplayLoadChart({
 function ChartKey({
   generationLabel,
   showGeneration,
+  showTemperature,
 }: {
   generationLabel: string;
   showGeneration: boolean;
+  showTemperature: boolean;
 }) {
+  const columnsClass =
+    showGeneration && showTemperature
+      ? "sm:grid-cols-3 xl:grid-cols-6"
+      : showGeneration || showTemperature
+        ? "sm:grid-cols-5"
+        : "sm:grid-cols-4";
+
   return (
     <div
       aria-label="Load forecast chart key"
-      className={`mt-1.5 grid w-full min-w-0 grid-cols-2 items-stretch gap-1 border-t border-slate-700/50 pt-1.5 text-[9px] font-medium text-slate-300 ${
-        showGeneration ? "sm:grid-cols-5" : "sm:grid-cols-4"
-      }`}
+      className={`mt-1.5 grid w-full min-w-0 grid-cols-2 items-stretch gap-1 border-t border-slate-700/50 pt-1.5 text-[9px] font-medium text-slate-300 ${columnsClass}`}
     >
       <ChartKeyItem label="90% forecast range" variant="band" />
       <ChartKeyItem label="Forecast demand" variant="forecast" />
@@ -340,6 +459,12 @@ function ChartKey({
       <ChartKeyItem label="Actual demand" variant="actual" />
       {showGeneration ? (
         <ChartKeyItem label={generationLabel} variant="generation" />
+      ) : null}
+      {showTemperature ? (
+        <ChartKeyItem
+          label="Temperature · observed / forecast"
+          variant="temperature"
+        />
       ) : null}
     </div>
   );
@@ -350,8 +475,26 @@ function ChartKeyItem({
   variant,
 }: {
   label: string;
-  variant: "band" | "forecast" | "historical" | "actual" | "generation";
+  variant:
+    | "band"
+    | "forecast"
+    | "historical"
+    | "actual"
+    | "generation"
+    | "temperature";
 }) {
+  if (variant === "temperature") {
+    return (
+      <span className="inline-flex min-w-0 items-center justify-center gap-1.5 text-center leading-tight">
+        <span aria-hidden="true" className="flex w-4 shrink-0 items-center">
+          <span className="w-2 border-t-2 border-rose-400" />
+          <span className="w-2 border-t-2 border-dashed border-rose-400" />
+        </span>
+        <span className="min-w-0 break-words">{label}</span>
+      </span>
+    );
+  }
+
   const indicatorClass = {
     band: "h-2.5 border border-cyan-400/40 bg-cyan-400/10",
     forecast: "h-0 border-t-2 border-cyan-400",
@@ -366,6 +509,26 @@ function ChartKeyItem({
       <span className="min-w-0 break-words">{label}</span>
     </span>
   );
+}
+
+function getTemperatureBounds(
+  values: Array<number | null | undefined>,
+): { min: number; max: number } {
+  const finiteValues = values.filter(
+    (value): value is number => value != null && Number.isFinite(value),
+  );
+  if (finiteValues.length === 0) {
+    return { min: 22, max: 36 };
+  }
+
+  const observedMin = Math.min(...finiteValues);
+  const observedMax = Math.max(...finiteValues);
+  const center = (observedMin + observedMax) / 2;
+  const halfSpan = Math.max(3, (observedMax - observedMin) / 2 + 1);
+  return {
+    min: Math.floor(center - halfSpan),
+    max: Math.ceil(center + halfSpan),
+  };
 }
 
 function getChartBounds(values: Array<number | null | undefined>): { min: number; max: number } {

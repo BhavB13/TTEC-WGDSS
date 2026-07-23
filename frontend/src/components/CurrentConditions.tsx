@@ -1,5 +1,9 @@
 import type { ReactNode } from "react";
 import type { WeatherData } from "../types/dashboard";
+import {
+  getTemperatureAggregationSummary,
+  getTemperatureMetricLabel,
+} from "../utils/weatherTemperature";
 
 interface CurrentConditionsProps {
   weather: WeatherData;
@@ -12,6 +16,10 @@ export default function CurrentConditions({
   qualityStatus,
   className = "",
 }: CurrentConditionsProps) {
+  const temperatureSummary = getTemperatureAggregationSummary(
+    weather.weather_aggregation ?? weather.temperature_aggregation,
+  );
+
   return (
     <div className={`flex h-full w-full min-w-0 flex-col rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2.5 shadow-[0_0_34px_rgba(8,145,178,0.08)] ${className}`}>
       <div className="mb-2 flex items-start justify-between gap-3">
@@ -29,7 +37,10 @@ export default function CurrentConditions({
       </div>
 
       <div className="grid flex-1 grid-cols-1 gap-1.5 text-sm sm:grid-cols-2">
-        <Metric label="Temperature" value={`${weather.temperature_c.toFixed(1)}°C`} />
+        <Metric
+          label={getTemperatureMetricLabel(weather)}
+          value={`${weather.temperature_c.toFixed(1)}°C`}
+        />
         <Metric label="Humidity" value={`${weather.humidity_percent.toFixed(0)}%`} />
         <Metric label="Rainfall" value={`${weather.rainfall_mm_hr.toFixed(1)} mm/hr`} />
         <Metric label="Cloud Cover" value={`${weather.cloud_cover_percent.toFixed(0)}%`} />
@@ -41,6 +52,7 @@ export default function CurrentConditions({
         <Badge label={weather.weather_condition} />
         <Badge label={weather.provider_name} />
         {qualityStatus ? <Badge label={qualityStatus} /> : null}
+        {temperatureSummary ? <Badge label={temperatureSummary} /> : null}
         {weather.timestamp ? (
           <Badge label={new Date(weather.timestamp).toLocaleTimeString()} />
         ) : null}

@@ -7,11 +7,13 @@ import { dashboardFixture, replayDashboardFixture } from "../test/dashboardFixtu
 const getDashboardSnapshot = vi.fn();
 const controlReplay = vi.fn();
 const evaluateCapacityPlan = vi.fn();
+const getLiveWeatherDisplay = vi.fn();
 
 vi.mock("../services/api", () => ({
   getDashboardSnapshot: (...args: unknown[]) => getDashboardSnapshot(...args),
   controlReplay: (...args: unknown[]) => controlReplay(...args),
   evaluateCapacityPlan: (...args: unknown[]) => evaluateCapacityPlan(...args),
+  getLiveWeatherDisplay: (...args: unknown[]) => getLiveWeatherDisplay(...args),
 }));
 vi.mock("../components/WeatherMap", () => ({
   default: () => <div data-testid="weather-map">Weather map</div>,
@@ -42,7 +44,22 @@ describe("Dashboard", () => {
     getDashboardSnapshot.mockReset();
     controlReplay.mockReset();
     evaluateCapacityPlan.mockReset();
+    getLiveWeatherDisplay.mockReset();
     evaluateCapacityPlan.mockResolvedValue(dashboardFixture.capacity_plan);
+    getLiveWeatherDisplay.mockResolvedValue({
+      weather: {
+        ...dashboardFixture.weather,
+        timestamp: "2026-07-22T13:15:00-04:00",
+        temperature_c: 30.9,
+        provider_name: "Open-Meteo Best Match",
+      },
+      forecast: dashboardFixture.forecast.items.map((item, index) => ({
+        ...item,
+        forecast_timestamp: new Date(Date.now() + (index + 1) * 3_600_000).toISOString(),
+        provider_name: "Consensus (Open-Meteo Best Match + MET Norway + Open-Meteo NOAA GFS)",
+      })),
+      fetchedAt: "2026-07-22T13:16:00-04:00",
+    });
     window.localStorage.clear();
   });
 
@@ -60,6 +77,10 @@ describe("Dashboard", () => {
         "2025 hourly SCADA + weather demonstration · 9/720 records · 1.1%",
       ),
     ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Weather" }));
+    expect(
+      screen.getByLabelText("Forecast demand 890 MW"),
+    ).toHaveTextContent("890 MW");
 
     await user.click(screen.getByRole("button", { name: "Step" }));
     await waitFor(() =>
@@ -101,8 +122,19 @@ describe("Dashboard", () => {
 
     await user.click(screen.getByRole("button", { name: "Weather" }));
     expect(screen.getByText("Current Weather Conditions")).toBeInTheDocument();
-    expect(screen.getByText("Next 6 Hours")).toBeInTheDocument();
+    expect(screen.getByText("Next 6 Hours · Weather + Demand")).toBeInTheDocument();
     expect(screen.getAllByText("3 sources")).toHaveLength(6);
+    expect(
+      screen.getByLabelText("Forecast demand 990 MW"),
+    ).toHaveTextContent("990 MW");
+
+    await user.click(screen.getByRole("button", { name: "Live Weather Test" }));
+    await waitFor(() => expect(getLiveWeatherDisplay).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("30.9°C")).toBeInTheDocument();
+    expect(
+      screen.getByText("Display only · Trinidad weighted network"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Open-Meteo Best Match")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Demand Forecast" }));
     expect(screen.getByTestId("demand-chart")).toBeInTheDocument();
@@ -148,7 +180,7 @@ describe("Dashboard", () => {
     await user.click(screen.getByRole("button", { name: "Analytics" }));
     expect(screen.getByText("Calibration Summary")).toBeInTheDocument();
     expect(screen.getByText("Forecast Assurance")).toBeInTheDocument();
-    expect(screen.getByText("Source / Hour Alignment")).toBeInTheDocument();
+    expect(screen.getByText(/Source \/ hour alignment:/i)).toBeInTheDocument();
   });
 
   it("shows the API error state and retries", async () => {

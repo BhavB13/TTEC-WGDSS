@@ -74,8 +74,22 @@ describe("ReplayLoadChart", () => {
     expect(
       screen.getByLabelText("Load forecast chart key"),
     ).toHaveTextContent(
-      "90% forecast rangeForecast demandHistorical averageActual demandGeneration (TRA)",
+      "90% forecast rangeForecast demandHistorical averageActual demandGeneration (TRA)Temperature · observed / forecast",
     );
+
+    const observedTemperature = chartProps.data.datasets.find(
+      (dataset) => dataset.label === "Observed temperature",
+    );
+    const forecastTemperature = chartProps.data.datasets.find(
+      (dataset) => dataset.label === "Forecast temperature",
+    );
+    expect(observedTemperature?.data.slice(7, 10)).toEqual([27.8, 28.2, null]);
+    expect(forecastTemperature?.data.slice(7, 11)).toEqual([
+      null,
+      28.2,
+      28.6,
+      28.75,
+    ]);
 
     const options = lineChartSpy.mock.calls.at(-1)?.[0] as {
       options: {
@@ -84,6 +98,10 @@ describe("ReplayLoadChart", () => {
           tooltip: {
             filter: (context: { dataset: { label: string } }) => boolean;
             callbacks: {
+              label: (context: {
+                dataset: { label: string };
+                raw: number;
+              }) => string;
               afterLabel: (context: {
                 dataset: { label: string };
                 dataIndex: number;
@@ -99,6 +117,11 @@ describe("ReplayLoadChart", () => {
             max: number;
             ticks: { stepSize: number };
           };
+          temperature: {
+            min: number;
+            max: number;
+            position: string;
+          };
         };
       };
     };
@@ -109,6 +132,11 @@ describe("ReplayLoadChart", () => {
       min: 700,
       max: 1500,
       ticks: { stepSize: 100 },
+    });
+    expect(options.options.scales.temperature).toMatchObject({
+      position: "right",
+      min: 24,
+      max: 32,
     });
     expect(
       options.options.plugins.tooltip.filter({
@@ -121,6 +149,12 @@ describe("ReplayLoadChart", () => {
         dataIndex: 0,
       }),
     ).toEqual(["90% forecast range: 780 MW to 820 MW"]);
+    expect(
+      options.options.plugins.tooltip.callbacks.label({
+        dataset: { label: "Observed temperature" },
+        raw: 25,
+      }),
+    ).toBe("Observed temperature: 25.0°C");
     expect(
       options.options.plugins.tooltip.callbacks.afterBody([{ dataIndex: 0 }]),
     ).toEqual(

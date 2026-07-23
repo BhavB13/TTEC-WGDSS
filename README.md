@@ -95,6 +95,11 @@ The six-hour pipeline now reconciles Open-Meteo Best Match, MET Norway, and
 Open-Meteo NOAA GFS by timestamp and field. June synchronizes to the current
 Trinidad clock, demand forecasts use validated weather features, and dispatch
 guidance distinguishes the 30 MW fast-start set from 60-120 MW heavy capacity.
+Live temperature uses a ten-point Trinidad demand-exposure weighted aggregate,
+with residential and commercial load centers weighted above the Point Lisas
+industrial reference. The weights are explicitly prototype policy and must be
+confirmed or replaced with T&TEC-approved load-zone factors before operational
+use.
 See `docs/FORECAST_DISPATCH_UPGRADE.md` and
 `docs/HISTORICAL_DATA_IMPORTS.md`.
 

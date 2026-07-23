@@ -16,6 +16,7 @@ from app.providers.open_meteo_provider import OpenMeteoProvider
 from app.providers.weather_provider import WeatherProvider
 from app.providers.weatherapi_provider import WeatherAPIProvider
 from app.services.provider_health import record_provider_failure, record_provider_success
+from app.services.temperature_aggregation_service import TemperatureAggregationService
 
 logger = logging.getLogger(__name__)
 TRINIDAD_TZ = ZoneInfo("America/Port_of_Spain")
@@ -34,6 +35,10 @@ class WeatherService:
         fallback_provider: WeatherProvider | None = None,
         consensus_providers: list[WeatherProvider] | None = None,
         cache_ttl_seconds: int | None = None,
+        temperature_aggregation_service: (
+            TemperatureAggregationService | None
+        ) = None,
+        enable_temperature_aggregation: bool | None = None,
     ) -> None:
         use_default_ensemble = provider is None and fallback_provider is None
         self.primary_provider = provider or OpenMeteoProvider()
@@ -48,6 +53,23 @@ class WeatherService:
             )
         )
         self.cache_ttl_seconds = cache_ttl_seconds or settings.WEATHER_CACHE_TTL_SECONDS
+        aggregation_enabled = (
+            settings.TEMPERATURE_AGGREGATION_ENABLED
+            if enable_temperature_aggregation is None
+            else enable_temperature_aggregation
+        )
+        if temperature_aggregation_service is not None:
+            self.temperature_aggregation_service = temperature_aggregation_service
+        elif (
+            aggregation_enabled
+            and use_default_ensemble
+            and isinstance(self.primary_provider, OpenMeteoProvider)
+        ):
+            self.temperature_aggregation_service = TemperatureAggregationService(
+                provider=self.primary_provider
+            )
+        else:
+            self.temperature_aggregation_service = None
         self._cache: dict[str, _CacheEntry] = {}
         self._cache_lock = asyncio.Lock()
         self.last_current_fallback_used = False
@@ -76,6 +98,7 @@ class WeatherService:
 
         raw = await self._fetch_current_with_failover(latitude, longitude)
         normalized = self._normalize_current_weather(raw)
+        normalized = await self._apply_current_temperature_aggregate(normalized)
         await self._set_cache(cache_key, normalized)
         return copy.deepcopy(normalized)
 
@@ -126,8 +149,152 @@ class WeatherService:
             )
             self.last_forecast_consensus_degraded = False
         normalized.sort(key=self._forecast_sort_key)
+        normalized = await self._apply_forecast_temperature_aggregates(
+            normalized,
+            forecast_hours=max(1, min(days, 16)) * 24,
+        )
         await self._set_cache(cache_key, normalized)
         return copy.deepcopy(normalized)
+
+    async def _apply_current_temperature_aggregate(
+        self,
+        weather: dict[str, Any],
+    ) -> dict[str, Any]:
+        if self.temperature_aggregation_service is None:
+            return weather
+        try:
+            aggregate = (
+                await self.temperature_aggregation_service.get_current_aggregate()
+            )
+        except Exception as exc:  # pragma: no cover - provider resilience
+            logger.warning(
+                "Trinidad and Tobago weather aggregation unavailable; retaining "
+                "representative-site weather: %s",
+                exc,
+            )
+            return weather
+
+        updated = self._apply_weighted_weather_fields(weather, aggregate)
+        temperature = float(updated["temperature_c"])
+        updated["heat_index_c"] = self._calculate_heat_index(
+            temperature,
+            float(updated["humidity_percent"]),
+        )
+        updated["temperature_aggregation"] = aggregate
+        updated["weather_aggregation"] = aggregate
+        return updated
+
+    async def _apply_forecast_temperature_aggregates(
+        self,
+        forecast: list[dict[str, Any]],
+        *,
+        forecast_hours: int,
+    ) -> list[dict[str, Any]]:
+        if self.temperature_aggregation_service is None or not forecast:
+            return forecast
+        try:
+            aggregates = (
+                await self.temperature_aggregation_service.get_forecast_aggregates(
+                    forecast_hours
+                )
+            )
+        except Exception as exc:  # pragma: no cover - provider resilience
+            logger.warning(
+                "Trinidad and Tobago forecast weather aggregation unavailable; "
+                "retaining provider-consensus weather: %s",
+                exc,
+            )
+            return forecast
+
+        updated_forecast: list[dict[str, Any]] = []
+        for period in forecast:
+            updated = copy.deepcopy(period)
+            timestamp = self._parse_datetime(period.get("forecast_timestamp"))
+            aggregate = None
+            if timestamp is not None:
+                aggregate = aggregates.get(
+                    timestamp.astimezone(timezone.utc).replace(
+                        minute=0,
+                        second=0,
+                        microsecond=0,
+                    )
+                )
+            if aggregate is not None:
+                updated = self._apply_weighted_weather_fields(
+                    updated,
+                    aggregate,
+                )
+                temperature = float(updated["temperature_c"])
+                updated["heat_index_c"] = self._calculate_heat_index(
+                    temperature,
+                    float(updated["humidity_percent"]),
+                )
+                updated["temperature_aggregation"] = aggregate
+                updated["weather_aggregation"] = aggregate
+            updated_forecast.append(updated)
+        return updated_forecast
+
+    @classmethod
+    def _apply_weighted_weather_fields(
+        cls,
+        weather: dict[str, Any],
+        aggregate: dict[str, Any],
+    ) -> dict[str, Any]:
+        updated = copy.deepcopy(weather)
+        field_map = {
+            "temperature_c": "weighted_average_c",
+            "humidity_percent": "weighted_humidity_percent",
+            "rainfall_mm_hr": "weighted_rainfall_mm_hr",
+            "cloud_cover_percent": "weighted_cloud_cover_percent",
+            "wind_speed_kmh": "weighted_wind_speed_kmh",
+            "wind_direction_deg": "weighted_wind_direction_deg",
+            "pressure_hpa": "weighted_pressure_hpa",
+            "precipitation_probability_percent": (
+                "weighted_precipitation_probability_percent"
+            ),
+        }
+        for weather_field, aggregate_field in field_map.items():
+            value = aggregate.get(aggregate_field)
+            if value is not None:
+                updated[weather_field] = value
+
+        rainfall = max(0.0, float(updated.get("rainfall_mm_hr", 0.0)))
+        cloud_cover = cls._clamp(
+            float(updated.get("cloud_cover_percent", 0.0)),
+            0.0,
+            100.0,
+        )
+        updated["rainfall_mm_hr"] = round(rainfall, 2)
+        updated["cloud_cover_percent"] = round(cloud_cover, 1)
+        updated["humidity_percent"] = round(
+            cls._clamp(float(updated["humidity_percent"]), 0.0, 100.0),
+            1,
+        )
+        updated["wind_speed_kmh"] = round(
+            max(0.0, float(updated["wind_speed_kmh"])),
+            1,
+        )
+        if updated.get("wind_direction_deg") is not None:
+            updated["wind_direction_deg"] = round(
+                float(updated["wind_direction_deg"]) % 360.0,
+                1,
+            )
+        if updated.get("precipitation_probability_percent") is not None:
+            updated["precipitation_probability_percent"] = round(
+                cls._clamp(
+                    float(updated["precipitation_probability_percent"]),
+                    0.0,
+                    100.0,
+                ),
+                1,
+            )
+        updated["weather_condition"] = cls._consensus_condition(
+            [updated],
+            rainfall,
+            cloud_cover,
+        )
+        updated["rain_severity"] = cls._rain_severity(rainfall)
+        return updated
 
     async def get_weather_bundle(
         self,
@@ -338,6 +505,13 @@ class WeatherService:
             )
 
             temperature = cls._weighted_mean(items, "temperature_c")
+            temperature_aggregation = cls._reconcile_temperature_aggregation(
+                items
+            )
+            if temperature_aggregation is not None:
+                temperature = float(
+                    temperature_aggregation["weighted_average_c"]
+                )
             humidity = cls._clamp(
                 cls._weighted_mean(items, "humidity_percent"),
                 0.0,
@@ -372,44 +546,56 @@ class WeatherService:
                 field: len(values) for field, values in field_values.items()
             }
 
-            reconciled.append(
-                {
-                    "forecast_timestamp": timestamp.astimezone(TRINIDAD_TZ).isoformat(),
-                    "temperature_c": round(temperature, 1),
-                    "humidity_percent": round(humidity, 1),
-                    "rainfall_mm_hr": round(rainfall, 2),
-                    "cloud_cover_percent": round(cloud_cover, 1),
-                    "wind_speed_kmh": round(wind_speed, 1),
-                    "pressure_hpa": round(pressure, 1) if pressure is not None else None,
-                    "weather_condition": condition,
-                    "heat_index_c": cls._calculate_heat_index(temperature, humidity),
-                    "precipitation_probability_percent": round(
-                        cls._clamp(precipitation_probability, 0.0, 100.0),
-                        1,
-                    ),
-                    "confidence_score": confidence,
-                    "rain_severity": cls._rain_severity(rainfall),
-                    "provider_name": (
-                        f"Consensus ({' + '.join(provider_names)})"
-                        if len(provider_names) > 1
-                        else provider_names[0]
-                    ),
-                    "source_count": len(provider_names),
-                    "source_names": provider_names,
-                    "source_sync_status": (
-                        "COMPLETE" if len(provider_names) == expected_sources else "DEGRADED"
-                    ),
-                    "field_source_counts": field_source_counts,
-                    "temperature_spread_c": round(
-                        cls._spread(temperature_values),
-                        2,
-                    ),
-                    "cloud_cover_spread_percent": round(
-                        cls._spread(cloud_values),
-                        1,
-                    ),
-                }
-            )
+            reconciled_item = {
+                "forecast_timestamp": timestamp.astimezone(
+                    TRINIDAD_TZ
+                ).isoformat(),
+                "temperature_c": round(temperature, 1),
+                "humidity_percent": round(humidity, 1),
+                "rainfall_mm_hr": round(rainfall, 2),
+                "cloud_cover_percent": round(cloud_cover, 1),
+                "wind_speed_kmh": round(wind_speed, 1),
+                "pressure_hpa": (
+                    round(pressure, 1) if pressure is not None else None
+                ),
+                "weather_condition": condition,
+                "heat_index_c": cls._calculate_heat_index(
+                    temperature,
+                    humidity,
+                ),
+                "precipitation_probability_percent": round(
+                    cls._clamp(precipitation_probability, 0.0, 100.0),
+                    1,
+                ),
+                "confidence_score": confidence,
+                "rain_severity": cls._rain_severity(rainfall),
+                "provider_name": (
+                    f"Consensus ({' + '.join(provider_names)})"
+                    if len(provider_names) > 1
+                    else provider_names[0]
+                ),
+                "source_count": len(provider_names),
+                "source_names": provider_names,
+                "source_sync_status": (
+                    "COMPLETE"
+                    if len(provider_names) == expected_sources
+                    else "DEGRADED"
+                ),
+                "field_source_counts": field_source_counts,
+                "temperature_spread_c": round(
+                    cls._spread(temperature_values),
+                    2,
+                ),
+                "cloud_cover_spread_percent": round(
+                    cls._spread(cloud_values),
+                    1,
+                ),
+            }
+            if temperature_aggregation is not None:
+                reconciled_item["temperature_aggregation"] = (
+                    temperature_aggregation
+                )
+            reconciled.append(reconciled_item)
         return reconciled
 
     # Backward-compatible alias retained for existing internal callers/tests.
@@ -447,6 +633,120 @@ class WeatherService:
             weighted_total += numeric_value * weight
             total_weight += weight
         return weighted_total / total_weight if total_weight else 0.0
+
+    @classmethod
+    def _reconcile_temperature_aggregation(
+        cls,
+        items: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        aggregate_items = [
+            (item, item.get("temperature_aggregation"))
+            for item in items
+            if isinstance(item.get("temperature_aggregation"), dict)
+        ]
+        if not aggregate_items:
+            return None
+
+        templates: dict[str, dict[str, Any]] = {}
+        point_values: dict[str, list[tuple[float, float]]] = {}
+        for item, aggregate in aggregate_items:
+            provider_weight = cls._provider_weight(
+                str(item.get("provider_name", ""))
+            )
+            for sample in aggregate.get("samples", []):
+                if not isinstance(sample, dict) or not sample.get("id"):
+                    continue
+                try:
+                    temperature = float(sample["temperature_c"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                point_id = str(sample["id"])
+                templates.setdefault(point_id, sample)
+                point_values.setdefault(point_id, []).append(
+                    (temperature, provider_weight)
+                )
+
+        if not point_values:
+            first = copy.deepcopy(aggregate_items[0][1])
+            first["weighted_average_c"] = round(
+                cls._weighted_mean(items, "temperature_c"),
+                2,
+            )
+            return first
+
+        samples: list[dict[str, Any]] = []
+        covered_weight = 0.0
+        weighted_total = 0.0
+        for point_id, values in point_values.items():
+            template = copy.deepcopy(templates[point_id])
+            source_weight = sum(weight for _, weight in values)
+            temperature = (
+                sum(value * weight for value, weight in values) / source_weight
+                if source_weight
+                else sum(value for value, _ in values) / len(values)
+            )
+            demand_weight = float(template.get("demand_weight", 0.0) or 0.0)
+            template["temperature_c"] = round(temperature, 2)
+            template["provider_name"] = "Archived model consensus"
+            samples.append(template)
+            covered_weight += demand_weight
+            weighted_total += temperature * demand_weight
+
+        if not samples or covered_weight <= 0:
+            return None
+        for sample in samples:
+            sample["effective_weight_percent"] = round(
+                float(sample.get("demand_weight", 0.0)) / covered_weight * 100.0,
+                2,
+            )
+        temperatures = [float(sample["temperature_c"]) for sample in samples]
+        first_aggregate = aggregate_items[0][1]
+        expected_count = max(
+            int(aggregate.get("expected_sample_count", len(samples)) or len(samples))
+            for _, aggregate in aggregate_items
+        )
+        provider_names = [
+            str(item.get("provider_name", "Unknown"))
+            for item, _ in aggregate_items
+        ]
+        return {
+            "label": first_aggregate.get(
+                "label",
+                "Trinidad and Tobago weighted weather",
+            ),
+            "method": first_aggregate.get(
+                "method",
+                "demand_exposure_weighted_mean",
+            ),
+            "policy_version": first_aggregate.get(
+                "policy_version",
+                "PROTOTYPE_DEMAND_EXPOSURE_V1",
+            ),
+            "policy_status": first_aggregate.get(
+                "policy_status",
+                settings.TEMPERATURE_AGGREGATION_POLICY_STATUS,
+            ),
+            "status": (
+                "COMPLETE"
+                if len(samples) == expected_count
+                else "DEGRADED"
+            ),
+            "source_name": f"Consensus ({' + '.join(provider_names)})",
+            "weighted_average_c": round(weighted_total / covered_weight, 2),
+            "minimum_c": round(min(temperatures), 2),
+            "maximum_c": round(max(temperatures), 2),
+            "spread_c": round(max(temperatures) - min(temperatures), 2),
+            "sample_count": len(samples),
+            "expected_sample_count": expected_count,
+            "weight_coverage_percent": min(
+                float(
+                    aggregate.get("weight_coverage_percent", 100.0)
+                    or 0.0
+                )
+                for _, aggregate in aggregate_items
+            ),
+            "samples": samples,
+        }
 
     @staticmethod
     def _provider_weight(provider_name: str) -> float:
@@ -577,7 +877,7 @@ class WeatherService:
         )
         timestamp = self._normalize_timestamp(data.get("timestamp") or data.get("last_updated"))
 
-        return {
+        normalized = {
             "timestamp": timestamp,
             "temperature_c": temperature_c,
             "humidity_percent": humidity_percent,
@@ -591,6 +891,11 @@ class WeatherService:
             "pressure_hpa": pressure_hpa,
             "provider_name": data.get("provider_name", "Unknown"),
         }
+        if isinstance(data.get("temperature_aggregation"), dict):
+            normalized["temperature_aggregation"] = copy.deepcopy(
+                data["temperature_aggregation"]
+            )
+        return normalized
 
     def _normalize_forecast_item(self, data: dict[str, Any]) -> dict[str, Any]:
         temperature_c = self._optional_number(
@@ -637,7 +942,7 @@ class WeatherService:
 
         confidence_score = self._estimate_confidence(data.get("provider_name", "Unknown"))
 
-        return {
+        normalized = {
             "forecast_timestamp": timestamp,
             "temperature_c": temperature_c,
             "humidity_percent": humidity_percent,
@@ -655,6 +960,11 @@ class WeatherService:
             ),
             "provider_name": data.get("provider_name", "Unknown"),
         }
+        if isinstance(data.get("temperature_aggregation"), dict):
+            normalized["temperature_aggregation"] = copy.deepcopy(
+                data["temperature_aggregation"]
+            )
+        return normalized
 
     @staticmethod
     def _optional_number(data: dict[str, Any], keys: list[str]) -> float | None:

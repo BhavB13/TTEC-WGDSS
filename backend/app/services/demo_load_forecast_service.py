@@ -49,6 +49,8 @@ class DemoForecastPoint:
     forecast_demand_mw: float
     historical_average_mw: float
     actual_demand_mw: float | None
+    actual_temperature_c: float | None
+    forecast_temperature_c: float | None
     uncertainty_mw: float
     weather_impact_mw: float
     weather_confidence: float
@@ -490,6 +492,16 @@ class DemoLoadForecastService:
                     historical_average_mw=round(base, 2),
                     actual_demand_mw=(
                         row.demand_mw if row.timestamp <= reveal_at else None
+                    ),
+                    actual_temperature_c=(
+                        row.temperature_c
+                        if row.timestamp <= reveal_at
+                        else None
+                    ),
+                    forecast_temperature_c=(
+                        target.temperature_c
+                        if row.timestamp > reveal_at
+                        else None
                     ),
                     uncertainty_mw=round(uncertainty, 2),
                     weather_impact_mw=round(forecast_value - neutral_value, 2),
