@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     SCADA_REPLAY_ARCHIVE_PATH: str = ""
     SCADA_HISTORICAL_WEATHER_BACKFILL: bool = False
 
+    # Isolated, read-only static SCADA snapshot experiment. The source archive
+    # and generated sessions never enter the normal WGDSS database.
+    LIVE_SCADA_SNAPSHOT_PATH: str = ""
+    LIVE_SCADA_SESSION_ROOT: str = "var/live_scada_sessions"
+    LIVE_SCADA_MODEL_ARTIFACT_PATH: str = ""
+
     # Historical trend-export policy. These defaults preserve current prototype
     # behavior and are not confirmed T&TEC/OSI production rules.
     SCADA_STRICT_QUALITY_VALUES: str = "Good"

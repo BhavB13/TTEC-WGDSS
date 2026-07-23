@@ -10,6 +10,10 @@ import type {
   ReplayStatus,
 } from "../types/dashboard";
 import type { StormTrackingSnapshot } from "../types/storm";
+import type {
+  LiveScadaExperimentStatus,
+  LiveScadaTestSession,
+} from "../types/liveScadaExperiment";
 
 const API_BASE_URL = (
   (
@@ -24,6 +28,7 @@ const LIVE_WEATHER_FORECAST_PATH = "/api/v1/weather/forecast?days=2";
 const STORM_TRACKING_PATH = "/api/v1/storm/tracking";
 const REPLAY_CONTROL_PATH = "/api/v1/replay/control";
 const CAPACITY_PLAN_EVALUATE_PATH = "/api/v1/capacity-plan/evaluate";
+const LIVE_SCADA_EXPERIMENT_PATH = "/api/v1/experiments/live-scada-snapshot";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
@@ -153,4 +158,21 @@ export async function evaluateCapacityPlan(input: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
+}
+
+export function getLiveScadaExperimentStatus(): Promise<LiveScadaExperimentStatus> {
+  return requestJson<LiveScadaExperimentStatus>(`${LIVE_SCADA_EXPERIMENT_PATH}/status`);
+}
+
+export function getLatestLiveScadaSession(): Promise<LiveScadaTestSession> {
+  return requestJson<LiveScadaTestSession>(
+    `${LIVE_SCADA_EXPERIMENT_PATH}/sessions/latest`,
+  );
+}
+
+export function runLiveScadaSession(): Promise<LiveScadaTestSession> {
+  return requestJson<LiveScadaTestSession>(
+    `${LIVE_SCADA_EXPERIMENT_PATH}/sessions/run`,
+    { method: "POST" },
+  );
 }

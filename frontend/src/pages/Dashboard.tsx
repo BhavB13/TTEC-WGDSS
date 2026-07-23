@@ -5,6 +5,7 @@ import DemandForecastChart from "../components/DemandForecastChart";
 import DayNavigationBar from "../components/DayNavigationBar";
 import Header from "../components/Header";
 import HistoricalDemandChart from "../components/HistoricalDemandChart";
+import LiveScadaTest from "../components/LiveScadaTest";
 import SelectedDayChart from "../components/SelectedDayChart";
 import ProbabilityGauge from "../components/ProbabilityGauge";
 import ReplayControlBar from "../components/ReplayControlBar";
@@ -47,7 +48,8 @@ type DashboardTab =
   | "demandForecast"
   | "riskGauge"
   | "operationalGuidance"
-  | "analytics";
+  | "analytics"
+  | "liveScadaTest";
 
 const FALLBACK_WEATHER: DashboardSnapshot["weather"] = {
   timestamp: null,
@@ -544,6 +546,11 @@ function DashboardContent() {
                   />
                 </WorkspacePage>
               ) : null}
+              {activeTab === "liveScadaTest" ? (
+                <WorkspacePage>
+                  <LiveScadaTest />
+                </WorkspacePage>
+              ) : null}
             </div>
           </div>
         </section>
@@ -613,11 +620,12 @@ function TabBar({
     { id: "riskGauge", label: "Risk Gauge", shortLabel: "Risk" },
     { id: "operationalGuidance", label: "Operational Guidance", shortLabel: "Guidance" },
     { id: "analytics", label: "Analytics", shortLabel: "Analytics" },
+    { id: "liveScadaTest", label: "Live SCADA Test", shortLabel: "SCADA Test" },
   ];
 
   return (
     <div className="w-full min-w-0 max-w-full rounded-xl border border-slate-800 bg-slate-950/50 p-1">
-      <div className="grid min-w-0 grid-cols-4 gap-1 sm:grid-cols-7">
+      <div className="grid min-w-0 grid-cols-4 gap-1 sm:grid-cols-8">
       {tabs.map((tab) => {
         const selected = tab.id === activeTab;
         return (

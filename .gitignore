@@ -44,3 +44,4 @@ Thumbs.db
 .coverage
 htmlcov/
 tmp/
+backend/var/live_scada_sessions/
