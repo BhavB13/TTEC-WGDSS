@@ -5,6 +5,7 @@ import {
   getLatestLiveScadaSession,
   runLiveScadaSession,
 } from "../services/api";
+import LiveScadaSnapshotChart from "./LiveScadaSnapshotChart";
 import type {
   LiveScadaExperimentStatus,
   LiveScadaTestSession,
@@ -142,6 +143,12 @@ export default function LiveScadaTest() {
               <Metric label="TA / available" evidence={evidence.available_capacity_ta_mw} />
               <Metric label="SCADA temperature" evidence={evidence.temperature_c} />
             </div>
+            <LiveScadaSnapshotChart
+              observed={session.source.hourly_series}
+              forecast={forecast}
+              boundary={session.source.latest_valid_timestamp}
+              isModelForecast={session.forecasts.length > 0}
+            />
             <Panel title="Observed / forecast boundary">
               <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
                 <Badge text={`Observed through ${formatTime(session.source.latest_valid_timestamp)}`} />

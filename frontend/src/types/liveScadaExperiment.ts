@@ -8,6 +8,19 @@ export interface SnapshotFieldEvidence {
   warnings: string[];
 }
 
+export interface SnapshotHourlyPoint {
+  timestamp: string;
+  available_at: string;
+  demand_mw?: number | null;
+  generation_tra_mw?: number | null;
+  spinning_reserve_mw?: number | null;
+  available_capacity_ta_mw?: number | null;
+  temperature_c?: number | null;
+  coverage_percent: Record<string, number>;
+  quality_status: string;
+  warnings: string[];
+}
+
 export interface ExperimentalForecastPoint {
   horizon_hours: number;
   forecast_timestamp: string;
@@ -50,6 +63,7 @@ export interface LiveScadaTestSession {
     future_record_count: number;
     missing_required_variables: string[];
     field_evidence: SnapshotFieldEvidence[];
+    hourly_series: SnapshotHourlyPoint[];
     warnings: string[];
   };
   model: {
