@@ -67,11 +67,13 @@ async function readErrorMessage(response: Response): Promise<string> {
 
 export async function getDashboardSnapshot(options?: {
   forceRefresh?: boolean;
+  selectedDate?: string | null;
 }): Promise<DashboardSnapshot> {
   const forceRefresh = options?.forceRefresh ?? false;
-  const path = forceRefresh
-    ? `${DASHBOARD_SNAPSHOT_PATH}?force_refresh=true`
-    : DASHBOARD_SNAPSHOT_PATH;
+  const params = new URLSearchParams();
+  if (forceRefresh) params.set("force_refresh", "true");
+  if (options?.selectedDate) params.set("selected_date", options.selectedDate);
+  const path = `${DASHBOARD_SNAPSHOT_PATH}?${params.toString()}`;
   return requestJson<DashboardSnapshot>(path);
 }
 

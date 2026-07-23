@@ -241,7 +241,7 @@ export default function RiskTimelineChart({
               if (datasetLabel === "No-action reserve") {
                 return [
                   `No-action reserve: ${(planPoint?.baseline_reserve_mw ?? point.projected_reserve_mw).toFixed(1)} MW`,
-                  `No-action risk: ${(planPoint?.baseline_capacity_risk_percent ?? point.capacity_risk_percent).toFixed(1)}%`,
+                  `Generation need without action: ${(planPoint?.baseline_capacity_risk_percent ?? point.capacity_risk_percent).toFixed(1)}%`,
                 ];
               }
               if (datasetLabel === "Post-plan reserve") {

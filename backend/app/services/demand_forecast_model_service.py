@@ -30,6 +30,7 @@ from app.services.forecast_calendar_service import (
     calendar_feature_vector,
 )
 from app.services.similar_period_service import similar_period_forecast
+from app.services.data_period_policy import DataPeriodPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -270,8 +271,18 @@ class DemandForecastTrainingResult:
 
 
 class DemandForecastModelService:
-    def __init__(self, session_factory=SessionLocal) -> None:
+    def __init__(
+        self,
+        session_factory=SessionLocal,
+        enforce_period_policy: bool | None = None,
+    ) -> None:
         self.session_factory = session_factory
+        self.period_policy = DataPeriodPolicy.from_settings()
+        self.enforce_period_policy = (
+            session_factory is SessionLocal
+            if enforce_period_policy is None
+            else enforce_period_policy
+        )
 
     def train_and_store(
         self,
@@ -293,6 +304,27 @@ class DemandForecastModelService:
                     )
                 )
             )
+            excluded = (
+                [
+                    row for row in rows
+                    if not self.period_policy.is_training_timestamp(row.feature_timestamp)
+                    or not self.period_policy.is_training_timestamp(row.target_timestamp)
+                ]
+                if self.enforce_period_policy
+                else []
+            )
+            if excluded:
+                logger.warning(
+                    "Excluded %s forecast rows outside configured October-May "
+                    "training period; June remains simulated-live only",
+                    len(excluded),
+                )
+            if self.enforce_period_policy:
+                rows = [
+                    row for row in rows
+                    if self.period_policy.is_training_timestamp(row.feature_timestamp)
+                    and self.period_policy.is_training_timestamp(row.target_timestamp)
+                ]
             results = self.evaluate_rows(rows, inference_rows=inference_rows)
             if replace_existing:
                 session.execute(delete(DemandForecastResult))

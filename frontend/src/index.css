@@ -98,6 +98,227 @@ body {
   min-width: 0;
   animation: dashboard-rise 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
+
+.dashboard-shell-grid {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  gap: 0.65rem;
+}
+
+.dashboard-map-column {
+  height: 28rem;
+  min-width: 0;
+  min-height: 0;
+}
+
+.dashboard-workspace {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 42rem;
+  max-width: 100%;
+  flex-direction: column;
+  overflow: visible;
+  border: 1px solid rgba(34, 211, 238, 0.15);
+  border-radius: 1rem;
+  background: rgba(15, 23, 42, 0.6);
+  padding: 0.5rem;
+  box-shadow: 0 0 40px rgba(8, 145, 178, 0.06);
+}
+
+.home-primary-grid {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0%;
+  gap: 0.5rem;
+}
+
+@media (min-width: 1280px) {
+  .dashboard-shell-grid {
+    height: 100%;
+    grid-template-columns: minmax(260px, 24vw) minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .dashboard-map-column {
+    height: 100%;
+    align-self: stretch;
+  }
+
+  .dashboard-workspace {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .home-primary-grid {
+    grid-template-columns: minmax(0, 3fr) minmax(14rem, 1fr);
+  }
+}
+
+.mode-bar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid rgba(34, 211, 238, 0.16);
+  border-radius: 0.75rem;
+  background: rgba(2, 6, 23, 0.78);
+  padding: 0.4rem 0.5rem;
+}
+
+.day-navigation-controls {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem;
+  border: 1px solid rgba(51, 65, 85, 0.9);
+  border-radius: 0.6rem;
+}
+
+.day-navigation-controls button,
+.day-navigation-controls input,
+.chart-series-controls button {
+  border: 1px solid rgba(71, 85, 105, 0.75);
+  border-radius: 0.45rem;
+  background: rgba(15, 23, 42, 0.9);
+  color: #cbd5e1;
+  font: inherit;
+}
+
+.day-navigation-controls label {
+  display: grid;
+  gap: 0.1rem;
+  color: #94a3b8;
+  font-size: 0.55rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.day-navigation-controls button,
+.day-navigation-controls input {
+  min-height: 1.9rem;
+  padding: 0.28rem 0.5rem;
+  font-size: 0.65rem;
+}
+
+.day-navigation-controls button:hover:not(:disabled),
+.chart-series-controls button:hover {
+  border-color: rgba(34, 211, 238, 0.5);
+  color: white;
+}
+
+.day-navigation-controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.mode-evidence {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem 0.65rem;
+  color: #94a3b8;
+  font-size: 0.62rem;
+}
+
+.mode-evidence strong {
+  color: #67e8f9;
+  letter-spacing: 0.08em;
+}
+
+.mode-evidence em {
+  min-width: 8rem;
+  max-width: min(32rem, 45%);
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: #fbbf24;
+  font-style: normal;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mode-evidence .mode-source {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mode-evidence.replay-day strong {
+  color: #fbbf24;
+}
+
+@media (min-width: 1536px) {
+  .dashboard-shell-grid {
+    grid-template-columns: clamp(280px, 23vw, 360px) minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 1280px) and (max-height: 850px) {
+  .mode-bar {
+    padding-block: 0.25rem;
+  }
+
+  .day-navigation-controls button,
+  .day-navigation-controls input {
+    min-height: 1.65rem;
+    padding-block: 0.2rem;
+  }
+
+  .replay-control-bar {
+    padding-block: 0.3rem;
+  }
+}
+
+.chart-series-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.3rem;
+}
+
+.chart-series-controls button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.6rem;
+  opacity: 0.58;
+}
+
+.chart-series-controls button.is-active {
+  border-color: rgba(34, 211, 238, 0.4);
+  opacity: 1;
+}
+
+.chart-series-controls button span {
+  width: 0.65rem;
+  height: 0.18rem;
+  border-radius: 999px;
+}
+
+@media (max-width: 1100px) {
+  .mode-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .mode-evidence {
+    justify-content: flex-start;
+  }
+
+  .mode-evidence em {
+    text-align: left;
+  }
+}
 /* Home decision bubbles need to wrap cleanly on narrower laptop widths. */
 .home-weather-card > *,
 .home-weather-card *,
@@ -124,6 +345,98 @@ body {
 .leaflet-container .leaflet-overlay-pane img {
   image-rendering: auto;
   backface-visibility: hidden;
+}
+
+/* Keep Leaflet controls visually consistent with the control-room shell. */
+.theme-dark .wgdss-weather-map .leaflet-bar,
+.theme-dark .wgdss-weather-map .leaflet-control-layers {
+  overflow: hidden;
+  border: 1px solid rgba(103, 232, 249, 0.32);
+  border-radius: 0.6rem;
+  background: rgba(2, 12, 27, 0.92);
+  box-shadow: 0 8px 24px rgba(2, 6, 23, 0.34);
+  color: #dbeafe;
+  backdrop-filter: blur(8px);
+}
+
+.theme-dark .wgdss-weather-map .leaflet-control-zoom a {
+  border-color: rgba(51, 65, 85, 0.9);
+  background: rgba(2, 12, 27, 0.94);
+  color: #cffafe;
+}
+
+.theme-dark .wgdss-weather-map .leaflet-control-zoom a:hover,
+.theme-dark .wgdss-weather-map .leaflet-control-zoom a:focus {
+  background: rgba(8, 47, 73, 0.96);
+  color: #ffffff;
+}
+
+.theme-dark .wgdss-weather-map .leaflet-control-layers-toggle {
+  width: 2.65rem;
+  height: 2.65rem;
+  background-color: rgba(2, 12, 27, 0.94);
+  background-size: 1.5rem 1.5rem;
+}
+
+.theme-dark .wgdss-weather-map .leaflet-control-layers-expanded {
+  width: min(17rem, calc(100vw - 5rem));
+  max-height: calc(100% - 2rem);
+  padding: 0.65rem 0.75rem;
+  overflow-y: auto;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.theme-dark .wgdss-weather-map .leaflet-control-layers-separator {
+  border-color: rgba(51, 65, 85, 0.9);
+}
+
+.theme-dark .wgdss-weather-map .leaflet-control-layers input {
+  accent-color: #22d3ee;
+}
+
+.theme-dark .wgdss-weather-map .leaflet-control-attribution {
+  max-width: calc(100% - 1rem);
+  border-radius: 0.35rem 0 0 0;
+  background: rgba(2, 12, 27, 0.82);
+  color: #94a3b8;
+  font-size: 0.62rem;
+  line-height: 1.25;
+  backdrop-filter: blur(6px);
+}
+
+.theme-dark .wgdss-weather-map .leaflet-control-attribution a {
+  color: #a5f3fc;
+}
+
+.theme-dark .wgdss-weather-map .leaflet-popup-content-wrapper,
+.theme-dark .wgdss-weather-map .leaflet-popup-tip,
+.theme-dark .wgdss-weather-map .wgdss-weather-sample-tooltip {
+  border: 1px solid rgba(103, 232, 249, 0.25);
+  background: rgba(2, 12, 27, 0.96);
+  color: #e2e8f0;
+  box-shadow: 0 10px 28px rgba(2, 6, 23, 0.42);
+}
+
+.theme-dark .wgdss-weather-map .wgdss-weather-sample-tooltip {
+  border-radius: 0.45rem;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.wgdss-weather-map path.wgdss-weather-sample {
+  filter: drop-shadow(0 0 3px rgba(34, 211, 238, 0.45));
+  transition:
+    filter 150ms ease,
+    fill-opacity 150ms ease,
+    stroke-width 150ms ease;
+}
+
+.wgdss-weather-map path.wgdss-weather-sample:hover {
+  filter: drop-shadow(0 0 6px rgba(165, 243, 252, 0.8));
+  fill-opacity: 1;
+  stroke-width: 1.7px;
 }
 
 .workspace-page .rounded-2xl,

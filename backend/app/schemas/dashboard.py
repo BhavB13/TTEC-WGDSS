@@ -16,6 +16,7 @@ from app.schemas.probability import ProbabilityResponse
 from app.schemas.recommendation import RecommendationResponse
 from app.schemas.replay import ReplayDashboardResponse
 from app.schemas.weather import CurrentWeatherResponse
+from app.schemas.dashboard_time import DashboardTimeContextResponse
 
 
 class ForecastBundleResponse(BaseModel):
@@ -36,3 +37,6 @@ class DashboardSnapshotResponse(BaseModel):
     scada_status: ScadaStatusResponse | None = None
     replay: ReplayDashboardResponse | None = None
     capacity_plan: CapacityPlanResponse | None = None
+    # Optional for persisted legacy snapshots and internal constructors.
+    # DashboardService always supplies it on the public snapshot endpoint.
+    time_context: DashboardTimeContextResponse | None = None

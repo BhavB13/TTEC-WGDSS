@@ -69,8 +69,14 @@ describe("ReplayLoadChart", () => {
     const generation = chartProps.data.datasets.find(
       (dataset) => dataset.label === "Generation (TRA)",
     );
+    const forecast = chartProps.data.datasets.find(
+      (dataset) => dataset.label === "Forecast demand",
+    );
 
     expect(generation?.data.slice(0, 3)).toEqual([825, 835, null]);
+    expect(forecast?.data.slice(0, 3)).toEqual([800, 810, 820]);
+    expect(forecast?.data[9]).toBe(890);
+    expect(screen.getByText(/Observed through 8 am/i)).toBeInTheDocument();
     expect(
       screen.getByLabelText("Load forecast chart key"),
     ).toHaveTextContent(
@@ -125,6 +131,14 @@ describe("ReplayLoadChart", () => {
         };
       };
     };
+    const chartPlugins = lineChartSpy.mock.calls.at(-1)?.[0] as {
+      plugins: Array<{ id: string }>;
+    };
+    expect(chartPlugins.plugins).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "wgdss-present-boundary" }),
+      ]),
+    );
     expect(options.options.plugins.legend.display).toBe(false);
     expect(options.options.scales.x.offset).toBe(true);
     expect(options.options.scales.x.ticks.maxTicksLimit).toBe(12);

@@ -42,34 +42,36 @@ export default function Header({
   onThemeChange,
 }: HeaderProps) {
   return (
-    <header className="max-w-full overflow-x-hidden border-b border-cyan-500/10 bg-slate-950/95 px-4 py-2 text-slate-100 shadow-[0_0_32px_rgba(8,145,178,0.08)] backdrop-blur">
-      <div className="mx-auto grid w-full min-w-0 max-w-[1680px] gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] xl:items-center">
+    <header className="max-w-full overflow-x-hidden border-b border-cyan-500/10 bg-slate-950/95 px-3 py-1.5 text-slate-100 shadow-[0_0_32px_rgba(8,145,178,0.08)] backdrop-blur lg:px-4">
+      <div className="mx-auto grid w-full min-w-0 max-w-[1920px] gap-2 lg:grid-cols-[minmax(20rem,0.85fr)_minmax(0,1.35fr)] lg:items-center">
         <div className="min-w-0">
-          <p className="hidden text-[11px] font-semibold uppercase tracking-[0.3em] text-cyan-300 sm:block">
+          <p className="hidden text-[9px] font-semibold uppercase tracking-[0.26em] text-cyan-300 sm:block">
             WGDSS Control Room
           </p>
-          <h1 className="mt-1 max-w-full whitespace-normal text-xl font-semibold leading-tight text-white sm:text-[1.45rem]">
+          <h1 className="mt-0.5 max-w-full whitespace-normal text-lg font-semibold leading-tight text-white sm:text-xl">
             <span className="block sm:inline">T&amp;TEC Weather Grid</span>{" "}
             <span className="block sm:inline">Decision Support System</span>
           </h1>
-          {onThemeChange ? (
-            <button
-              type="button"
-              className="mt-1.5 rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1 text-[10px] font-semibold text-slate-300 hover:border-cyan-400/40 hover:text-cyan-100"
-              onClick={() => onThemeChange(theme === "dark" ? "light" : "dark")}
-              aria-label={theme === "dark" ? "Use light theme" : "Use dark theme"}
-            >
-              {theme === "dark" ? "Light theme" : "Dark theme"}
-            </button>
-          ) : null}
-          {refreshError ? (
-            <p
-              className="mt-1 truncate text-[11px] font-medium text-amber-300"
-              title={refreshError}
-            >
-              Background refresh failed; displaying the last successful snapshot.
-            </p>
-          ) : null}
+          <div className="mt-1 flex min-w-0 items-center gap-2">
+            {onThemeChange ? (
+              <button
+                type="button"
+                className="shrink-0 rounded-md border border-slate-700 bg-slate-900/70 px-2 py-0.5 text-[9px] font-semibold text-slate-300 hover:border-cyan-400/40 hover:text-cyan-100"
+                onClick={() => onThemeChange(theme === "dark" ? "light" : "dark")}
+                aria-label={theme === "dark" ? "Use light theme" : "Use dark theme"}
+              >
+                {theme === "dark" ? "Light theme" : "Dark theme"}
+              </button>
+            ) : null}
+            {refreshError ? (
+              <p
+                className="min-w-0 truncate text-[9px] font-medium text-amber-300"
+                title={refreshError}
+              >
+                Refresh delayed · showing last successful snapshot
+              </p>
+            ) : null}
+          </div>
         </div>
 
         <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
@@ -133,11 +135,11 @@ function HeaderMetric({
   };
 
   return (
-    <div className={`flex min-h-[3.75rem] min-w-0 flex-col items-center justify-center rounded-xl border px-3 py-2 text-center shadow-[0_0_24px_rgba(8,145,178,0.06)] ${toneClasses[tone]}`}>
-      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-300">
+    <div className={`flex min-h-[3.2rem] min-w-0 flex-col items-center justify-center rounded-lg border px-2 py-1.5 text-center shadow-[0_0_24px_rgba(8,145,178,0.06)] ${toneClasses[tone]}`}>
+      <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-300">
         {label}
       </p>
-      <p className="mt-1 break-words text-[0.82rem] font-semibold leading-tight text-white sm:text-[0.88rem]">
+      <p className="mt-0.5 break-words text-[0.72rem] font-semibold leading-tight text-white sm:text-[0.78rem]">
         {value}
       </p>
     </div>

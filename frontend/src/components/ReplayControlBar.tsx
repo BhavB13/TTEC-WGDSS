@@ -17,8 +17,13 @@ export default function ReplayControlBar({
   busy = false,
   onControl,
 }: ReplayControlBarProps) {
+  const operationalTimestamp =
+    status.mode === "historical_replay" && sourceTimestamp
+      ? sourceTimestamp
+      : status.cursor_at;
+
   return (
-    <section className="grid min-w-0 gap-2 rounded-xl border border-cyan-500/20 bg-slate-950/70 px-3 py-2 lg:grid-cols-[minmax(15rem,1fr)_auto_auto] lg:items-center">
+    <section className="replay-control-bar grid min-w-0 gap-1.5 rounded-lg border border-cyan-500/20 bg-slate-950/70 px-2.5 py-1.5 lg:grid-cols-[minmax(15rem,1fr)_auto_auto] lg:items-center">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <span className={`h-2 w-2 rounded-full ${status.is_playing ? "animate-pulse bg-emerald-400" : "bg-amber-400"}`} />
@@ -29,16 +34,19 @@ export default function ReplayControlBar({
             {status.is_playing ? "PLAYING" : "PAUSED"}
           </span>
         </div>
-        <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
-          <p className="text-sm font-semibold tabular-nums text-white">
+        <div className="mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <p className="text-xs font-semibold tabular-nums text-white">
             <span className="text-[9px] uppercase tracking-[0.12em] text-slate-500">
-              Display clock
+              Operational time
             </span>{" "}
-            {formatReplayTimestamp(status.cursor_at)}
+            {formatReplayTimestamp(operationalTimestamp)}
           </p>
           {status.mode === "historical_replay" && sourceTimestamp ? (
-            <p className="text-[10px] font-medium tabular-nums text-cyan-200">
-              Source observation {formatReplayTimestamp(sourceTimestamp)}
+            <p
+              className="text-[10px] font-medium tabular-nums text-slate-400"
+              title="Internal replay index used to reveal the archived source in sequence"
+            >
+              Replay index {formatReplayTimestamp(status.cursor_at)}
             </p>
           ) : null}
           <p className="text-[10px] text-slate-400">
@@ -108,7 +116,7 @@ export default function ReplayControlBar({
 
 function replayModeLabel(mode: ReplayStatus["mode"]): string {
   if (mode === "historical_replay") {
-    return "Historical SCADA replay";
+    return "June SCADA simulated-present";
   }
   if (mode === "live_read_only") {
     return "Live read-only telemetry";

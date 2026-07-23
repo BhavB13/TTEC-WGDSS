@@ -49,7 +49,7 @@ export default function RecommendationCard({
 
       <div className="mt-2.5 grid gap-2 text-sm sm:grid-cols-2">
         <Metric
-          label="Capacity Risk"
+          label="Generation Need"
           value={
             recommendation.risk_level === "UNAVAILABLE"
               ? "--"

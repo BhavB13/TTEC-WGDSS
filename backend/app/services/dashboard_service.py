@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import math
 from typing import Any
 from uuid import uuid4
@@ -20,6 +20,7 @@ from app.services.capacity_planning_service import (
 )
 from app.services.demo_replay_service import DemoReplayService
 from app.services.grid_service import GridService
+from app.services.present_day_service import PresentDayService
 from app.services.model_status_service import ModelStatusService
 from app.services.recommendation_engine import RecommendationEngine
 from app.services.risk_probability_engine import (
@@ -42,6 +43,7 @@ class DashboardService:
         persistence_service: SnapshotPersistenceService | None = None,
         demo_replay_service: DemoReplayService | None = None,
         capacity_plan_service: CapacityPlanningService | None = None,
+        present_day_service: PresentDayService | None = None,
     ) -> None:
         self.weather_service = weather_service or WeatherService()
         self.grid_service = grid_service or GridService()
@@ -50,6 +52,9 @@ class DashboardService:
         self.model_status_service = model_status_service or ModelStatusService()
         self.persistence_service = persistence_service or SnapshotPersistenceService()
         self.capacity_plan_service = capacity_plan_service or capacity_planning_service
+        self.present_day_service = (
+            present_day_service or PresentDayService()
+        )
         self.demo_replay_service = demo_replay_service
         if (
             self.demo_replay_service is None
@@ -71,6 +76,7 @@ class DashboardService:
         longitude: float = settings.DEFAULT_LONGITUDE,
         days: int = 7,
         force_refresh: bool = False,
+        selected_date: date | None = None,
     ) -> DashboardSnapshotResponse:
         replay_context = (
             await asyncio.to_thread(self.demo_replay_service.get_dashboard_context)
@@ -144,11 +150,136 @@ class DashboardService:
             self._last_generation_units = generation_units
 
         grid_status = {**grid_status, "generation_units": generation_units}
+        present_at = (
+            replay_context["scada_status"].latest_snapshot
+            if replay_context is not None
+            and replay_context.get("scada_status") is not None
+            and replay_context["scada_status"].latest_snapshot is not None
+            else replay_context["replay"].status.cursor_at
+            if replay_context is not None
+            else self._parse_timestamp(grid_status.get("timestamp"))
+            or datetime.now(timezone.utc)
+        )
+        time_context = self.present_day_service.context(
+            selected_date=selected_date,
+            present_at=present_at,
+            present_source=(
+                replay_context["replay"].status.source
+                if replay_context is not None
+                else str(grid_status.get("source_provider", "Runtime providers"))
+            ),
+        )
+        previous_day_active = not time_context.is_active_day
+        if previous_day_active and time_context.series:
+            selected = time_context.series[-1]
+            historical_weather = self.present_day_service.weather_at(
+                selected.timestamp
+            )
+            historical_grid = {
+                **grid_status,
+                "timestamp": selected.timestamp,
+                "current_demand_mw": selected.demand_mw or 0.0,
+                "current_generation_mw": selected.generation_tra_mw or 0.0,
+                "total_available_capacity_mw": selected.available_capacity_mw or 0.0,
+                "spinning_reserve_mw": selected.spinning_reserve_mw,
+                "spinning_reserve_source": "AspenTech OSI June replay export",
+                "reserve_margin_percent": (
+                    ((selected.available_capacity_mw - selected.demand_mw)
+                    / selected.demand_mw * 100.0)
+                    if selected.available_capacity_mw is not None
+                    and selected.demand_mw not in (None, 0)
+                    else 0.0
+                ),
+                "grid_status": (
+                    "REPLAY COMPLETE"
+                    if time_context.is_complete
+                    else "REPLAY INCOMPLETE"
+                ),
+                "demand_period": selected.timestamp.strftime("%B %d, %Y"),
+                "source_provider": "AspenTech OSI June replay export",
+                "generation_units": [],
+                "quality_status": (
+                    "GOOD"
+                    if selected.quality_status == "GOOD"
+                    else "UNCERTAIN"
+                    if selected.quality_status == "USABLE_WITH_WARNING"
+                    else "BAD"
+                ),
+                "missing_fields": [],
+            }
+            grid_status = historical_grid
+            weather = {
+                "timestamp": selected.timestamp,
+                "temperature_c": (
+                    selected.temperature_c
+                    if selected.temperature_c is not None
+                    else historical_weather.temperature_c
+                    if historical_weather is not None
+                    else 0.0
+                ),
+                "humidity_percent": (
+                    historical_weather.humidity_percent
+                    if historical_weather is not None
+                    else 0.0
+                ),
+                "rainfall_mm_hr": (
+                    historical_weather.rainfall_mm_hr
+                    if historical_weather is not None
+                    else 0.0
+                ),
+                "cloud_cover_percent": (
+                    historical_weather.cloud_cover_percent
+                    if historical_weather is not None
+                    else 0.0
+                ),
+                "wind_speed_kmh": (
+                    historical_weather.wind_speed_kph
+                    if historical_weather is not None
+                    else 0.0
+                ),
+                "wind_direction_deg": (
+                    historical_weather.wind_direction_deg
+                    if historical_weather is not None
+                    else None
+                ),
+                "pressure_hpa": (
+                    historical_weather.pressure_hpa
+                    if historical_weather is not None
+                    else None
+                ),
+                "weather_condition": (
+                    historical_weather.weather_condition
+                    if historical_weather is not None
+                    else "Historical weather unavailable"
+                ),
+                "heat_index_c": (
+                    historical_weather.heat_index_c
+                    if historical_weather is not None
+                    else selected.temperature_c or 0.0
+                ),
+                "rain_severity": (
+                    historical_weather.rain_severity
+                    if historical_weather is not None
+                    else "UNKNOWN"
+                ),
+                "provider_name": (
+                    historical_weather.provider_name
+                    if historical_weather is not None
+                    else "Historical SCADA temperature only"
+                ),
+            }
+            forecast = []
+            replay_active = False
         calibration = self.calibration_service.get_snapshot(weather)
 
         calibration_payload = calibration.model_dump() if calibration is not None else None
-        weather_age_seconds = 0 if replay_active else self._age_seconds(weather.get("timestamp"))
-        grid_age_seconds = 0 if replay_active else self._age_seconds(grid_status.get("timestamp"))
+        period_is_archived = replay_active or previous_day_active
+        weather_age_seconds = (
+            0 if period_is_archived else self._age_seconds(weather.get("timestamp"))
+        )
+        grid_age_seconds = (
+            0 if period_is_archived else self._age_seconds(grid_status.get("timestamp"))
+        )
         grid_quality = str(grid_status.get("quality_status", "GOOD")).upper()
         grid_missing_fields = grid_status.get("missing_fields", [])
         grid_is_stale = (
@@ -160,7 +291,7 @@ class DashboardService:
             and weather_age_seconds > settings.DATA_STALE_AFTER_SECONDS
         )
         acceptable_grid_quality = (
-            {"GOOD", "UNCERTAIN"} if replay_active else {"GOOD"}
+            {"GOOD", "UNCERTAIN"} if period_is_archived else {"GOOD"}
         )
         decision_inhibited = (
             weather_is_stale
@@ -170,7 +301,7 @@ class DashboardService:
         )
         live_model_status = (
             self.model_status_service.get_model_status()
-            if replay_context is None
+            if replay_context is None and not previous_day_active
             else None
         )
         if decision_inhibited:
@@ -180,9 +311,18 @@ class DashboardService:
                 "recommendation inhibited",
             )
         else:
+            cached_operating_risk = (
+                None
+                if previous_day_active
+                else self.model_status_service.get_operating_risk_payload()
+            )
             probability_payload = (
-                (replay_context.get("risk_payload") if replay_context is not None else None)
-                or self.model_status_service.get_operating_risk_payload()
+                (
+                    replay_context.get("risk_payload")
+                    if replay_context is not None and not previous_day_active
+                    else None
+                )
+                or cached_operating_risk
                 or self.recommendation_engine.evaluate(
                     weather,
                     grid_status,
@@ -262,12 +402,16 @@ class DashboardService:
                     "residual_shortfall_mw": capacity_plan.unresolved_capacity_mw,
                 }
             )
-        if replay_context is not None:
+        if replay_context is not None and not previous_day_active:
             # Replay artifacts must match the simulated source cursor exactly.
             # Never substitute a model trained through a later historical row.
             demand_forecast = replay_context.get("demand_forecast")
             model_status = replay_context.get("model_status")
             scada_status = replay_context.get("scada_status")
+        elif previous_day_active:
+            demand_forecast = None
+            model_status = None
+            scada_status = None
         else:
             demand_forecast = self.model_status_service.get_demand_forecast_bundle()
             model_status = live_model_status
@@ -288,14 +432,19 @@ class DashboardService:
                 degradation_notes=degradation_notes,
                 grid_fallback_used=grid_fallback,
                 weather_cache_fallback=weather_fallback,
-                replay_active=replay_active,
+                replay_active=replay_active or previous_day_active,
                 forecast_items=forecast,
             ),
             demand_forecast=demand_forecast,
             model_status=model_status,
             scada_status=scada_status,
-            replay=(replay_context["replay"] if replay_context is not None else None),
+            replay=(
+                replay_context["replay"]
+                if replay_context is not None and not previous_day_active
+                else None
+            ),
             capacity_plan=capacity_plan,
+            time_context=time_context,
         )
         if settings.SNAPSHOT_PERSISTENCE_ENABLED:
             persisted = await asyncio.to_thread(self.persistence_service.persist, snapshot)
@@ -303,6 +452,17 @@ class DashboardService:
                 snapshot.data_quality.notes.append("Historical persistence unavailable")
                 snapshot.data_quality.overall_status = "DEGRADED"
         return snapshot
+
+    @staticmethod
+    def _parse_timestamp(value: object) -> datetime | None:
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        return None
 
     @staticmethod
     def _dispatch_evidence(payload: dict[str, Any]) -> dict[str, Any]:

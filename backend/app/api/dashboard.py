@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import APIRouter, Query
 
 from app.core.config import settings
@@ -17,10 +19,12 @@ async def get_dashboard_snapshot(
     longitude: float = Query(default=settings.DEFAULT_LONGITUDE, ge=-180, le=180),
     days: int = Query(default=7, ge=1, le=14),
     force_refresh: bool = Query(default=False),
+    selected_date: date | None = Query(default=None),
 ) -> DashboardSnapshotResponse:
     return await dashboard_service.get_snapshot(
         latitude=latitude,
         longitude=longitude,
         days=days,
         force_refresh=force_refresh,
+        selected_date=selected_date,
     )

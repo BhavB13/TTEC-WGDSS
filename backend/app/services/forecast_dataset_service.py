@@ -14,6 +14,7 @@ from app.models.demand_forecast import ForecastTrainingRow
 from app.models.forecast import Forecast
 from app.models.scada import ScadaGridSnapshot
 from app.models.weather import Weather
+from app.services.data_period_policy import DataPeriodPolicy
 
 FORECAST_HORIZONS_HOURS = (1, 2, 3, 4, 5, 6)
 TRINIDAD_TZ = ZoneInfo("America/Port_of_Spain")
@@ -48,8 +49,18 @@ class _HistoricalWeatherForecast:
 
 
 class ForecastDatasetService:
-    def __init__(self, session_factory=SessionLocal) -> None:
+    def __init__(
+        self,
+        session_factory=SessionLocal,
+        enforce_period_policy: bool | None = None,
+    ) -> None:
         self.session_factory = session_factory
+        self.period_policy = DataPeriodPolicy.from_settings()
+        self.enforce_period_policy = (
+            session_factory is SessionLocal
+            if enforce_period_policy is None
+            else enforce_period_policy
+        )
 
     def build_training_rows(
         self,
@@ -60,10 +71,14 @@ class ForecastDatasetService:
             initialize_database()
 
         with self.session_factory() as session:
-            snapshots = list(
-                session.scalars(
-                    select(ScadaGridSnapshot).order_by(ScadaGridSnapshot.timestamp)
+            query = select(ScadaGridSnapshot)
+            if self.enforce_period_policy:
+                query = query.where(
+                    ScadaGridSnapshot.timestamp >= self.period_policy.training_start_at,
+                    ScadaGridSnapshot.timestamp < self.period_policy.training_end_exclusive,
                 )
+            snapshots = list(
+                session.scalars(query.order_by(ScadaGridSnapshot.timestamp))
             )
             weather_by_hour = {
                 _hour_key(row.timestamp): row
@@ -173,8 +188,17 @@ class ForecastDatasetService:
             ):
                 forecasts_by_hour[_hour_key(row.forecast_timestamp)].append(row)
 
+        training_snapshots = (
+            [
+                snapshot
+                for snapshot in snapshots
+                if self.period_policy.is_training_timestamp(snapshot.timestamp)
+            ]
+            if self.enforce_period_policy
+            else snapshots
+        )
         rows, skipped = self._build_rows(
-            snapshots=snapshots,
+            snapshots=training_snapshots,
             weather_by_hour=weather_by_hour,
             forecasts_by_hour=forecasts_by_hour,
             horizons_hours=horizons_hours,

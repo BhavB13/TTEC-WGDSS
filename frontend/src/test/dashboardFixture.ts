@@ -1,6 +1,22 @@
 import type { DashboardSnapshot } from "../types/dashboard";
 
 export const dashboardFixture: DashboardSnapshot = {
+  time_context: {
+    selected_date: "2026-06-21",
+    active_date: "2026-06-21",
+    is_active_day: true,
+    displayed_at: "2026-06-21T14:00:00",
+    granularity: "hourly",
+    source: "Historical SCADA Replay — June 2026",
+    value_classification: "SIMULATED_LIVE",
+    available_start: "2026-06-01",
+    available_end: "2026-06-21",
+    available_dates: ["2026-06-20", "2026-06-21"],
+    completeness_percent: 100,
+    record_count: 1,
+    is_complete: true,
+    series: [],
+  },
   snapshot_id: "snapshot-capacity-plan-1",
   weather: {
     timestamp: "2026-06-27T12:00:00-04:00",

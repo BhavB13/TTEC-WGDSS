@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,6 +8,7 @@ const getDashboardSnapshot = vi.fn();
 const controlReplay = vi.fn();
 const evaluateCapacityPlan = vi.fn();
 const getLiveWeatherDisplay = vi.fn();
+const weatherMapProps = vi.fn();
 
 vi.mock("../services/api", () => ({
   getDashboardSnapshot: (...args: unknown[]) => getDashboardSnapshot(...args),
@@ -16,7 +17,10 @@ vi.mock("../services/api", () => ({
   getLiveWeatherDisplay: (...args: unknown[]) => getLiveWeatherDisplay(...args),
 }));
 vi.mock("../components/WeatherMap", () => ({
-  default: () => <div data-testid="weather-map">Weather map</div>,
+  default: (props: unknown) => {
+    weatherMapProps(props);
+    return <div data-testid="weather-map">Weather map</div>;
+  },
 }));
 vi.mock("../components/DemandForecastChart", () => ({
   default: () => <div data-testid="demand-chart">Demand chart</div>,
@@ -36,6 +40,9 @@ vi.mock("../components/ReplayLoadChart", () => ({
 vi.mock("../components/HistoricalDemandChart", () => ({
   default: () => <div data-testid="historical-demand-chart">Historical demand chart</div>,
 }));
+vi.mock("../components/SelectedDayChart", () => ({
+  default: () => <div data-testid="selected-day-chart">Selected day chart</div>,
+}));
 
 import Dashboard from "./Dashboard";
 
@@ -45,6 +52,7 @@ describe("Dashboard", () => {
     controlReplay.mockReset();
     evaluateCapacityPlan.mockReset();
     getLiveWeatherDisplay.mockReset();
+    weatherMapProps.mockReset();
     evaluateCapacityPlan.mockResolvedValue(dashboardFixture.capacity_plan);
     getLiveWeatherDisplay.mockResolvedValue({
       weather: {
@@ -78,9 +86,8 @@ describe("Dashboard", () => {
       ),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Weather" }));
-    expect(
-      screen.getByLabelText("Forecast demand 890 MW"),
-    ).toHaveTextContent("890 MW");
+    expect(screen.getByText("Active Weather")).toBeInTheDocument();
+    await waitFor(() => expect(getLiveWeatherDisplay).toHaveBeenCalled());
 
     await user.click(screen.getByRole("button", { name: "Step" }));
     await waitFor(() =>
@@ -124,15 +131,10 @@ describe("Dashboard", () => {
     expect(screen.getByText("Current Weather Conditions")).toBeInTheDocument();
     expect(screen.getByText("Next 6 Hours · Weather + Demand")).toBeInTheDocument();
     expect(screen.getAllByText("3 sources")).toHaveLength(6);
-    expect(
-      screen.getByLabelText("Forecast demand 990 MW"),
-    ).toHaveTextContent("990 MW");
-
-    await user.click(screen.getByRole("button", { name: "Live Weather Test" }));
     await waitFor(() => expect(getLiveWeatherDisplay).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("30.9°C")).toBeInTheDocument();
     expect(
-      screen.getByText("Display only · Trinidad weighted network"),
+      screen.getByText("Current T&T provider network"),
     ).toBeInTheDocument();
     expect(screen.getByText("Open-Meteo Best Match")).toBeInTheDocument();
 
@@ -142,11 +144,11 @@ describe("Dashboard", () => {
     await user.click(screen.getByRole("button", { name: "Risk Gauge" }));
     expect(screen.getByTestId("probability-gauge")).toBeInTheDocument();
     expect(screen.getByTestId("risk-timeline")).toBeInTheDocument();
-    expect(screen.getByText("Capacity Risk Evidence")).toBeInTheDocument();
+    expect(screen.getByText("Generation Need Evidence")).toBeInTheDocument();
     expect(screen.getByText("Peak Forecast Demand")).toBeInTheDocument();
     expect(screen.getByText("Observed TRA")).toBeInTheDocument();
     expect(screen.getByText("Peak Reserve")).toBeInTheDocument();
-    expect(screen.getByText("Post-Plan Peak Risk")).toBeInTheDocument();
+    expect(screen.getByText("Maximum Need After Plan")).toBeInTheDocument();
     expect(screen.getByText("TRA With Starts")).toBeInTheDocument();
     expect(screen.getByText("Risk Reduction")).toBeInTheDocument();
     expect(screen.getByText("Risk Drivers")).toBeInTheDocument();
@@ -181,6 +183,92 @@ describe("Dashboard", () => {
     expect(screen.getByText("Calibration Summary")).toBeInTheDocument();
     expect(screen.getByText("Forecast Assurance")).toBeInTheDocument();
     expect(screen.getByText(/Source \/ hour alignment:/i)).toBeInTheDocument();
+  });
+
+  it("selects a previous June day across tabs and resets to the active day", async () => {
+    const previousDayFixture = {
+      ...dashboardFixture,
+      grid: {
+        ...dashboardFixture.grid,
+        current_demand_mw: 1010,
+        grid_status: "REPLAY COMPLETE",
+      },
+      replay: null,
+      time_context: {
+        ...dashboardFixture.time_context,
+        selected_date: "2026-06-20",
+        is_active_day: false,
+        displayed_at: "2026-06-20T23:00:00",
+        value_classification: "SIMULATED_REPLAY_DAY",
+        source: "AspenTech OSI June 2026 trend exports",
+        record_count: 24,
+        series: [
+          {
+            timestamp: "2026-06-20T23:00:00",
+            demand_mw: 1010,
+            generation_tra_mw: 1190,
+            spinning_reserve_mw: 80,
+            available_capacity_mw: 1300,
+            temperature_c: 28,
+            quality_status: "GOOD",
+            completeness_percent: 100,
+            data_phase: "JUNE_OBSERVED" as const,
+          },
+        ],
+      },
+    };
+    getDashboardSnapshot.mockImplementation(
+      (options?: { selectedDate?: string | null }) =>
+        Promise.resolve(
+          options?.selectedDate === "2026-06-20"
+            ? previousDayFixture
+            : dashboardFixture,
+        ),
+    );
+    const user = userEvent.setup();
+    render(<Dashboard />);
+    await screen.findByText(/ACTIVE · SIMULATED PRESENT/i);
+
+    const dateInput = screen.getByLabelText("June replay date");
+    fireEvent.change(dateInput, { target: { value: "2026-06-19" } });
+    expect(
+      screen.getByText("That date is unavailable in the June replay."),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Previous available day" }));
+    await waitFor(() =>
+      expect(getDashboardSnapshot).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          selectedDate: "2026-06-20",
+        }),
+      ),
+    );
+    expect(
+      await screen.findByText(/PREVIOUS DAY · JUNE REPLAY/i),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("1010 MW").length).toBeGreaterThan(0);
+    expect(screen.getByText("ARCHIVED")).toBeInTheDocument();
+    expect(screen.getByText("NOT APPLICABLE")).toBeInTheDocument();
+    expect(screen.getByText(/REPLAY COMPLETE/)).toBeInTheDocument();
+    expect(weatherMapProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ liveSamplingEnabled: false }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Demand Forecast" }));
+    expect(screen.getByTestId("selected-day-chart")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Analytics" }));
+    expect(screen.getByText(/PREVIOUS DAY · JUNE REPLAY/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Return to Active Day" }));
+    await waitFor(() =>
+      expect(getDashboardSnapshot).toHaveBeenLastCalledWith(
+        expect.objectContaining({ selectedDate: null }),
+      ),
+    );
+    expect(await screen.findByText(/ACTIVE · SIMULATED PRESENT/i)).toBeInTheDocument();
+    expect(weatherMapProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ liveSamplingEnabled: true }),
+    );
   });
 
   it("shows the API error state and retries", async () => {

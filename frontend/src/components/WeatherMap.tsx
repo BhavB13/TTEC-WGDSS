@@ -34,6 +34,7 @@ import WindFlowLayer from "./WindFlowLayer";
 interface WeatherMapProps {
   className?: string;
   weather: DashboardSnapshot["weather"];
+  liveSamplingEnabled?: boolean;
 }
 
 const DEFAULT_CENTER: [number, number] = [10.6918, -61.2225];
@@ -182,11 +183,13 @@ function temperaturePointColor(temperatureC: number): string {
   return "#38bdf8";
 }
 
-function temperaturePointRadius(sample: TemperatureSample): number {
-  return Math.max(
-    5,
-    Math.min(10, 5 + sample.effective_weight_percent / 3.5),
-  );
+function temperaturePointRadius(
+  sample: TemperatureSample,
+  zoom: number,
+): number {
+  const weightRadius = 3.5 + sample.effective_weight_percent / 5;
+  const zoomScale = Math.max(0.72, Math.min(1.12, 0.75 + (zoom - 6) * 0.1));
+  return Math.max(3.5, Math.min(7.2, weightRadius * zoomScale));
 }
 
 function windDirectionIcon(
@@ -311,9 +314,81 @@ function WindDirectionMarker({
   );
 }
 
+function WeatherSamplingNetwork({
+  samples,
+}: {
+  samples: TemperatureSample[];
+}) {
+  const map = useMap();
+  const [zoom, setZoom] = useState(() => map.getZoom());
+
+  useMapEvents({
+    zoomend() {
+      setZoom(map.getZoom());
+    },
+  });
+
+  return (
+    <>
+      {samples.map((sample) => (
+        <CircleMarker
+          key={sample.id}
+          center={[sample.latitude, sample.longitude]}
+          pane="weather-sampling-points"
+          radius={temperaturePointRadius(sample, zoom)}
+          pathOptions={{
+            className: "wgdss-weather-sample",
+            color: "#cffafe",
+            fillColor: temperaturePointColor(sample.temperature_c),
+            fillOpacity: 0.82,
+            opacity: 0.9,
+            weight: 1.1,
+          }}
+        >
+          <Tooltip
+            direction="top"
+            offset={[0, -4]}
+            opacity={1}
+            className="wgdss-weather-sample-tooltip"
+          >
+            <span className="font-semibold">{sample.name}</span>
+            <br />
+            {sample.temperature_c.toFixed(1)}°C · Weight{" "}
+            {sample.effective_weight_percent.toFixed(1)}%
+          </Tooltip>
+          <Popup>
+            <div className="space-y-1 text-sm">
+              <p className="font-semibold">{sample.name}</p>
+              <p>Temperature: {sample.temperature_c.toFixed(1)}°C</p>
+              <p>Humidity: {sample.humidity_percent?.toFixed(0) ?? "--"}%</p>
+              <p>
+                Rainfall: {sample.rainfall_mm_hr?.toFixed(1) ?? "--"} mm/hr
+              </p>
+              <p>
+                Cloud cover:{" "}
+                {sample.cloud_cover_percent?.toFixed(0) ?? "--"}%
+              </p>
+              <p>Wind: {sample.wind_speed_kmh?.toFixed(1) ?? "--"} km/h</p>
+              <p>
+                Demand-exposure weight:{" "}
+                {sample.effective_weight_percent.toFixed(1)}%
+              </p>
+              <p className="text-slate-500">{sample.notes}</p>
+              <p className="text-slate-500">
+                Live display source: {sample.provider_name}
+              </p>
+            </div>
+          </Popup>
+        </CircleMarker>
+      ))}
+    </>
+  );
+}
+
 export default function WeatherMap({
   className = "",
   weather,
+  liveSamplingEnabled = true,
 }: WeatherMapProps) {
   const [hurricaneEnabled, setHurricaneEnabled] = useState(false);
   const [windFlowEnabled, setWindFlowEnabled] = useState(false);
@@ -329,6 +404,7 @@ export default function WeatherMap({
   const [stormTrackingFailed, setStormTrackingFailed] = useState(false);
   const [liveTemperatureWeather, setLiveTemperatureWeather] =
     useState<WeatherData | null>(
+      liveSamplingEnabled &&
       (weather.weather_aggregation ?? weather.temperature_aggregation)?.samples
         .length
         ? weather
@@ -358,15 +434,22 @@ export default function WeatherMap({
   const temperatureSamples = temperatureAggregation?.samples ?? [];
 
   useEffect(() => {
+    if (!liveSamplingEnabled) {
+      setLiveTemperatureWeather(null);
+      return;
+    }
     if (
       (weather.weather_aggregation ?? weather.temperature_aggregation)?.samples
         .length
     ) {
       setLiveTemperatureWeather(weather);
     }
-  }, [weather]);
+  }, [liveSamplingEnabled, weather]);
 
   useEffect(() => {
+    if (!liveSamplingEnabled) {
+      return;
+    }
     let cancelled = false;
 
     const loadTemperatureNetwork = async () => {
@@ -393,7 +476,7 @@ export default function WeatherMap({
       cancelled = true;
       window.clearInterval(refreshInterval);
     };
-  }, []);
+  }, [liveSamplingEnabled]);
 
   useEffect(() => {
     const refreshInterval = window.setInterval(() => {
@@ -443,31 +526,37 @@ export default function WeatherMap({
 
   return (
     <div className={`flex h-full w-full min-w-0 flex-col rounded-2xl border border-cyan-500/15 bg-slate-900/80 p-2 shadow-[0_0_40px_rgba(8,145,178,0.08)] ${className}`}>
-      <div className="mb-1 flex items-start justify-between gap-3">
-        <div className="min-w-0">
+      <div className="mb-1.5 flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+        <div className="min-w-[11rem] flex-1">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
             Weather Map
           </p>
-          <h2 className="mt-1 text-base font-semibold leading-tight text-white">
+          <h2 className="mt-0.5 text-[0.95rem] font-semibold leading-tight text-white">
             Trinidad and Tobago Operations Map
           </h2>
         </div>
-        <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+        <div className="flex shrink-0 flex-wrap justify-end gap-1">
           {temperatureAggregation ? (
-            <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-[10px] font-semibold text-amber-100">
+            <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-[9px] font-semibold text-amber-100">
               T&amp;T avg {temperatureAggregation.weighted_average_c.toFixed(1)}°C
             </span>
+          ) : Number.isFinite(weather.temperature_c) ? (
+            <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-[9px] font-semibold text-amber-100">
+              Recorded avg {weather.temperature_c.toFixed(1)}°C
+            </span>
           ) : null}
-          <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${
+          <span className={`rounded-full border px-2 py-1 text-[9px] font-semibold ${
             cloudImageryStatus === "degraded"
               ? "border-amber-400/35 bg-amber-500/10 text-amber-100"
               : "border-cyan-400/25 bg-cyan-500/10 text-cyan-100"
           }`}>
-            {cloudImageryStatus === "degraded"
-              ? "Cloud imagery degraded"
+            {!liveSamplingEnabled
+              ? "Current imagery opt-in"
+              : cloudImageryStatus === "degraded"
+              ? "Cloud degraded"
               : cloudImageryStatus === "checking"
-                ? "Checking cloud imagery"
-                : "Cloud imagery live"}
+                ? "Checking cloud"
+                : "Cloud live"}
           </span>
         </div>
       </div>
@@ -475,13 +564,14 @@ export default function WeatherMap({
       <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
         <div className="pointer-events-none absolute inset-0 z-[400] border border-cyan-400/5 bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.12),transparent_45%)]" />
         <MapContainer
+          key={liveSamplingEnabled ? "active-present-map" : "previous-day-map"}
           center={DEFAULT_CENTER}
           zoom={DEFAULT_ZOOM}
           minZoom={ATLANTIC_OVERVIEW_MIN_ZOOM}
           maxZoom={11}
           scrollWheelZoom={false}
           fadeAnimation={false}
-          className="h-full w-full"
+          className="wgdss-weather-map h-full w-full"
         >
           <MapResizeSync />
           <MapViewSync />
@@ -493,6 +583,8 @@ export default function WeatherMap({
           {windFlowEnabled ? (
             <WindFlowLayer onStatusChange={setWindFlowStatus} />
           ) : null}
+
+          <Pane name="weather-sampling-points" style={{ zIndex: 565 }} />
 
           <LayersControl position="topright">
             <LayersControl.BaseLayer name="OpenStreetMap">
@@ -513,7 +605,10 @@ export default function WeatherMap({
               />
             </LayersControl.BaseLayer>
 
-            <LayersControl.Overlay checked name={`${CLOUD_SYSTEMS_LAYER_NAME} (GOES-East IR)`}>
+            <LayersControl.Overlay
+              checked={liveSamplingEnabled}
+              name={`${CLOUD_SYSTEMS_LAYER_NAME} (Current GOES-East IR)`}
+            >
               <LayerGroup>
                 {cloudSystemsTileUrl ? (
                   <TileLayer
@@ -546,7 +641,10 @@ export default function WeatherMap({
               </LayerGroup>
             </LayersControl.Overlay>
 
-            <LayersControl.Overlay checked name="Rainfall Coverage (NASA GPM)">
+            <LayersControl.Overlay
+              checked={liveSamplingEnabled}
+              name="Rainfall Coverage (Current NASA GPM)"
+            >
               <LayerGroup>
                 {rainfallTileUrl ? (
                   <TileLayer
@@ -563,7 +661,10 @@ export default function WeatherMap({
               </LayerGroup>
             </LayersControl.Overlay>
 
-            <LayersControl.Overlay checked name="Wind Direction (Live)">
+            <LayersControl.Overlay
+              checked={liveSamplingEnabled}
+              name="Wind Direction (Live)"
+            >
               <LayerGroup>
                 {windDirection != null ? (
                   <WindDirectionMarker
@@ -579,60 +680,13 @@ export default function WeatherMap({
               <LayerGroup />
             </LayersControl.Overlay>
 
-            <LayersControl.Overlay checked name="Weather Sampling Network (Live)">
-              <LayerGroup>
-                {temperatureSamples.map((sample) => (
-                  <CircleMarker
-                    key={sample.id}
-                    center={[sample.latitude, sample.longitude]}
-                    radius={temperaturePointRadius(sample)}
-                    pathOptions={{
-                      color: "#ecfeff",
-                      fillColor: temperaturePointColor(sample.temperature_c),
-                      fillOpacity: 0.9,
-                      opacity: 0.95,
-                      weight: 1.5,
-                    }}
-                  >
-                    <Tooltip sticky>
-                      {sample.name}: {sample.temperature_c.toFixed(1)}°C ·{" "}
-                      Weight {sample.effective_weight_percent.toFixed(1)}%
-                    </Tooltip>
-                    <Popup>
-                      <div className="space-y-1 text-sm">
-                        <p className="font-semibold">{sample.name}</p>
-                        <p>
-                          Temperature: {sample.temperature_c.toFixed(1)}°C
-                        </p>
-                        <p>
-                          Humidity:{" "}
-                          {sample.humidity_percent?.toFixed(0) ?? "--"}%
-                        </p>
-                        <p>
-                          Rainfall:{" "}
-                          {sample.rainfall_mm_hr?.toFixed(1) ?? "--"} mm/hr
-                        </p>
-                        <p>
-                          Cloud cover:{" "}
-                          {sample.cloud_cover_percent?.toFixed(0) ?? "--"}%
-                        </p>
-                        <p>
-                          Wind: {sample.wind_speed_kmh?.toFixed(1) ?? "--"} km/h
-                        </p>
-                        <p>
-                          Demand-exposure weight:{" "}
-                          {sample.effective_weight_percent.toFixed(1)}%
-                        </p>
-                        <p className="text-slate-500">{sample.notes}</p>
-                        <p className="text-slate-500">
-                          Live display source: {sample.provider_name}
-                        </p>
-                      </div>
-                    </Popup>
-                  </CircleMarker>
-                ))}
-              </LayerGroup>
-            </LayersControl.Overlay>
+            {liveSamplingEnabled && temperatureSamples.length ? (
+              <LayersControl.Overlay checked name="Weather Sampling Network (Live)">
+                <LayerGroup>
+                  <WeatherSamplingNetwork samples={temperatureSamples} />
+                </LayerGroup>
+              </LayersControl.Overlay>
+            ) : null}
 
             <LayersControl.Overlay name="Generation Stations">
               <LayerGroup>
@@ -864,7 +918,7 @@ export default function WeatherMap({
           <div className="grid gap-1 border-t border-slate-800 px-2.5 py-2 leading-snug">
             <p><span className="font-semibold text-cyan-200">Cloud systems</span> Latest provider satellite imagery for situational awareness; observation age can vary.</p>
             <p><span className="font-semibold text-sky-200">Rainfall</span> Latest provider GPM precipitation-rate imagery; observation age can vary.</p>
-            <p><span className="font-semibold text-amber-200">Temperature points</span> Live Trinidad demand-exposure samples; larger points carry more weight.</p>
+            <p><span className="font-semibold text-amber-200">Weather points</span> Live T&amp;T demand-exposure samples; point size reflects weight.</p>
             <p><span className="font-semibold text-emerald-200">G</span> Generation station <span className="font-semibold text-amber-200">S</span> Substation <span className="font-semibold text-cyan-200">L</span> Load center.</p>
             <p className="text-slate-400">Select layers from the control at top right. Visual layers support, but do not replace, dispatch telemetry.</p>
           </div>

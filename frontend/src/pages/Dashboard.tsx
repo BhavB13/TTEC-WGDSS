@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 
 import CurrentConditions from "../components/CurrentConditions";
 import DemandForecastChart from "../components/DemandForecastChart";
+import DayNavigationBar from "../components/DayNavigationBar";
 import Header from "../components/Header";
 import HistoricalDemandChart from "../components/HistoricalDemandChart";
+import SelectedDayChart from "../components/SelectedDayChart";
 import ProbabilityGauge from "../components/ProbabilityGauge";
 import ReplayControlBar from "../components/ReplayControlBar";
 import ReplayLoadChart from "../components/ReplayLoadChart";
@@ -24,12 +26,15 @@ import type {
   DemandForecastBundle,
   DemandForecastHorizon,
   ForecastData,
+  DaySeriesPoint,
   LoadForecastPoint,
   ModelStatus,
   ScadaStatus,
   ReplayDashboard,
 } from "../types/dashboard";
 import { getTemperatureMetricLabel } from "../utils/weatherTemperature";
+import { useDashboardTime } from "../context/DashboardTimeContext";
+import { DashboardTimeProvider } from "../context/DashboardTimeContext";
 
 type LoadState = "loading" | "ready" | "error";
 type ThemeMode = "dark" | "light";
@@ -98,6 +103,15 @@ const FALLBACK_RECOMMENDATION: DashboardSnapshot["recommendation"] = {
 };
 
 export default function Dashboard() {
+  return (
+    <DashboardTimeProvider>
+      <DashboardContent />
+    </DashboardTimeProvider>
+  );
+}
+
+function DashboardContent() {
+  const dashboardTime = useDashboardTime();
   const [state, setState] = useState<LoadState>("loading");
   const [theme, setTheme] = useState<ThemeMode>(() => {
     try {
@@ -143,16 +157,36 @@ export default function Dashboard() {
       setError("");
 
       try {
-        const data = await getDashboardSnapshot({ forceRefresh });
+        const data = await getDashboardSnapshot({
+          forceRefresh,
+          selectedDate: dashboardTime.selectedDate,
+        });
         setSnapshot(data);
         setCapacityPlan(data.capacity_plan ?? null);
         setCapacityPlanError("");
         setRefreshError("");
         setState("ready");
+        if (
+          dashboardTime.selectedDate &&
+          data.time_context.is_active_day
+        ) {
+          dashboardTime.resetToActiveDay();
+        }
       } catch (cause) {
+        const message =
+          cause instanceof Error
+            ? cause.message
+            : "Failed to load dashboard snapshot";
+        if (
+          dashboardTime.selectedDate &&
+          message.includes("selected_date")
+        ) {
+          dashboardTime.resetToActiveDay();
+          return;
+        }
         if (showLoading) {
           setSnapshot(null);
-          setError(cause instanceof Error ? cause.message : "Failed to load dashboard snapshot");
+          setError(message);
           setState("error");
         } else {
           setRefreshError(
@@ -163,12 +197,21 @@ export default function Dashboard() {
         }
       }
     },
-    [],
+    [
+      dashboardTime.selectedDate,
+      dashboardTime.resetToActiveDay,
+    ],
   );
 
   useEffect(() => {
     void loadSnapshot({ forceRefresh: true, showLoading: true });
   }, [loadSnapshot]);
+
+  useEffect(() => {
+    setWeatherDisplayMode(
+      dashboardTime.selectedDate ? "replay" : "live",
+    );
+  }, [dashboardTime.selectedDate]);
 
   useEffect(() => {
     const refreshInterval = window.setInterval(() => {
@@ -239,7 +282,7 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    if (activeTab !== "weather" || weatherDisplayMode !== "live") {
+    if (dashboardTime.selectedDate || weatherDisplayMode !== "live") {
       return undefined;
     }
     void loadLiveWeather();
@@ -247,7 +290,7 @@ export default function Dashboard() {
       void loadLiveWeather();
     }, 5 * 60 * 1000);
     return () => window.clearInterval(interval);
-  }, [activeTab, loadLiveWeather, weatherDisplayMode]);
+  }, [dashboardTime.selectedDate, loadLiveWeather, weatherDisplayMode]);
 
   useEffect(() => {
     try {
@@ -316,6 +359,8 @@ export default function Dashboard() {
     ? new Date(snapshot.replay.status.cursor_at)
     : new Date();
   const upcomingForecastItems = getUpcomingForecastItems(forecastItems, forecastReference, 6);
+  const activeForecastItems =
+    snapshot.time_context.is_active_day ? upcomingForecastItems : [];
   const liveUpcomingForecastItems = getUpcomingForecastItems(
     liveWeather?.forecast ?? [],
     new Date(),
@@ -328,29 +373,47 @@ export default function Dashboard() {
 
   return (
     <Shell
-      lastUpdated={weather.timestamp}
+      lastUpdated={
+        snapshot.time_context.is_active_day
+          ? scadaStatus?.latest_snapshot ?? weather.timestamp
+          : snapshot.time_context.displayed_at ?? weather.timestamp
+      }
       systemStatus={systemStatus}
       gridStatus={grid.grid_status}
-      weatherStatus={dataQuality.weather_status}
-      forecastStatus={dataQuality.weather_status}
-      scenarioLabel={snapshot.replay?.summary.replay_month_label ?? calibration?.selected_scenario_label ?? "Typical Day"}
+      weatherStatus={
+        snapshot.time_context.is_active_day
+          ? dataQuality.weather_status
+          : "ARCHIVED"
+      }
+      forecastStatus={
+        snapshot.time_context.is_active_day
+          ? dataQuality.weather_status
+          : "NOT APPLICABLE"
+      }
+      scenarioLabel={
+        snapshot.time_context.is_active_day && snapshot.replay
+            ? "June 2026 Replay"
+            : "Previous June Day"
+      }
       dataQuality={dataQuality}
       refreshError={refreshError}
       theme={theme}
       onThemeChange={setTheme}
     >
-      <div className="grid h-auto min-h-0 w-full min-w-0 max-w-full gap-3 xl:h-full xl:grid-cols-[clamp(300px,28vw,390px)_minmax(0,1fr)] xl:items-stretch">
-        <section className="h-[28rem] min-h-0 min-w-0 xl:h-full xl:self-stretch">
+      <div className="dashboard-shell-grid">
+        <section className="dashboard-map-column">
           <WeatherMap
             className="h-full min-h-0"
             weather={weather}
+            liveSamplingEnabled={snapshot.time_context.is_active_day}
           />
         </section>
 
-        <section className="flex min-h-[42rem] w-full min-w-0 max-w-full flex-col overflow-visible rounded-2xl border border-cyan-500/15 bg-slate-900/60 p-2.5 shadow-[0_0_40px_rgba(8,145,178,0.06)] xl:min-h-0 xl:overflow-hidden">
-          <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-2.5 overflow-hidden">
+        <section className="dashboard-workspace">
+          <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-2 overflow-hidden">
+            <DayNavigationBar context={snapshot.time_context ?? null} />
             <TabBar activeTab={activeTab} onChange={setActiveTab} />
-            {snapshot.replay ? (
+            {snapshot.replay && snapshot.time_context.is_active_day ? (
               <ReplayControlBar
                 status={snapshot.replay.status}
                 sourceTimestamp={scadaStatus?.latest_snapshot}
@@ -358,7 +421,6 @@ export default function Dashboard() {
                 onControl={handleReplayControl}
               />
             ) : null}
-
             <div className="min-h-0 flex-1 w-full min-w-0 overflow-visible xl:overflow-hidden">
               {activeTab === "home" ? (
                 <WorkspacePage>
@@ -367,10 +429,15 @@ export default function Dashboard() {
                     weather={weather}
                     probability={probability}
                     recommendation={recommendation}
-                    forecastItems={upcomingForecastItems}
+                    forecastItems={activeForecastItems}
                     calibration={calibration}
                     theme={theme}
-                    replay={snapshot.replay ?? null}
+                    timeContext={snapshot.time_context}
+                    replay={
+                      snapshot.time_context.is_active_day
+                        ? snapshot.replay ?? null
+                        : null
+                    }
                   />
                 </WorkspacePage>
               ) : null}
@@ -407,23 +474,30 @@ export default function Dashboard() {
                     liveState={liveWeatherState}
                     liveError={liveWeatherError}
                     fetchedAt={liveWeather?.fetchedAt ?? null}
-                    onModeChange={setWeatherDisplayMode}
                     onRefresh={loadLiveWeather}
                     hourlyDemandForecast={hourlyDemandForecast}
+                    daySeries={snapshot.time_context.series}
                   />
                 </WorkspacePage>
               ) : null}
 
               {activeTab === "demandForecast" ? (
                 <WorkspacePage>
-                  <DemandForecastTab
-                    grid={grid}
-                    probability={probability}
-                    calibration={calibration}
-                    demandForecast={demandForecast}
-                    theme={theme}
-                    replay={snapshot.replay ?? null}
-                  />
+                  {!snapshot.time_context.is_active_day ? (
+                    <SelectedDayChart
+                      context={snapshot.time_context}
+                      theme={theme}
+                    />
+                  ) : (
+                    <DemandForecastTab
+                      grid={grid}
+                      probability={probability}
+                      calibration={calibration}
+                      demandForecast={demandForecast}
+                      theme={theme}
+                      replay={snapshot.replay ?? null}
+                    />
+                  )}
                 </WorkspacePage>
               ) : null}
 
@@ -431,7 +505,9 @@ export default function Dashboard() {
                 <WorkspacePage>
                   <RiskGaugeTab
                     probability={probability}
-                    capacityPlan={capacityPlan}
+                    capacityPlan={
+                      snapshot.time_context.is_active_day ? capacityPlan : null
+                    }
                     theme={theme}
                   />
                 </WorkspacePage>
@@ -441,7 +517,9 @@ export default function Dashboard() {
                 <WorkspacePage>
                   <OperationalGuidanceTab
                     recommendation={recommendation}
-                    capacityPlan={capacityPlan}
+                    capacityPlan={
+                      snapshot.time_context.is_active_day ? capacityPlan : null
+                    }
                     busy={capacityPlanBusy}
                     error={capacityPlanError}
                     onEvaluate={handleCapacityPlanEvaluate}
@@ -458,7 +536,11 @@ export default function Dashboard() {
                     modelStatus={modelStatus}
                     scadaStatus={scadaStatus}
                     theme={theme}
-                    replay={snapshot.replay ?? null}
+                    replay={
+                      snapshot.time_context.is_active_day
+                        ? snapshot.replay ?? null
+                        : null
+                    }
                   />
                 </WorkspacePage>
               ) : null}
@@ -509,7 +591,7 @@ function Shell({
         theme={theme}
         onThemeChange={onThemeChange}
       />
-      <main className="flex w-full min-w-0 max-w-full flex-1 min-h-0 overflow-visible px-4 py-2.5 lg:px-6 xl:overflow-hidden">
+      <main className="flex w-full min-w-0 max-w-full flex-1 min-h-0 overflow-visible px-3 py-2 lg:px-4 xl:overflow-hidden">
         {children}
       </main>
     </div>
@@ -534,8 +616,8 @@ function TabBar({
   ];
 
   return (
-    <div className="w-full min-w-0 max-w-full rounded-2xl border border-slate-800 bg-slate-950/50 p-1.5">
-      <div className="grid min-w-0 grid-cols-4 gap-1.5 sm:grid-cols-7">
+    <div className="w-full min-w-0 max-w-full rounded-xl border border-slate-800 bg-slate-950/50 p-1">
+      <div className="grid min-w-0 grid-cols-4 gap-1 sm:grid-cols-7">
       {tabs.map((tab) => {
         const selected = tab.id === activeTab;
         return (
@@ -545,7 +627,7 @@ function TabBar({
             onClick={() => onChange(tab.id)}
             title={tab.label}
             aria-label={tab.label}
-            className={`min-h-[2.7rem] rounded-xl border px-2 py-2 text-[11px] font-semibold leading-tight transition md:text-xs ${
+            className={`min-h-[2.25rem] rounded-lg border px-2 py-1.5 text-[10px] font-semibold leading-tight transition md:text-[11px] ${
               selected
                 ? "border-cyan-400/30 bg-cyan-500/18 text-cyan-100 shadow-inner shadow-cyan-500/10"
                 : "border-slate-700/70 bg-slate-900/65 text-slate-300 hover:border-slate-500 hover:bg-slate-900/90 hover:text-white"
@@ -572,6 +654,7 @@ function HomeTab({
   forecastItems,
   calibration,
   theme,
+  timeContext,
   replay,
 }: {
   grid: DashboardSnapshot["grid"];
@@ -581,6 +664,7 @@ function HomeTab({
   forecastItems: ForecastData[];
   calibration: CalibrationSnapshot | null;
   theme: ThemeMode;
+  timeContext: DashboardSnapshot["time_context"];
   replay: ReplayDashboard | null;
 }) {
   if (replay) {
@@ -599,12 +683,43 @@ function HomeTab({
             value={formatSystemSpin(grid)}
             tone="amber"
           />
-          <SummaryTile label="Capacity Risk" value={formatProbability(probability)} tone="rose" />
+          <SummaryTile label="Generation Need" value={formatProbability(probability)} tone="rose" />
         </div>
 
-        <div className="grid min-h-0 flex-1 gap-2.5 xl:grid-cols-[minmax(0,1.42fr)_minmax(18rem,0.58fr)]">
+        <div className="home-primary-grid">
           <ReplayLoadChart replay={replay} theme={theme} compact />
           <ReplayWeatherPanel weather={weather} forecastItems={forecastItems} />
+        </div>
+      </>
+    );
+  }
+
+  if (!timeContext.is_active_day) {
+    return (
+      <>
+        <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-5">
+          <SummaryTile label="Demand" value={`${grid.current_demand_mw.toFixed(0)} MW`} tone="cyan" />
+          <SummaryTile
+            label={generationMetricLabel(grid)}
+            value={`${grid.current_generation_mw.toFixed(0)} MW`}
+            tone="emerald"
+          />
+          <SummaryTile label="Available" value={`${grid.total_available_capacity_mw.toFixed(0)} MW`} tone="cyan" />
+          <SummaryTile label="System Spin" value={formatSystemSpin(grid)} tone="amber" />
+          <SummaryTile label="Generation Need" value={formatProbability(probability)} tone="rose" />
+        </div>
+        <div className="home-primary-grid">
+          <SelectedDayChart context={timeContext} theme={theme} />
+          <PanelCard title="Selected Day Evidence" className="h-full min-h-0">
+            <div className="grid h-full auto-rows-fr gap-2">
+              <MiniMetric label="Replay Date" value={timeContext.selected_date} />
+              <MiniMetric label="Recorded Through" value={formatTimestamp(timeContext.displayed_at)} />
+              <MiniMetric label="Hourly Records" value={`${timeContext.record_count}`} />
+              <MiniMetric label="Completeness" value={`${timeContext.completeness_percent.toFixed(0)}%`} />
+              <MiniMetric label="Classification" value="Previous-Day Replay" />
+              <MiniMetric label="Source" value={timeContext.source} />
+            </div>
+          </PanelCard>
         </div>
       </>
     );
@@ -624,7 +739,7 @@ function HomeTab({
           value={formatSystemSpin(grid)}
           tone="amber"
         />
-        <SummaryTile label="Capacity Risk" value={formatProbability(probability)} tone="rose" />
+        <SummaryTile label="Generation Need" value={formatProbability(probability)} tone="rose" />
       </div>
 
       <div className="grid min-h-0 flex-1 items-stretch gap-2.5 xl:grid-cols-[minmax(0,1.22fr)_minmax(18rem,0.78fr)]">
@@ -737,7 +852,7 @@ function DecisionBrief({
       </div>
 
       <div className="mt-3 grid grid-cols-3 gap-2">
-        <MiniMetric label="Capacity Risk" value={formatProbability(recommendation)} />
+        <MiniMetric label="Generation Need" value={formatProbability(recommendation)} />
         <MiniMetric label="30m Demand" value={`${recommendation.forecast_demand_30m.toFixed(0)} MW`} />
         <MiniMetric label="Projected Reserve" value={`${recommendation.projected_reserve_mw.toFixed(0)} MW`} />
       </div>
@@ -1107,9 +1222,9 @@ function WeatherTab({
   liveState,
   liveError,
   fetchedAt,
-  onModeChange,
   onRefresh,
   hourlyDemandForecast,
+  daySeries,
 }: {
   weather: DashboardSnapshot["weather"];
   forecastItems: ForecastData[];
@@ -1118,44 +1233,25 @@ function WeatherTab({
   liveState: LiveWeatherState;
   liveError: string;
   fetchedAt: string | null;
-  onModeChange: (mode: WeatherDisplayMode) => void;
   onRefresh: () => void;
   hourlyDemandForecast: ReadonlyMap<number, number>;
+  daySeries: DaySeriesPoint[];
 }) {
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-2.5">
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-cyan-500/15 bg-slate-950/55 px-2.5 py-2">
         <div className="flex items-center gap-2">
-          <div className="flex rounded-lg border border-slate-700 bg-slate-950/80 p-0.5" role="group" aria-label="Weather display mode">
-            <button
-              type="button"
-              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
-                mode === "replay"
-                  ? "bg-cyan-500/20 text-cyan-200"
-                  : "text-slate-400 hover:bg-slate-800 hover:text-white"
-              }`}
-              aria-pressed={mode === "replay"}
-              onClick={() => onModeChange("replay")}
-            >
-              Replay Weather
-            </button>
-            <button
-              type="button"
-              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
-                mode === "live"
-                  ? "bg-emerald-500/20 text-emerald-200"
-                  : "text-slate-400 hover:bg-slate-800 hover:text-white"
-              }`}
-              aria-pressed={mode === "live"}
-              onClick={() => onModeChange("live")}
-            >
-              Live Weather Test
-            </button>
-          </div>
+          <span className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${
+            mode === "live"
+              ? "border-emerald-500/30 bg-emerald-500/15 text-emerald-200"
+              : "border-cyan-500/30 bg-cyan-500/15 text-cyan-200"
+          }`}>
+            {mode === "live" ? "Active Weather" : "Previous-Day Weather"}
+          </span>
           <span className="text-[10px] uppercase tracking-[0.14em] text-slate-400">
             {mode === "live"
-              ? "Display only · Trinidad weighted network"
-              : "Historical replay source"}
+              ? "Current T&T provider network"
+              : "Selected June replay day"}
           </span>
         </div>
 
@@ -1199,6 +1295,9 @@ function WeatherTab({
             qualityStatus={qualityStatus}
             className="h-full min-h-0 w-full min-w-0"
           />
+          {mode === "replay" ? (
+            <SelectedDayWeather series={daySeries} />
+          ) : (
           <PanelCard title="Next 6 Hours · Weather + Demand" className="h-full min-h-0 w-full min-w-0">
             <div className="flex h-full min-h-0 flex-col gap-2">
               {forecastItems.length > 0 ? (
@@ -1228,9 +1327,54 @@ function WeatherTab({
               />
             </div>
           </PanelCard>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+function SelectedDayWeather({
+  series,
+}: {
+  series: DaySeriesPoint[];
+}) {
+  const visible = series.slice(-24);
+  return (
+    <PanelCard title="Selected Day · Recorded Weather" className="h-full min-h-0 w-full min-w-0">
+      <div className="flex h-full min-h-0 flex-col">
+        <p className="mb-2 text-[10px] text-slate-400">
+          Recorded SCADA ambient temperature. Missing weather channels are not
+          substituted with present data.
+        </p>
+        <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-slate-800 bg-slate-950/45">
+          <table className="w-full table-fixed text-left text-xs">
+            <thead className="sticky top-0 bg-slate-950 text-slate-400">
+              <tr>
+                <th className="px-3 py-2">Observed at</th>
+                <th className="px-3 py-2">Temperature</th>
+                <th className="px-3 py-2">Quality</th>
+                <th className="px-3 py-2">Coverage</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800 text-slate-200">
+              {visible.map((point) => (
+                <tr key={point.timestamp}>
+                  <td className="px-3 py-2">{formatTimestamp(point.timestamp)}</td>
+                  <td className="px-3 py-2">
+                    {point.temperature_c == null
+                      ? "Gap"
+                      : `${point.temperature_c.toFixed(1)}°C`}
+                  </td>
+                  <td className="px-3 py-2">{point.quality_status}</td>
+                  <td className="px-3 py-2">{point.completeness_percent.toFixed(0)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </PanelCard>
   );
 }
 
@@ -1363,12 +1507,12 @@ function RiskGaugeTab({
 
       <div className="grid min-h-0 min-w-0 gap-2.5 overflow-hidden xl:grid-cols-[minmax(0,1.05fr)_minmax(21rem,0.95fr)]">
         <PanelCard
-          title="Capacity Risk Evidence"
+          title="Generation Need Evidence"
           className="h-full min-h-0 w-full min-w-0"
         >
           <div className="grid h-full min-h-0 grid-cols-2 auto-rows-fr gap-1.5 sm:grid-cols-4">
             <MiniMetric
-              label="No-Action Peak Risk"
+              label="Maximum Need Without Action"
               value={formatPlanRisk(capacityPlan?.baseline_peak_risk_percent, probability)}
             />
             <MiniMetric
@@ -1384,7 +1528,7 @@ function RiskGaugeTab({
               value={formatOptionalMegawatts(getPeakPlanPoint(capacityPlan)?.baseline_reserve_mw)}
             />
             <MiniMetric
-              label="Post-Plan Peak Risk"
+              label="Maximum Need After Plan"
               value={formatOptionalPercent(capacityPlan?.post_plan_peak_risk_percent)}
             />
             <MiniMetric
@@ -1789,7 +1933,7 @@ function OperationalGuidanceTab({
           <div className="grid h-full min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] gap-2">
             <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
               <MiniMetric
-                label="No-Action Risk"
+                label="Need Without Action"
                 value={formatPlanRisk(
                   capacityPlan?.baseline_peak_risk_percent,
                   recommendation,
@@ -2236,7 +2380,7 @@ function ModelStatusPanel({
 
         {knownGaps.length ? (
           <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[9px] leading-snug text-amber-100">
-            Historical gap: {knownGaps.join("; ")}. Demand rows remain lower-weight; capacity risk is unavailable where TRA is absent.
+            Historical gap: {knownGaps.join("; ")}. Demand rows remain lower-weight; generation need is unavailable where TRA is absent.
           </div>
         ) : null}
 
@@ -2605,7 +2749,21 @@ function findHourlyDemandForecast(
   timestamp: string,
 ): number | null {
   const hour = timestampHour(timestamp);
-  return hour == null ? null : forecasts.get(hour) ?? null;
+  if (hour == null) return null;
+  const exact = forecasts.get(hour);
+  if (exact != null) return exact;
+
+  // Present weather uses today's provider timestamps while the simulated-live
+  // demand curve uses the June replay date. Match civil hour only as an
+  // explicitly labelled display join; model features remain timestamp-aligned
+  // in the backend.
+  const targetHour = new Date(timestamp).getHours();
+  for (const [candidate, value] of forecasts) {
+    if (new Date(candidate * 60 * 60 * 1000).getHours() === targetHour) {
+      return value;
+    }
+  }
+  return null;
 }
 
 function timestampHour(timestamp: string): number | null {

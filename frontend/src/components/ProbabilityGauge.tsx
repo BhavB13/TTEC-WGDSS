@@ -66,7 +66,7 @@ export default function ProbabilityGauge({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300">
-            Capacity Risk
+            Generation Need
           </p>
           <h2 className="mt-0.5 text-[0.82rem] font-semibold leading-tight text-white">
             No-action exposure
@@ -106,7 +106,7 @@ export default function ProbabilityGauge({
                 {available ? `${riskPercent.toFixed(1)}%` : "--"}
               </p>
               <p className="mt-1 text-[8px] uppercase tracking-[0.12em] text-slate-400">
-                Peak risk
+                Maximum need
               </p>
             </div>
           </div>
@@ -114,7 +114,7 @@ export default function ProbabilityGauge({
 
         <div className="grid min-w-0 gap-1">
           <div className="grid grid-cols-1 gap-1">
-            <GaugeMetric label="Peak Horizon" value={peakHorizon} />
+            <GaugeMetric label="Highest-Risk Time" value={peakHorizon} />
             <GaugeMetric
               label="Reserve Target"
               value={`${reserveTarget.toFixed(0)} MW`}

@@ -1,10 +1,11 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   CategoryScale,
   Chart as ChartJS,
   Filler,
   LinearScale,
   LineElement,
+  type Plugin,
   PointElement,
   Tooltip,
 } from "chart.js";
@@ -19,6 +20,13 @@ const DEFAULT_SCALE_MAX_MW = 1500;
 const SCALE_STEP_MW = 100;
 const SCALE_PADDING_RATIO = 0.06;
 const TEMPERATURE_LINE_COLOR = "#fb7185";
+type LoadChartSeries =
+  | "range"
+  | "forecast"
+  | "historical"
+  | "actual"
+  | "generation"
+  | "temperature";
 
 export default function ReplayLoadChart({
   replay,
@@ -29,6 +37,14 @@ export default function ReplayLoadChart({
   theme?: "dark" | "light";
   compact?: boolean;
 }) {
+  const [seriesVisible, setSeriesVisible] = useState<Record<LoadChartSeries, boolean>>({
+    range: true,
+    forecast: true,
+    historical: true,
+    actual: true,
+    generation: true,
+    temperature: true,
+  });
   const text = theme === "light" ? "#334155" : "#cbd5e1";
   const grid = theme === "light" ? "rgba(71,85,105,.16)" : "rgba(148,163,184,.12)";
   const points = replay.full_day_load_forecast;
@@ -87,6 +103,68 @@ export default function ReplayLoadChart({
   const hasTemperatureSeries =
     observedTemperature.some((value) => value !== null) ||
     forecastTemperature.some((value) => value !== null);
+  const presentBoundaryIndex = useMemo(() => {
+    for (let index = points.length - 1; index >= 0; index -= 1) {
+      if (points[index]?.actual_demand_mw != null) {
+        return index;
+      }
+    }
+    return -1;
+  }, [points]);
+  const presentBoundaryPlugin = useMemo<Plugin<"line">>(
+    () => ({
+      id: "wgdss-present-boundary",
+      afterDatasetsDraw(chart) {
+        if (
+          presentBoundaryIndex < 0 ||
+          presentBoundaryIndex >= points.length - 1
+        ) {
+          return;
+        }
+        const xScale = chart.scales.x;
+        const chartArea = chart.chartArea;
+        if (!xScale || !chartArea) {
+          return;
+        }
+        const currentX = xScale.getPixelForValue(presentBoundaryIndex);
+        const nextX = xScale.getPixelForValue(presentBoundaryIndex + 1);
+        const boundaryX = (currentX + nextX) / 2;
+        const context = chart.ctx;
+
+        context.save();
+        context.setLineDash([5, 4]);
+        context.strokeStyle =
+          theme === "light" ? "rgba(8,145,178,.8)" : "rgba(103,232,249,.8)";
+        context.lineWidth = 1;
+        context.beginPath();
+        context.moveTo(boundaryX, chartArea.top);
+        context.lineTo(boundaryX, chartArea.bottom);
+        context.stroke();
+        context.setLineDash([]);
+
+        const label = "PRESENT  |  FORECAST";
+        context.font = "600 9px Inter, ui-sans-serif, system-ui";
+        const labelWidth = context.measureText(label).width + 12;
+        const labelX = Math.min(
+          Math.max(boundaryX - labelWidth / 2, chartArea.left + 2),
+          chartArea.right - labelWidth - 2,
+        );
+        context.fillStyle =
+          theme === "light" ? "rgba(241,245,249,.96)" : "rgba(2,6,23,.92)";
+        context.fillRect(labelX, chartArea.top + 4, labelWidth, 18);
+        context.fillStyle = theme === "light" ? "#0e7490" : "#a5f3fc";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(
+          label,
+          labelX + labelWidth / 2,
+          chartArea.top + 13,
+        );
+        context.restore();
+      },
+    }),
+    [points.length, presentBoundaryIndex, theme],
+  );
   const yAxisBounds = useMemo(
     () =>
       getChartBounds([
@@ -115,17 +193,22 @@ export default function ReplayLoadChart({
       datasets: [
         {
           label: "Forecast lower bound",
-          data: points.map((point) => point.forecast_demand_mw - point.uncertainty_mw),
+          data: points.map(
+            (point) => point.forecast_demand_mw - point.uncertainty_mw,
+          ),
           borderColor: "rgba(34,211,238,.2)",
           backgroundColor: "rgba(34,211,238,.08)",
           borderWidth: 0.8,
           pointRadius: 0,
           tension: 0.3,
           yAxisID: "y",
+          hidden: !seriesVisible.range,
         },
         {
           label: "Forecast uncertainty",
-          data: points.map((point) => point.forecast_demand_mw + point.uncertainty_mw),
+          data: points.map(
+            (point) => point.forecast_demand_mw + point.uncertainty_mw,
+          ),
           borderColor: "rgba(34,211,238,.2)",
           backgroundColor: "rgba(34,211,238,.08)",
           fill: "-1",
@@ -133,6 +216,7 @@ export default function ReplayLoadChart({
           pointRadius: 0,
           tension: 0.3,
           yAxisID: "y",
+          hidden: !seriesVisible.range,
         },
         {
           label: "Forecast demand",
@@ -146,6 +230,7 @@ export default function ReplayLoadChart({
           pointHitRadius: 14,
           tension: 0.3,
           yAxisID: "y",
+          hidden: !seriesVisible.forecast,
         },
         {
           label: "Historical hourly average",
@@ -158,6 +243,7 @@ export default function ReplayLoadChart({
           pointHitRadius: 14,
           tension: 0.3,
           yAxisID: "y",
+          hidden: !seriesVisible.historical,
         },
         {
           label: "Revealed actual",
@@ -171,6 +257,7 @@ export default function ReplayLoadChart({
           spanGaps: false,
           tension: 0.2,
           yAxisID: "y",
+          hidden: !seriesVisible.actual,
         },
         ...(hasRevealedGeneration
           ? [
@@ -187,6 +274,7 @@ export default function ReplayLoadChart({
                 spanGaps: false,
                 tension: 0.2,
                 yAxisID: "y",
+                hidden: !seriesVisible.generation,
               },
             ]
           : []),
@@ -204,6 +292,7 @@ export default function ReplayLoadChart({
                 spanGaps: false,
                 tension: 0.28,
                 yAxisID: "temperature",
+                hidden: !seriesVisible.temperature,
               },
               {
                 label: "Forecast temperature",
@@ -218,6 +307,7 @@ export default function ReplayLoadChart({
                 spanGaps: false,
                 tension: 0.28,
                 yAxisID: "temperature",
+                hidden: !seriesVisible.temperature,
               },
             ]
           : []),
@@ -232,6 +322,7 @@ export default function ReplayLoadChart({
     observedTemperature,
     points,
     revealedGeneration,
+    seriesVisible,
   ]);
 
   return (
@@ -251,14 +342,28 @@ export default function ReplayLoadChart({
               : ""}
           </p>
         </div>
-        <span className="shrink-0 whitespace-nowrap rounded-full border border-cyan-500/25 bg-cyan-500/10 px-2 py-1 text-[9px] font-semibold text-cyan-100">
-          Peak {replay.summary.current_day_peak_forecast_mw.toFixed(0)} MW
-        </span>
+        <div className="flex shrink-0 flex-wrap justify-end gap-1">
+          {presentBoundaryIndex >= 0 ? (
+            <span className="whitespace-nowrap rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-[9px] font-semibold text-emerald-100">
+              Observed through {formatHour(points[presentBoundaryIndex].timestamp)}
+            </span>
+          ) : null}
+          <span className="whitespace-nowrap rounded-full border border-cyan-500/25 bg-cyan-500/10 px-2 py-1 text-[9px] font-semibold text-cyan-100">
+            Forecast peak {replay.summary.current_day_peak_forecast_mw.toFixed(0)} MW
+          </span>
+        </div>
       </div>
       <ChartKey
         generationLabel={usesTraGeneration ? "Generation (TRA)" : "Generation output"}
         showGeneration={hasRevealedGeneration}
         showTemperature={hasTemperatureSeries}
+        visible={seriesVisible}
+        onToggle={(series) =>
+          setSeriesVisible((current) => ({
+            ...current,
+            [series]: !current[series],
+          }))
+        }
       />
       <div
         className={`relative mt-1.5 h-full min-w-0 cursor-crosshair overflow-hidden ${
@@ -271,6 +376,7 @@ export default function ReplayLoadChart({
           className="!h-full !w-full"
           style={{ width: "100%", height: "100%" }}
           data={data}
+          plugins={[presentBoundaryPlugin]}
           options={{
             responsive: true,
             maintainAspectRatio: false,
@@ -436,10 +542,14 @@ function ChartKey({
   generationLabel,
   showGeneration,
   showTemperature,
+  visible,
+  onToggle,
 }: {
   generationLabel: string;
   showGeneration: boolean;
   showTemperature: boolean;
+  visible: Record<LoadChartSeries, boolean>;
+  onToggle: (series: LoadChartSeries) => void;
 }) {
   const columnsClass =
     showGeneration && showTemperature
@@ -453,17 +563,19 @@ function ChartKey({
       aria-label="Load forecast chart key"
       className={`mt-1.5 grid w-full min-w-0 grid-cols-2 items-stretch gap-1 border-t border-slate-700/50 pt-1.5 text-[9px] font-medium text-slate-300 ${columnsClass}`}
     >
-      <ChartKeyItem label="90% forecast range" variant="band" />
-      <ChartKeyItem label="Forecast demand" variant="forecast" />
-      <ChartKeyItem label="Historical average" variant="historical" />
-      <ChartKeyItem label="Actual demand" variant="actual" />
+      <ChartKeyItem label="90% forecast range" variant="band" active={visible.range} onClick={() => onToggle("range")} />
+      <ChartKeyItem label="Forecast demand" variant="forecast" active={visible.forecast} onClick={() => onToggle("forecast")} />
+      <ChartKeyItem label="Historical average" variant="historical" active={visible.historical} onClick={() => onToggle("historical")} />
+      <ChartKeyItem label="Actual demand" variant="actual" active={visible.actual} onClick={() => onToggle("actual")} />
       {showGeneration ? (
-        <ChartKeyItem label={generationLabel} variant="generation" />
+        <ChartKeyItem label={generationLabel} variant="generation" active={visible.generation} onClick={() => onToggle("generation")} />
       ) : null}
       {showTemperature ? (
         <ChartKeyItem
           label="Temperature · observed / forecast"
           variant="temperature"
+          active={visible.temperature}
+          onClick={() => onToggle("temperature")}
         />
       ) : null}
     </div>
@@ -473,6 +585,8 @@ function ChartKey({
 function ChartKeyItem({
   label,
   variant,
+  active,
+  onClick,
 }: {
   label: string;
   variant:
@@ -482,16 +596,18 @@ function ChartKeyItem({
     | "actual"
     | "generation"
     | "temperature";
+  active: boolean;
+  onClick: () => void;
 }) {
   if (variant === "temperature") {
     return (
-      <span className="inline-flex min-w-0 items-center justify-center gap-1.5 text-center leading-tight">
+      <button type="button" aria-pressed={active} onClick={onClick} className={`inline-flex min-w-0 items-center justify-center gap-1.5 rounded-md border px-1 py-0.5 text-center leading-tight transition ${active ? "border-slate-700 bg-slate-900/60 opacity-100" : "border-transparent opacity-45"}`}>
         <span aria-hidden="true" className="flex w-4 shrink-0 items-center">
           <span className="w-2 border-t-2 border-rose-400" />
           <span className="w-2 border-t-2 border-dashed border-rose-400" />
         </span>
         <span className="min-w-0 break-words">{label}</span>
-      </span>
+      </button>
     );
   }
 
@@ -504,10 +620,10 @@ function ChartKeyItem({
   }[variant];
 
   return (
-    <span className="inline-flex min-w-0 items-center justify-center gap-1.5 text-center leading-tight">
+    <button type="button" aria-pressed={active} onClick={onClick} className={`inline-flex min-w-0 items-center justify-center gap-1.5 rounded-md border px-1 py-0.5 text-center leading-tight transition ${active ? "border-slate-700 bg-slate-900/60 opacity-100" : "border-transparent opacity-45"}`}>
       <span aria-hidden="true" className={`w-4 shrink-0 ${indicatorClass}`} />
       <span className="min-w-0 break-words">{label}</span>
-    </span>
+    </button>
   );
 }
 

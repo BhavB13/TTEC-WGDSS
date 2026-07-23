@@ -342,3 +342,12 @@ availability.
 - `GET /api/v1/recommendations`
 
 The OpenAPI schema and interactive documentation are available at `/docs`.
+# Present Timeline and Selected Day
+
+`GET /api/v1/dashboard/snapshot` accepts the optional
+`selected_date=YYYY-MM-DD` parameter. Omitting it follows the active June
+simulated-present cursor. An explicit date loads an available previous June day
+without creating a second dashboard mode. The response includes `time_context`
+with active and selected dates, source, classification, completeness, and
+cutoff-safe hourly observations. The former `mode`, date-range, and granularity
+parameters have been removed. See `docs/PRESENT_TIME_NAVIGATION.md`.

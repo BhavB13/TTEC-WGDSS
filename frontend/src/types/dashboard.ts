@@ -338,6 +338,36 @@ export interface ReplayDashboard {
   };
 }
 
+export interface DaySeriesPoint {
+  timestamp: string;
+  demand_mw?: number | null;
+  generation_tra_mw?: number | null;
+  spinning_reserve_mw?: number | null;
+  available_capacity_mw?: number | null;
+  temperature_c?: number | null;
+  quality_status: string;
+  completeness_percent: number;
+  data_phase: "JUNE_OBSERVED";
+}
+
+export interface DashboardTimeContext {
+  selected_date: string;
+  active_date: string;
+  is_active_day: boolean;
+  displayed_at: string;
+  granularity: "hourly";
+  source: string;
+  value_classification: string;
+  available_start: string;
+  available_end: string;
+  available_dates: string[];
+  completeness_percent: number;
+  record_count: number;
+  is_complete: boolean;
+  notice?: string | null;
+  series: DaySeriesPoint[];
+}
+
 export interface GridStatus {
   timestamp?: string | null;
   current_demand_mw: number;
@@ -571,6 +601,7 @@ export interface DashboardSnapshot {
   scada_status?: ScadaStatus | null;
   replay?: ReplayDashboard | null;
   capacity_plan?: CapacityPlan | null;
+  time_context: DashboardTimeContext;
 }
 
 // Backwards-compatible aliases for existing component imports.
