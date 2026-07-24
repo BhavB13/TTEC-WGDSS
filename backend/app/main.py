@@ -17,6 +17,7 @@ from app.core.logging_config import configure_logging
 from app.database.init_db import initialize_database
 from app.services.calibration_import_service import CalibrationImportService
 from app.services.demo_replay_service import DemoReplayService
+from app.services.frozen_snapshot_model_service import FrozenSnapshotModelService
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -40,6 +41,17 @@ async def lifespan(app: FastAPI):
             logger.info("Demo replay dataset ready with %s hourly observations", row_count)
         except Exception:  # pragma: no cover - startup resilience
             logger.exception("Demo replay dataset initialization skipped")
+    artifact_path = settings.FROZEN_DEMAND_MODEL_ARTIFACT_PATH.strip()
+    if artifact_path:
+        try:
+            metadata = FrozenSnapshotModelService(artifact_path).metadata()
+            logger.info(
+                "Frozen demand artifact preload status: %s (%s)",
+                metadata.status,
+                metadata.artifact_hash or "no hash",
+            )
+        except Exception:  # pragma: no cover - startup resilience
+            logger.exception("Frozen demand artifact preload skipped")
     yield
     logger.info("Shutting down %s", settings.APP_NAME)
 

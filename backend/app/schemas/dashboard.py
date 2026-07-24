@@ -17,10 +17,24 @@ from app.schemas.recommendation import RecommendationResponse
 from app.schemas.replay import ReplayDashboardResponse
 from app.schemas.weather import CurrentWeatherResponse
 from app.schemas.dashboard_time import DashboardTimeContextResponse
+from datetime import datetime
 
 
 class ForecastBundleResponse(BaseModel):
     items: list[ForecastResponse]
+
+
+class InferenceProvenanceResponse(BaseModel):
+    data_mode: str
+    source_provider: str
+    source_observation_time: datetime | None = None
+    source_available_at: datetime | None = None
+    forecast_issue_time: datetime | None = None
+    model_version: str | None = None
+    artifact_hash: str | None = None
+    training_cutoff: datetime | None = None
+    status: str
+    advisory_only: bool = True
 
 
 class DashboardSnapshotResponse(BaseModel):
@@ -40,3 +54,4 @@ class DashboardSnapshotResponse(BaseModel):
     # Optional for persisted legacy snapshots and internal constructors.
     # DashboardService always supplies it on the public snapshot endpoint.
     time_context: DashboardTimeContextResponse | None = None
+    inference_provenance: InferenceProvenanceResponse | None = None

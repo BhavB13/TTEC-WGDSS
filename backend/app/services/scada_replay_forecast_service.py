@@ -17,7 +17,8 @@ from app.services.demand_forecast_model_service import (
     MODEL_VERSION,
     DemandForecastModelService,
 )
-from app.services.forecast_dataset_service import ForecastDatasetService
+from app.services.as_of_forecast_feature_service import AsOfForecastFeatureService
+from app.services.frozen_snapshot_model_service import FrozenSnapshotModelService
 
 
 TRINIDAD_TZ = ZoneInfo("America/Port_of_Spain")
@@ -48,20 +49,47 @@ class ScadaReplayForecastService:
             return ScadaReplayForecastRefreshResult(None, 0, 0, 0)
         return self.refresh(source_cursor)
 
-    def refresh(self, source_cursor_at: datetime) -> ScadaReplayForecastRefreshResult:
-        dataset = ForecastDatasetService(
+    def refresh(
+        self,
+        source_cursor_at: datetime,
+        *,
+        source_provider: str = "SCADA_ARCHIVE",
+        data_mode: str = "HISTORICAL_REPLAY",
+    ) -> ScadaReplayForecastRefreshResult:
+        artifact_path = (
+            settings.FROZEN_DEMAND_MODEL_ARTIFACT_PATH.strip()
+            or settings.LIVE_SCADA_MODEL_ARTIFACT_PATH.strip()
+        )
+        frozen_service = FrozenSnapshotModelService(artifact_path or None)
+        metadata = frozen_service.metadata()
+        features = AsOfForecastFeatureService(
             session_factory=self.session_factory
-        ).build_evaluation_dataset(source_cursor_at)
+        ).build(
+            source_cursor_at,
+            source_provider=source_provider,
+            data_mode=data_mode,
+            include_training_rows=metadata.status != "READY",
+        )
+        frozen_metadata, frozen_forecasts = frozen_service.predict_rows(
+            features.inference_rows
+        )
+        if frozen_metadata.status == "READY" and frozen_forecasts:
+            return self._store_frozen(
+                source_cursor_at,
+                features,
+                frozen_metadata,
+                frozen_forecasts,
+            )
         results = DemandForecastModelService(
             session_factory=self.session_factory
-        ).evaluate_rows(dataset.rows, dataset.inference_rows)
+        ).evaluate_rows(features.training_rows, features.inference_rows)
         generated_at = datetime.now(timezone.utc)
         with self.session_factory() as session:
             session.execute(delete(ScadaReplayForecastResult))
             for result in results:
                 feature_timestamp = (
-                    dataset.inference_rows[result.horizon_hours].feature_timestamp
-                    if result.horizon_hours in dataset.inference_rows
+                    features.inference_rows[result.horizon_hours].feature_timestamp
+                    if result.horizon_hours in features.inference_rows
                     else source_cursor_at
                 )
                 session.add(
@@ -129,8 +157,75 @@ class ScadaReplayForecastService:
         return ScadaReplayForecastRefreshResult(
             source_cursor_at=source_cursor_at,
             rows_stored=len(results),
-            source_snapshots=dataset.source_snapshots,
-            training_rows=len(dataset.rows),
+            source_snapshots=features.diagnostics.source_snapshot_count,
+            training_rows=len(features.training_rows),
+        )
+
+    def _store_frozen(self, source_cursor_at, features, metadata, forecasts):
+        generated_at = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.execute(delete(ScadaReplayForecastResult))
+            for forecast in forecasts:
+                row = features.inference_rows[forecast.horizon_hours]
+                session.add(
+                    ScadaReplayForecastResult(
+                        source_cursor_at=source_cursor_at,
+                        feature_timestamp=row.feature_timestamp,
+                        forecast_timestamp=forecast.forecast_timestamp,
+                        horizon_hours=forecast.horizon_hours,
+                        forecast_demand_mw=forecast.forecast_demand_mw,
+                        forecast_uncertainty_mw=forecast.uncertainty_mw,
+                        model_name=metadata.model_name or "Frozen model",
+                        model_version=metadata.model_version or MODEL_VERSION,
+                        baseline_name="release-gated",
+                        baseline_forecast_mw=forecast.forecast_demand_mw,
+                        quality_status="FROZEN_MODEL_INFERENCE",
+                        mae=0.0,
+                        rmse=0.0,
+                        mape=0.0,
+                        residual_std=forecast.uncertainty_mw,
+                        baseline_mae=0.0,
+                        ml_beats_baseline=True,
+                        feature_profile=metadata.feature_profile or "unknown",
+                        validation_status="RELEASED",
+                        training_span_hours=0,
+                        train_row_count=(
+                            metadata.training_row_count
+                            or features.diagnostics.training_row_count
+                        ),
+                        test_row_count=0,
+                        candidate_metrics=json.dumps({
+                            "artifact_hash": metadata.artifact_hash,
+                            "feature_fingerprint": features.diagnostics.feature_fingerprint,
+                            "data_mode": features.diagnostics.data_mode,
+                        }),
+                        confidence_lower_mw=forecast.lower_bound_mw,
+                        confidence_upper_mw=forecast.upper_bound_mw,
+                        confidence_level=0.90,
+                        p10_demand_mw=forecast.lower_bound_mw,
+                        p50_demand_mw=forecast.forecast_demand_mw,
+                        p90_demand_mw=forecast.upper_bound_mw,
+                        training_start_at=metadata.training_start_at,
+                        training_end_at=metadata.training_end_at,
+                        feature_importance="{}",
+                        fallback_reason=None,
+                        temperature_load_correlation=None,
+                        similar_period_forecast_mw=None,
+                        similar_examples="[]",
+                        contributing_factors=json.dumps(forecast.reasons),
+                        training_rows=(
+                            metadata.training_row_count
+                            or features.diagnostics.training_row_count
+                        ),
+                        generated_at=generated_at,
+                    )
+                )
+            session.commit()
+        return ScadaReplayForecastRefreshResult(
+            source_cursor_at=source_cursor_at,
+            rows_stored=len(forecasts),
+            source_snapshots=features.diagnostics.source_snapshot_count,
+            training_rows=features.diagnostics.training_row_count,
         )
 
     def mapped_source_cursor(self) -> datetime | None:

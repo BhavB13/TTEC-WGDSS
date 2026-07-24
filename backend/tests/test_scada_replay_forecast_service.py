@@ -19,6 +19,10 @@ def test_replay_forecast_refresh_persists_exact_cursor_horizons_and_audit_metada
     monkeypatch,
     tmp_path,
 ):
+    monkeypatch.setattr(
+        "app.services.scada_replay_forecast_service.settings.FROZEN_DEMAND_MODEL_ARTIFACT_PATH",
+        "",
+    )
     engine = create_engine(f"sqlite:///{tmp_path / 'replay-forecast.db'}")
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -52,14 +56,23 @@ def test_replay_forecast_refresh_persists_exact_cursor_horizons_and_audit_metada
         def __init__(self, session_factory):
             captured["session_factory"] = session_factory
 
-        def build_evaluation_dataset(self, source_cursor):
+        def build(
+            self,
+            source_cursor,
+            *,
+            source_provider,
+            data_mode,
+            include_training_rows,
+        ):
             captured["source_cursor"] = source_cursor
+            captured["source_provider"] = source_provider
+            captured["data_mode"] = data_mode
             return SimpleNamespace(
-                rows=[SimpleNamespace()] * 150,
+                training_rows=[SimpleNamespace()] * 150,
                 inference_rows={1: SimpleNamespace(feature_timestamp=source_cursor),
                                 2: SimpleNamespace(feature_timestamp=source_cursor),
                                 6: SimpleNamespace(feature_timestamp=source_cursor)},
-                source_snapshots=346,
+                diagnostics=SimpleNamespace(source_snapshot_count=346),
             )
 
     class FakeModelService:
@@ -74,7 +87,7 @@ def test_replay_forecast_refresh_persists_exact_cursor_horizons_and_audit_metada
             ]
 
     monkeypatch.setattr(
-        "app.services.scada_replay_forecast_service.ForecastDatasetService",
+        "app.services.scada_replay_forecast_service.AsOfForecastFeatureService",
         FakeDatasetService,
     )
     monkeypatch.setattr(

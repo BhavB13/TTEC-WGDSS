@@ -55,6 +55,8 @@ from app.services.risk_probability_engine import (
     risk_result_details,
 )
 from app.services.weather_service import WeatherService
+from app.services.as_of_forecast_feature_service import AsOfForecastFeatureService
+from app.services.frozen_snapshot_model_service import FrozenSnapshotModelService
 
 
 DEMO_SOURCE = "WGDSS 12-Month Synthetic SCADA/Weather Demonstration"
@@ -196,9 +198,17 @@ class DemoReplayService:
                 observation,
                 forecast_scada_overlay,
             )
-            replay_forecasts = self._persisted_replay_forecasts(
+            persisted_replay_forecasts = self._persisted_replay_forecasts(
                 session,
                 active_observation,
+            )
+            generated_replay_forecasts = (
+                []
+                if persisted_replay_forecasts
+                else self._frozen_replay_forecasts(active_observation)
+            )
+            replay_forecasts = (
+                persisted_replay_forecasts or generated_replay_forecasts
             )
             weather_forecast = self._weather_forecast(
                 session,
@@ -208,7 +218,9 @@ class DemoReplayService:
             )
             archived_weather_active = _has_multi_source_forecast(weather_forecast)
             active_replay_forecasts = (
-                [] if archived_weather_active else replay_forecasts
+                generated_replay_forecasts
+                if archived_weather_active
+                else replay_forecasts
             )
             replay = self._dashboard_bundle(
                 session,
@@ -463,6 +475,89 @@ class DemoReplayService:
         # may contain only 1h, 2h, and 6h; keep those usable during migration.
         return valid if 1 in {row.horizon_hours for row in valid} else []
 
+    def _frozen_replay_forecasts(
+        self,
+        observation: _WeatherGridObservation,
+    ) -> list[ScadaReplayForecastResult]:
+        if not isinstance(observation, _ScadaReplayObservation):
+            return []
+        source_cursor = observation.source_timestamp.replace(tzinfo=None)
+        try:
+            features = AsOfForecastFeatureService(
+                session_factory=self.session_factory
+            ).build(
+                source_cursor,
+                source_provider="SCADA_ARCHIVE",
+                data_mode="HISTORICAL_REPLAY",
+                include_training_rows=False,
+            )
+            artifact_path = settings.FROZEN_DEMAND_MODEL_ARTIFACT_PATH.strip()
+            metadata, forecasts = FrozenSnapshotModelService(
+                artifact_path or None
+            ).predict_rows(features.inference_rows)
+        except Exception:
+            logger.exception("Frozen replay inference unavailable at %s", source_cursor)
+            return []
+        if metadata.status != "READY":
+            return []
+        generated_at = datetime.now(timezone.utc)
+        return [
+            ScadaReplayForecastResult(
+                source_cursor_at=source_cursor,
+                feature_timestamp=features.inference_rows[item.horizon_hours].feature_timestamp,
+                forecast_timestamp=item.forecast_timestamp,
+                horizon_hours=item.horizon_hours,
+                forecast_demand_mw=item.forecast_demand_mw,
+                forecast_uncertainty_mw=item.uncertainty_mw,
+                model_name=metadata.model_name or "Frozen model",
+                model_version=metadata.model_version or "unknown",
+                baseline_name="release-gated",
+                baseline_forecast_mw=item.forecast_demand_mw,
+                quality_status="FROZEN_MODEL_INFERENCE",
+                mae=0.0,
+                rmse=0.0,
+                mape=0.0,
+                residual_std=item.uncertainty_mw,
+                baseline_mae=0.0,
+                ml_beats_baseline=True,
+                feature_profile=metadata.feature_profile or "unknown",
+                validation_status="RELEASED",
+                training_span_hours=0,
+                train_row_count=(
+                    metadata.training_row_count
+                    or features.diagnostics.training_row_count
+                ),
+                test_row_count=0,
+                candidate_metrics=json.dumps(
+                    {
+                        "artifact_hash": metadata.artifact_hash,
+                        "feature_fingerprint": features.diagnostics.feature_fingerprint,
+                        "data_mode": "HISTORICAL_REPLAY",
+                    }
+                ),
+                confidence_lower_mw=item.lower_bound_mw,
+                confidence_upper_mw=item.upper_bound_mw,
+                confidence_level=0.90,
+                p10_demand_mw=item.lower_bound_mw,
+                p50_demand_mw=item.forecast_demand_mw,
+                p90_demand_mw=item.upper_bound_mw,
+                training_start_at=metadata.training_start_at,
+                training_end_at=metadata.training_end_at,
+                feature_importance="{}",
+                fallback_reason=None,
+                temperature_load_correlation=None,
+                similar_period_forecast_mw=None,
+                similar_examples="[]",
+                contributing_factors=json.dumps(item.reasons),
+                training_rows=(
+                    metadata.training_row_count
+                    or features.diagnostics.training_row_count
+                ),
+                generated_at=generated_at,
+            )
+            for item in forecasts
+        ]
+
     @staticmethod
     def _replay_demand_forecast_bundle(
         observation: _WeatherGridObservation,
@@ -591,6 +686,8 @@ class DemoReplayService:
             generated_at=primary.generated_at,
             feature_profile=primary.feature_profile,
             validation_status=primary.validation_status,
+            training_start_at=primary.training_start_at,
+            training_end_at=primary.training_end_at,
             training_span_hours=primary.training_span_hours,
             train_row_count=primary.train_row_count,
             test_row_count=primary.test_row_count,
@@ -1286,6 +1383,10 @@ class DemoReplayService:
             weather_forecast=weather_forecast,
             cursor_at=model_issue_at,
             actual_reveal_at=state.cursor_at,
+            # Direct +1h..+6h forecasts use the frozen October-May release.
+            # This full-day line remains a separately labelled statistical
+            # profile and must never fit model parameters on revealed June.
+            allow_ml_fit=not scada_regime,
         )
         self._forecast_cache = {cache_key: result}
         return result

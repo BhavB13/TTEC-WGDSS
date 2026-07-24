@@ -5,8 +5,16 @@ import type { DashboardTimeContext } from "../types/dashboard";
 
 export default function DayNavigationBar({
   context,
+  provenance,
 }: {
   context: DashboardTimeContext | null;
+  provenance: {
+    data_mode: string;
+    source_provider: string;
+    model_version?: string | null;
+    status: string;
+    advisory_only: boolean;
+  } | null;
 }) {
   const view = useDashboardTime();
   const [dateError, setDateError] = useState("");
@@ -82,6 +90,13 @@ export default function DayNavigationBar({
         <span>{context?.selected_date ?? "Resolving date"}</span>
         <span>{context ? `${context.granularity} · ${context.record_count} records` : "Resolving records"}</span>
         <span className="mode-source">{context?.source ?? "Resolving source"}</span>
+        {provenance ? (
+          <>
+            <span>{provenance.data_mode.replace(/_/g, " ")}</span>
+            <span>{provenance.model_version ?? provenance.status}</span>
+            {provenance.advisory_only ? <span>ADVISORY ONLY</span> : null}
+          </>
+        ) : null}
         {dateError || context?.notice ? <em>{dateError || context?.notice}</em> : null}
       </div>
     </section>

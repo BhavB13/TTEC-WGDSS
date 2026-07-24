@@ -413,7 +413,10 @@ function DashboardContent() {
 
         <section className="dashboard-workspace">
           <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-2 overflow-hidden">
-            <DayNavigationBar context={snapshot.time_context ?? null} />
+            <DayNavigationBar
+              context={snapshot.time_context ?? null}
+              provenance={snapshot.inference_provenance ?? null}
+            />
             <TabBar activeTab={activeTab} onChange={setActiveTab} />
             {snapshot.replay && snapshot.time_context.is_active_day ? (
               <ReplayControlBar

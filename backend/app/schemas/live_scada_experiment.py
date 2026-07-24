@@ -64,6 +64,7 @@ class FrozenModelMetadata(BaseModel):
     artifact_path: str | None = None
     training_start_at: datetime | None = None
     training_end_at: datetime | None = None
+    training_row_count: int | None = None
     training_policy: str = "October-May only; June and snapshot excluded"
     snapshot_used_for_training: bool = False
     preprocessing_refit: bool = False

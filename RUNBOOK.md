@@ -166,6 +166,45 @@ as a comma-separated list of `YYYY-MM-DD` values using
 `FORECAST_EXTRA_HOLIDAY_DATES`. Have operations engineering approve those dates
 before retraining.
 
+## Frozen Model Release
+
+The direct 1-6 hour operational model is released as an inference-only artifact.
+Generate it only after the October-May rows and stored model-selection evidence
+have passed review:
+
+```powershell
+cd backend
+venv\Scripts\python.exe scripts\export_frozen_demand_model.py `
+  --output var\models\wgdss-demand-v5.joblib
+```
+
+The command prints the artifact SHA-256, schema, model version, exact training
+range, row count, and horizons. The loader rejects a training end after May 31,
+2026 or metadata indicating that a new snapshot entered training. Joblib files
+are deployment artifacts and are intentionally excluded from Git.
+
+## Intermittent SCADA Export Batch
+
+Place completed `.csv` or `.zip` exports in the configured inbox, then run:
+
+```powershell
+cd backend
+venv\Scripts\python.exe scripts\run_scada_batch.py
+```
+
+The worker:
+
+- waits until each file has stopped changing for the configured stability time;
+- imports unseen hashes and preserves raw quality/provenance;
+- rebuilds duration-weighted hourly snapshots;
+- advances the complete-data watermark at most once;
+- issues a frozen forecast only when that watermark advances;
+- writes a machine-readable state/run summary; and
+- labels the source `BATCH_SCADA_EXPORT`, never live SCADA.
+
+This command is suitable for an approved external scheduler. It must not be
+run inside a FastAPI request or used to imply a continuous OSI connection.
+
 ## Before Editing
 
 1. Run `git status --short` and preserve unrelated user changes.

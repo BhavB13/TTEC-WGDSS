@@ -602,6 +602,18 @@ export interface DashboardSnapshot {
   replay?: ReplayDashboard | null;
   capacity_plan?: CapacityPlan | null;
   time_context: DashboardTimeContext;
+  inference_provenance?: {
+    data_mode: string;
+    source_provider: string;
+    source_observation_time?: string | null;
+    source_available_at?: string | null;
+    forecast_issue_time?: string | null;
+    model_version?: string | null;
+    artifact_hash?: string | null;
+    training_cutoff?: string | null;
+    status: string;
+    advisory_only: boolean;
+  } | null;
 }
 
 // Backwards-compatible aliases for existing component imports.

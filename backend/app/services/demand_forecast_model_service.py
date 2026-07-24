@@ -173,6 +173,8 @@ class HorizonModelResult:
     similar_period_forecast_mw: float | None = None
     similar_examples: tuple[dict[str, object], ...] = ()
     contributing_factors: tuple[str, ...] = ()
+    selected_candidate_spec: dict[str, object] | None = None
+    validation_bias_mw: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -763,6 +765,19 @@ class DemandForecastModelService:
                 example.as_json_object() for example in similar_periods.examples
             ),
             contributing_factors=tuple(contributing_factors),
+            selected_candidate_spec=(
+                {
+                    "candidate_id": selected_candidate.candidate_id,
+                    "model_name": selected_candidate.model_name,
+                    "family": selected_candidate.family,
+                    "params": selected_candidate.params,
+                    "similarity_weight": selected_candidate.similarity_weight,
+                    "target_mode": selected_candidate.target_mode,
+                }
+                if selected_candidate is not None and ml_beats_baseline
+                else None
+            ),
+            validation_bias_mw=selected_ml_bias if ml_beats_baseline else baseline_bias,
         )
 
     @staticmethod
@@ -1212,6 +1227,29 @@ def _fit_prepared_model_predictions(
     candidate: _ModelCandidate,
     prepared: _PreparedModelData,
 ) -> list[float]:
+    model, scaler = _fit_prepared_model(candidate, prepared)
+    x_test = (
+        scaler.transform(prepared.x_test)
+        if scaler is not None
+        else prepared.x_test
+    )
+    predicted = model.predict(x_test)
+
+    values = [float(value) for value in predicted]
+    if candidate.target_mode == "load_state_residual":
+        values = [
+            prediction + anchor
+            for prediction, anchor in zip(values, prepared.test_anchors)
+        ]
+    return [max(0.0, value) for value in values]
+
+
+def _fit_prepared_model(
+    candidate: _ModelCandidate,
+    prepared: _PreparedModelData,
+) -> tuple[Any, Any | None]:
+    """Fit one selected candidate and return its immutable inference state."""
+
     y_train = (
         prepared.y_load_state_residual
         if candidate.target_mode == "load_state_residual"
@@ -1223,14 +1261,13 @@ def _fit_prepared_model_predictions(
 
         scaler = StandardScaler()
         scaled_train = scaler.fit_transform(prepared.x_train)
-        scaled_test = scaler.transform(prepared.x_test)
         model = Ridge(**candidate.params)
         model.fit(
             scaled_train,
             y_train,
             sample_weight=prepared.sample_weights,
         )
-        predicted = model.predict(scaled_test)
+        return model, scaler
     elif candidate.family == "hist_gradient_boosting":
         from sklearn.ensemble import HistGradientBoostingRegressor
 
@@ -1243,7 +1280,7 @@ def _fit_prepared_model_predictions(
             y_train,
             sample_weight=prepared.sample_weights,
         )
-        predicted = model.predict(prepared.x_test)
+        return model, None
     elif candidate.family == "random_forest":
         from sklearn.ensemble import RandomForestRegressor
 
@@ -1253,7 +1290,7 @@ def _fit_prepared_model_predictions(
             y_train,
             sample_weight=prepared.sample_weights,
         )
-        predicted = model.predict(prepared.x_test)
+        return model, None
     elif candidate.family == "extra_trees":
         from sklearn.ensemble import ExtraTreesRegressor
 
@@ -1263,17 +1300,9 @@ def _fit_prepared_model_predictions(
             y_train,
             sample_weight=prepared.sample_weights,
         )
-        predicted = model.predict(prepared.x_test)
+        return model, None
     else:
         raise ValueError(f"Unsupported model family: {candidate.family}")
-
-    values = [float(value) for value in predicted]
-    if candidate.target_mode == "load_state_residual":
-        values = [
-            prediction + anchor
-            for prediction, anchor in zip(values, prepared.test_anchors)
-        ]
-    return [max(0.0, value) for value in values]
 
 
 def _targets(rows: list[ForecastTrainingRow]) -> list[float]:

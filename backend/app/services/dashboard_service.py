@@ -7,7 +7,11 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.config import settings
-from app.schemas.dashboard import DashboardSnapshotResponse, ForecastBundleResponse
+from app.schemas.dashboard import (
+    DashboardSnapshotResponse,
+    ForecastBundleResponse,
+    InferenceProvenanceResponse,
+)
 from app.schemas.data_quality import DataQualityResponse
 from app.schemas.grid import GridStatusResponse
 from app.schemas.probability import ProbabilityResponse
@@ -445,6 +449,48 @@ class DashboardService:
             ),
             capacity_plan=capacity_plan,
             time_context=time_context,
+            inference_provenance=InferenceProvenanceResponse(
+                data_mode=(
+                    "HISTORICAL_REPLAY"
+                    if replay_context is not None
+                    else "MOCK"
+                    if "mock" in grid_response.source_provider.lower()
+                    else "LIVE_READ_ONLY"
+                ),
+                source_provider=(
+                    scada_status.source_provider
+                    if scada_status is not None
+                    else grid_response.source_provider
+                ),
+                source_observation_time=(
+                    scada_status.latest_snapshot
+                    if scada_status is not None
+                    else grid_response.timestamp
+                ),
+                source_available_at=(
+                    scada_status.available_at
+                    if scada_status is not None
+                    else grid_response.timestamp
+                ),
+                forecast_issue_time=(
+                    model_status.generated_at if model_status is not None else None
+                ),
+                model_version=(
+                    model_status.model_version if model_status is not None else None
+                ),
+                artifact_hash=(
+                    str(model_status.candidate_metrics.get("artifact_hash"))
+                    if model_status is not None
+                    and model_status.candidate_metrics.get("artifact_hash")
+                    else None
+                ),
+                training_cutoff=(
+                    model_status.training_end_at if model_status is not None else None
+                ),
+                status=(
+                    model_status.mode if model_status is not None else "UNAVAILABLE"
+                ),
+            ),
         )
         if settings.SNAPSHOT_PERSISTENCE_ENABLED:
             persisted = await asyncio.to_thread(self.persistence_service.persist, snapshot)

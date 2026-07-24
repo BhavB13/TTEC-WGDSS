@@ -114,6 +114,7 @@ class DemoLoadForecastService:
         weather_forecast: Sequence[dict[str, Any]],
         cursor_at: datetime,
         actual_reveal_at: datetime | None = None,
+        allow_ml_fit: bool = True,
     ) -> DemoForecastResult:
         reveal_at = actual_reveal_at or cursor_at
         training = sorted(
@@ -152,7 +153,7 @@ class DemoLoadForecastService:
         ridge_alpha = RIDGE_PENALTIES[0]
         ensemble_weight = ENSEMBLE_RIDGE_WEIGHTS[0]
         tuned_ml_name: str | None = None
-        if len(fit_rows) >= MIN_TRAIN_ROWS:
+        if allow_ml_fit and len(fit_rows) >= MIN_TRAIN_ROWS:
             fit_features, fit_targets = _supervised_features(
                 fit_rows,
                 fit_baseline,
@@ -513,7 +514,11 @@ class DemoLoadForecastService:
         mode = (
             "ML_ACTIVE"
             if selected_name in ML_MODEL_NAMES
-            else "STATISTICAL_ACTIVE"
+            else (
+                "STATISTICAL_REPLAY_PROFILE"
+                if not allow_ml_fit
+                else "STATISTICAL_ACTIVE"
+            )
         )
         logger.info(
             "Replay demand forecast evaluated",

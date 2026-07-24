@@ -78,6 +78,22 @@ class Settings(BaseSettings):
     LIVE_SCADA_SNAPSHOT_PATH: str = ""
     LIVE_SCADA_SESSION_ROOT: str = "var/live_scada_sessions"
     LIVE_SCADA_MODEL_ARTIFACT_PATH: str = ""
+    FROZEN_DEMAND_MODEL_ARTIFACT_PATH: str = "var/models/wgdss-demand-v5.joblib"
+    SCADA_BATCH_INPUT_DIR: str = "var/scada_batch/inbox"
+    SCADA_BATCH_STATE_PATH: str = "var/scada_batch/state.json"
+    SCADA_BATCH_FILE_STABLE_SECONDS: int = 60
+
+    # Future approved read-only historian boundary. Blank defaults are
+    # intentionally unusable; WGDSS must fail closed until OT approval.
+    HISTORIAN_READ_ONLY_ENABLED: bool = False
+    HISTORIAN_ENDPOINT: str = ""
+    HISTORIAN_AUTH_MODE: str = ""
+    HISTORIAN_CA_CERT_PATH: str = ""
+    HISTORIAN_TAG_MAP_JSON: str = ""
+    HISTORIAN_UNITS_JSON: str = ""
+    HISTORIAN_QUALITY_POLICY: str = ""
+    HISTORIAN_NETWORK_ZONE: str = ""
+    HISTORIAN_STALE_AFTER_SECONDS: int = 300
 
     # Historical trend-export policy. These defaults preserve current prototype
     # behavior and are not confirmed T&TEC/OSI production rules.
